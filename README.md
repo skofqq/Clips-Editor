@@ -1,1 +1,1 @@
-# Clips-Editor
+# Clips Editor
