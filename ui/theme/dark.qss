@@ -44,6 +44,7 @@ QPushButton, QToolButton {
 }
 QPushButton:hover, QToolButton:hover { background: #3a3c42; border-color: #7c4dff; }
 QPushButton:pressed, QToolButton:pressed { background: #5b36c9; }
+QPushButton:checked { background: #4a2fa8; border-color: #7c4dff; color: #ffffff; }
 QPushButton:disabled, QToolButton:disabled { color: #6b6d72; background: #26272b; }
 QPushButton#primary { background: #7c4dff; border-color: #7c4dff; color: #ffffff; }
 QPushButton#primary:hover { background: #8f66ff; }
@@ -93,3 +94,9 @@ QLabel#muted { color: #85878c; }
 QLabel#timecode { font-family: Consolas, "Courier New", monospace; color: #ffffff; }
 
 QToolTip { background: #2b2d31; color: #dcdde0; border: 1px solid #7c4dff; }
+
+QTabWidget::pane { border: none; }
+QTabBar::tab { background: #232428; padding: 6px 12px; color: #a9abb0; }
+QTabBar::tab:selected { background: #1e1f22; color: #ffffff; border-bottom: 2px solid #7c4dff; }
+QSplitter::handle { background: #111214; }
+QCheckBox::indicator { width: 14px; height: 14px; }

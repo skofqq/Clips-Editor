@@ -7,9 +7,19 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QThreadPool, Qt, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
-from PySide6.QtWidgets import QDockWidget, QFileDialog, QMainWindow, QMessageBox, QWidget
+from PySide6.QtWidgets import (
+    QDockWidget,
+    QFileDialog,
+    QMainWindow,
+    QMessageBox,
+    QScrollArea,
+    QTabWidget,
+    QWidget,
+)
 
 from app.config import APP_NAME, APP_VERSION, AppConfig
+from core.editor.composition import default_composition
+from core.editor.presets import PresetStore
 from core.media.errors import MediaError
 from core.media.ffmpeg_locator import FFmpegPaths, tool_version
 from core.media.probe import SUPPORTED_EXTENSIONS, MediaInfo, probe_media
@@ -22,6 +32,8 @@ from core.projects.project import (
     save_project,
 )
 from core.workers import Worker
+from ui.editor.composition_controller import CompositionController
+from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
 from ui.panels.properties_panel import PropertiesPanel
 from ui.panels.timeline_panel import TimelinePanel
@@ -53,21 +65,36 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.setDockNestingEnabled(True)
 
-        self.preview = PreviewPanel(self)
+        self.composition = CompositionController(self)
+        self.presets = PresetStore(config.data_dir / "presets.json")
+        self._loading_composition = False
+
+        self.preview = PreviewPanel(self.composition, self)
         self.setCentralWidget(self.preview)
 
         self.media_panel = MediaPanel(self)
-        self.properties_panel = PropertiesPanel(self)
+        self.properties_panel = PropertiesPanel(self)  # media info
+        self.composition_panel = CompositionPanel(self.composition, self.presets, self)
         self.timeline_panel = TimelinePanel(self)
+
+        composition_scroll = QScrollArea(self)
+        composition_scroll.setWidgetResizable(True)
+        composition_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        composition_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        composition_scroll.setWidget(self.composition_panel)
+        self.properties_tabs = QTabWidget(self)
+        self.properties_tabs.setDocumentMode(True)
+        self.properties_tabs.addTab(composition_scroll, "Composition")
+        self.properties_tabs.addTab(self.properties_panel, "Media")
 
         self.media_dock = self._add_dock("Media", "dock_media", self.media_panel, Qt.DockWidgetArea.LeftDockWidgetArea)
         self.properties_dock = self._add_dock(
-            "Properties", "dock_properties", self.properties_panel, Qt.DockWidgetArea.RightDockWidgetArea
+            "Properties", "dock_properties", self.properties_tabs, Qt.DockWidgetArea.RightDockWidgetArea
         )
         self.timeline_dock = self._add_dock(
             "Timeline", "dock_timeline", self.timeline_panel, Qt.DockWidgetArea.BottomDockWidgetArea
         )
-        self.resizeDocks([self.media_dock, self.properties_dock], [280, 300], Qt.Orientation.Horizontal)
+        self.resizeDocks([self.media_dock, self.properties_dock], [240, 340], Qt.Orientation.Horizontal)
         self.resizeDocks([self.timeline_dock], [160], Qt.Orientation.Vertical)
         self._default_state = self.saveState()
 
@@ -154,6 +181,7 @@ class MainWindow(QMainWindow):
         self.preview.position_changed.connect(self.timeline_panel.set_position)
         self.preview.player.durationChanged.connect(self.timeline_panel.set_duration)
         self.timeline_panel.seek_requested.connect(self.preview.seek)
+        self.composition.changed.connect(self._on_composition_changed)
         self.media_imported.connect(self._on_media_imported)
         self.import_failed.connect(self._on_import_failed)
 
@@ -226,8 +254,23 @@ class MainWindow(QMainWindow):
             self.preview.unload()
             self.timeline_panel.set_duration(0)
         elif self.preview.media is None or self.preview.media.path != info.path:
-            self.preview.load(info)
+            self._loading_composition = True
+            try:
+                self.preview.load(info)  # also tells the controller the source size
+                if self.project.composition is None and info.video:
+                    # First video of the project: start from a sensible default.
+                    self.project.composition = default_composition(*info.video.display_size)
+                    self.composition.set_composition(self.project.composition)
+            finally:
+                self._loading_composition = False
             self.timeline_panel.set_duration(int(info.duration_s * 1000))
+
+    def _on_composition_changed(self) -> None:
+        if self._loading_composition:
+            return
+        if self.project.composition != self.composition.composition:
+            self.project.composition = self.composition.composition
+            self._set_dirty(True)
 
     def _on_remove_media(self, info: MediaInfo) -> None:
         self.project.remove_media(str(info.path))
@@ -243,6 +286,7 @@ class MainWindow(QMainWindow):
         self.media_panel.clear()
         self.preview.unload()
         self.properties_panel.show_media(None)
+        self._apply_project_composition()
         self._set_dirty(False)
 
     def choose_project(self) -> None:
@@ -264,6 +308,7 @@ class MainWindow(QMainWindow):
         self.project_path = path
         self.media_panel.clear()
         self.preview.unload()
+        self._apply_project_composition()
         missing = [m.path for m in project.media if not Path(m.path).is_file()]
         self.import_files([m.path for m in project.media if Path(m.path).is_file()])
         self._set_dirty(False)
@@ -271,6 +316,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Missing media", "These source files were not found:\n\n" + "\n".join(missing)
             )
+
+    def _apply_project_composition(self) -> None:
+        """Push the project's composition into the editor without marking it dirty."""
+        self._loading_composition = True
+        try:
+            self.composition.set_composition(
+                self.project.composition or default_composition(*self.composition.source_size)
+            )
+        finally:
+            self._loading_composition = False
 
     def save(self) -> bool:
         if self.project_path is None:
@@ -367,7 +422,7 @@ class MainWindow(QMainWindow):
             self,
             f"About {APP_NAME}",
             f"<b>{APP_NAME}</b> {APP_VERSION}<br>"
-            "Vertical Shorts editor for Twitch clips.<br>Phase 1: import and preview.",
+            "Vertical Shorts editor for Twitch clips.<br>Phase 2: vertical Stacked Layout editor.",
         )
 
     def _show_ffmpeg_info(self) -> None:

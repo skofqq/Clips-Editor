@@ -58,7 +58,7 @@ def test_project_roundtrip_keeps_unknown_keys(tmp_path):
     project = Project(name="Мой клип")
     assert project.add_media(MediaRef(path=str(tmp_path / "a.mp4"), size_bytes=10, duration_s=1.5))
     assert not project.add_media(MediaRef(path=str(tmp_path / "a.mp4")))
-    project.extra["composition"] = {"layout": "stacked"}
+    project.extra["future_feature"] = {"layout": "stacked"}
 
     saved = save_project(project, tmp_path / "proj")
     assert saved.suffix == ".tssproj"
@@ -68,7 +68,7 @@ def test_project_roundtrip_keeps_unknown_keys(tmp_path):
     loaded = load_project(saved)
     assert loaded.name == "Мой клип"
     assert loaded.media[0].duration_s == 1.5
-    assert loaded.extra["composition"] == {"layout": "stacked"}
+    assert loaded.extra["future_feature"] == {"layout": "stacked"}
 
 
 @pytest.mark.parametrize(

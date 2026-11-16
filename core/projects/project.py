@@ -1,7 +1,7 @@
 """Project model and the ``.tssproj`` file format (UTF-8 JSON).
 
-Phase 1 stores only the media references; later phases add composition,
-timeline, audio edits and so on under their own keys. Unknown keys are
+Stores media references and the Stacked Layout composition; later phases
+add timeline, audio edits and so on under their own keys. Unknown keys are
 preserved on load so that older builds do not drop newer data.
 """
 
@@ -11,6 +11,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from core.editor.composition import Composition
 
 PROJECT_EXTENSION = ".tssproj"
 SCHEMA_VERSION = 1
@@ -44,6 +46,7 @@ class MediaRef:
 class Project:
     name: str = "Untitled"
     media: list[MediaRef] = field(default_factory=list)
+    composition: Composition | None = None  # None until the first media sets a default
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -67,6 +70,8 @@ class Project:
                 "media": [m.to_dict() for m in self.media],
             }
         )
+        if self.composition is not None:
+            data["composition"] = self.composition.to_dict()
         return data
 
     @classmethod
@@ -80,10 +85,18 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        extra = {k: v for k, v in data.items() if k not in {"schema_version", "name", "media"}}
+        known = {"schema_version", "name", "media", "composition"}
+        extra = {k: v for k, v in data.items() if k not in known}
+        composition = None
+        if data.get("composition") is not None:
+            try:
+                composition = Composition.from_dict(data["composition"])
+            except (TypeError, ValueError) as exc:
+                raise ProjectFormatError(f"Invalid composition: {exc}") from exc
         return cls(
             name=str(data.get("name") or "Untitled"),
             media=[MediaRef.from_dict(m) for m in data.get("media") or []],
+            composition=composition,
             extra=extra,
         )
 

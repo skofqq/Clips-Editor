@@ -1,4 +1,4 @@
-"""Center panel: original video preview with transport controls."""
+"""Center panel: original and vertical output previews with transport controls."""
 
 from __future__ import annotations
 
@@ -8,17 +8,23 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSlider,
+    QSplitter,
     QStyle,
     QVBoxLayout,
     QWidget,
 )
 
 from core.media.probe import MediaInfo, format_duration
-from ui.preview.video_canvas import VideoCanvas
+from ui.editor.composition_controller import CompositionController
+from ui.preview.output_view import OutputView
+from ui.preview.source_view import SourceView
+
+VIEW_MODES = ("original", "both", "output")
 
 log = logging.getLogger(__name__)
 
@@ -26,14 +32,42 @@ log = logging.getLogger(__name__)
 class PreviewPanel(QWidget):
     position_changed = Signal(int)  # milliseconds
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, controller: CompositionController | None = None, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
+        self.controller = controller or CompositionController(self)
+        self._view_mode = "both"
         self._media: MediaInfo | None = None
         self._frame_ms = 33
         self._duration_ms = 0
         self._was_playing_before_scrub = False
 
-        self.canvas = VideoCanvas(self)
+        self.source_view = SourceView(self.controller, self)
+        self.output_view = OutputView(self.controller, self)
+        self.canvas = self.source_view  # original frame view
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.addWidget(self.source_view)
+        self.splitter.addWidget(self.output_view)
+        self.splitter.setStretchFactor(0, 2)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([640, 340])
+        self.splitter.setChildrenCollapsible(False)
+
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        mode_bar = QHBoxLayout()
+        mode_bar.setContentsMargins(8, 6, 8, 4)
+        mode_bar.addStretch(1)
+        for mode, text in zip(VIEW_MODES, ("Original", "Both", "Output 9:16")):
+            button = QPushButton(text, self)
+            button.setCheckable(True)
+            button.setChecked(mode == self._view_mode)
+            button.setProperty("mode", mode)
+            self._mode_group.addButton(button)
+            mode_bar.addWidget(button)
+        mode_bar.addStretch(1)
+        self._mode_group.buttonClicked.connect(lambda b: self.set_view_mode(b.property("mode")))
 
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
@@ -78,7 +112,8 @@ class PreviewPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self.canvas, 1)
+        layout.addLayout(mode_bar)
+        layout.addWidget(self.splitter, 1)
         layout.addLayout(controls)
 
         self.sink.videoFrameChanged.connect(self._on_frame)
@@ -101,8 +136,23 @@ class PreviewPanel(QWidget):
     def media(self) -> MediaInfo | None:
         return self._media
 
+    @property
+    def view_mode(self) -> str:
+        return self._view_mode
+
+    def set_view_mode(self, mode: str) -> None:
+        if mode not in VIEW_MODES:
+            return
+        self._view_mode = mode
+        self.source_view.setVisible(mode in ("original", "both"))
+        self.output_view.setVisible(mode in ("output", "both"))
+        for button in self._mode_group.buttons():
+            button.setChecked(button.property("mode") == mode)
+
     def load(self, media: MediaInfo) -> None:
         self._media = media
+        if media.video:
+            self.controller.set_source_size(*media.video.display_size)
         fps = media.video.avg_fps or media.video.fps if media.video else None
         self._frame_ms = max(1, round(1000 / float(fps))) if fps else 33
         self.canvas.clear("Loading…")
@@ -120,6 +170,7 @@ class PreviewPanel(QWidget):
         self.slider.setRange(0, 0)
         self._update_time(0)
         self.canvas.clear("Import a video to start (File → Import or drag and drop)")
+        self.output_view.clear()
         self._set_enabled(False)
 
     def toggle_play(self) -> None:
@@ -148,7 +199,9 @@ class PreviewPanel(QWidget):
     # ------------------------------------------------------------ handlers
     def _on_frame(self, frame: QVideoFrame) -> None:
         if frame.isValid():
-            self.canvas.set_image(frame.toImage())
+            image = frame.toImage()
+            self.source_view.set_image(image)
+            self.output_view.set_image(image)
 
     def _on_duration(self, duration: int) -> None:
         self._duration_ms = max(0, duration)

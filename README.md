@@ -12,6 +12,25 @@ WebM…) with FFprobe analysis in a background thread; original preview
 with play/pause, scrubbing and frame stepping; `.tssproj` save/open;
 logging and settings.
 
+**Phase 2 — Vertical editor** (done): 9:16 output preview next to the
+original; independent Webcam and Gameplay crop rectangles; divider,
+Fit/Fill, zoom and position per region; swap and disable regions;
+composition presets; everything saved in the `.tssproj`.
+
+### Editing the composition
+
+| Where | Mouse | Result |
+|---|---|---|
+| Original | drag inside a rectangle | move the crop |
+| Original | drag a handle | resize the crop |
+| Original | Shift+drag | draw the selected crop anew |
+| Output | drag the white line | change the webcam/gameplay split |
+| Output | drag inside a region | reposition the picture in its slot |
+| Output | mouse wheel | zoom the region |
+| Output | double-click | reset position and zoom |
+
+Exact values, Fit/Fill, swap and presets are in **Properties → Composition**.
+
 ## Run on Windows
 
 1. Install Python 3.12+ (with "Add to PATH").

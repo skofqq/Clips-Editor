@@ -70,12 +70,17 @@ Project: schema_version, name, media: list[MediaRef], composition, timeline,
          audio_edits, transcript, censor, render_settings, metadata
 save_project(project, path) / load_project(path) -> Project   # .tssproj = UTF-8 JSON
 
-# core/editor (Phase 2)
-Rect (source pixels), Composition(output_w, output_h, webcam: Region, gameplay: Region,
-         divider: float, fit_mode)
-composition_to_output_rects(composition, source_w, source_h) -> layout geometry
-# The same geometry is consumed by the preview painter AND the render
-# filter-graph builder, so preview == render by construction.
+# core/editor (implemented in Phase 2)
+Region(crop: Rect normalised 0..1, enabled, fit: FILL|FIT, scale, offset_x, offset_y)
+Composition(output_w, output_h, divider, swapped, webcam: Region, gameplay: Region)  # immutable
+Composition.layout(source_w, source_h) -> list[Placement(name, slot, src, dst)]
+#   src = visible source pixels, dst = output pixels. Maps 1:1 to FFmpeg
+#   crop=src → scale=dst.size → overlay at dst.pos.
+# The same layout is consumed by the preview painter (ui/preview/output_view.py)
+# AND the Phase 6 filter-graph builder, so preview == render by construction.
+PresetStore(path): built-in + user presets (presets.json in the user data dir)
+# ui/editor/CompositionController: single shared editing state (Qt signals)
+#   used by SourceView, OutputView and CompositionPanel.
 
 # core/timeline (Phase 3)
 Times stored as integer microseconds or Fraction seconds; frame/sample
