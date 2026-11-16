@@ -4,7 +4,18 @@ cd /d "%~dp0"
 if not exist .venv (
     py -3 -m venv .venv || python -m venv .venv
     .venv\Scripts\python -m pip install --upgrade pip
+)
+rem Install or update dependencies only when requirements.txt has changed.
+fc /b requirements.txt .venv\requirements.installed >nul 2>nul
+if errorlevel 1 (
+    echo Installing dependencies...
     .venv\Scripts\python -m pip install -r requirements.txt
+    if errorlevel 1 (
+        echo Dependency installation failed. Check your internet connection.
+        pause
+        exit /b 1
+    )
+    copy /y requirements.txt .venv\requirements.installed >nul
 )
 if not exist tools\ffmpeg\bin\ffmpeg.exe (
     where ffmpeg >nul 2>nul || .venv\Scripts\python tools\setup_ffmpeg.py
