@@ -1,79 +1,192 @@
-"""Bottom panel: timeline. Phase 1 shows a simple ruler with the playhead;
-the real track editor arrives in Phase 3."""
+"""Bottom panel: edit toolbar, timeline view and horizontal scroll bar."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
-from PySide6.QtWidgets import QSizePolicy, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDoubleSpinBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QScrollBar,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-from core.media.probe import format_duration
+from core.timeline.model import BEEP, MAX_GAIN_DB, MIN_GAIN_DB, SILENCE
+from core.timeline.timebase import US, format_timecode
+from ui.timeline.timeline_controller import MUTE, TimelineController
+from ui.timeline.timeline_view import TimelineView
+
+_SCROLL_UNIT_US = 10_000  # scroll bar resolution: 10 ms
+
+
+def _separator(parent: QWidget) -> QFrame:
+    line = QFrame(parent)
+    line.setFrameShape(QFrame.Shape.VLine)
+    line.setStyleSheet("color: #3a3c42;")
+    return line
 
 
 class TimelinePanel(QWidget):
-    seek_requested = Signal(int)  # milliseconds
-
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, controller: TimelineController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._duration_ms = 0
-        self._position_ms = 0
-        self.setMinimumHeight(90)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.controller = controller
+        self._updating = False
 
-    def set_duration(self, ms: int) -> None:
-        self._duration_ms = max(0, int(ms))
-        self.update()
+        self.view = TimelineView(controller, self)
+        self.scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
 
-    def set_position(self, ms: int) -> None:
-        self._position_ms = max(0, int(ms))
-        self.update()
+        self.toolbar = QHBoxLayout()
+        self.toolbar.setContentsMargins(6, 4, 6, 4)
+        self.toolbar.setSpacing(4)
+        self._action_slot = QHBoxLayout()  # filled by add_actions()
+        self._action_slot.setSpacing(4)
+        self.toolbar.addLayout(self._action_slot)
 
-    def _x_for(self, ms: int) -> float:
-        if not self._duration_ms:
-            return 0.0
-        return 10 + (self.width() - 20) * ms / self._duration_ms
+        self.mode_combo = QComboBox(self)
+        self.mode_combo.addItem("Silence", SILENCE)
+        self.mode_combo.addItem("Beep", BEEP)
+        self.mode_combo.setToolTip("Mode of the selected Mute Region (and of new ones)")
 
-    def _ms_for(self, x: float) -> int:
-        if not self._duration_ms:
-            return 0
-        ratio = (x - 10) / max(1, self.width() - 20)
-        return int(max(0.0, min(1.0, ratio)) * self._duration_ms)
+        self.gain_spin = QDoubleSpinBox(self)
+        self.gain_spin.setRange(MIN_GAIN_DB, MAX_GAIN_DB)
+        self.gain_spin.setDecimals(1)
+        self.gain_spin.setSingleStep(0.5)
+        self.gain_spin.setSuffix(" dB")
+        self.gain_spin.setToolTip("Overall volume. Boost above 0 dB is applied on export; the preview cannot exceed 100%.")
+        self.fade_in_spin = self._fade_spin("Fade In length")
+        self.fade_out_spin = self._fade_spin("Fade Out length")
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton and self._duration_ms:
-            self.seek_requested.emit(self._ms_for(event.position().x()))
+        self.zoom_out_button = self._tool("−", "Zoom out (Ctrl+wheel)")
+        self.zoom_in_button = self._tool("+", "Zoom in (Ctrl+wheel)")
+        self.zoom_fit_button = self._tool("Fit", "Show the whole clip")
+        self.info_label = QLabel(self)
+        self.info_label.setObjectName("timecode")
+        # Let the window shrink: the info text gives way before the buttons do.
+        self.info_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.info_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.buttons() & Qt.MouseButton.LeftButton and self._duration_ms:
-            self.seek_requested.emit(self._ms_for(event.position().x()))
+        for widget in (
+            _separator(self), QLabel("Mute:", self), self.mode_combo,
+            _separator(self), QLabel("Gain", self), self.gain_spin,
+            QLabel("Fade in", self), self.fade_in_spin,
+            QLabel("out", self), self.fade_out_spin,
+        ):
+            self.toolbar.addWidget(widget)
+        self.toolbar.addWidget(self.info_label, 1)
+        for widget in (_separator(self), self.zoom_out_button, self.zoom_in_button, self.zoom_fit_button):
+            self.toolbar.addWidget(widget)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#18191c"))
-        if not self._duration_ms:
-            p.setPen(QColor("#6b6d72"))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Timeline (tracks arrive in Phase 3)")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addLayout(self.toolbar)
+        layout.addWidget(self.view, 1)
+        layout.addWidget(self.scrollbar)
+
+        self.zoom_in_button.clicked.connect(self.view.zoom_in)
+        self.zoom_out_button.clicked.connect(self.view.zoom_out)
+        self.zoom_fit_button.clicked.connect(self.view.zoom_fit)
+        self.scrollbar.valueChanged.connect(self._on_scrollbar)
+        self.view.view_changed.connect(self._sync_scrollbar)
+        self.mode_combo.activated.connect(lambda _i: controller.set_mute_mode(self.mode_combo.currentData()))
+        self.gain_spin.valueChanged.connect(self._on_gain)
+        self.fade_in_spin.valueChanged.connect(self._on_fades)
+        self.fade_out_spin.valueChanged.connect(self._on_fades)
+        controller.changed.connect(self.refresh)
+        controller.selection_changed.connect(self.refresh)
+        controller.playhead_changed.connect(lambda _us: self._update_info())
+        self.refresh()
+
+    # ------------------------------------------------------------ helpers
+    def _tool(self, text: str, tip: str) -> QToolButton:
+        button = QToolButton(self)
+        button.setText(text)
+        button.setToolTip(tip)
+        return button
+
+    def _fade_spin(self, tip: str) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox(self)
+        spin.setRange(0.0, 30.0)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.1)
+        spin.setSuffix(" s")
+        spin.setToolTip(tip)
+        return spin
+
+    def add_actions(self, actions: list[QAction | None]) -> None:
+        """Show edit actions as toolbar buttons (None inserts a separator)."""
+        for action in actions:
+            if action is None:
+                self._action_slot.addWidget(_separator(self))
+                continue
+            button = QToolButton(self)
+            button.setDefaultAction(action)
+            self._action_slot.addWidget(button)
+
+    # ------------------------------------------------------------- scroll
+    def _sync_scrollbar(self) -> None:
+        t = self.controller.timeline
+        self.scrollbar.blockSignals(True)
+        if t is None:
+            self.scrollbar.setRange(0, 0)
+        else:
+            visible = self.view.visible_us()
+            maximum = max(0, t.duration_us - visible + int(20 * US / self.view.pixels_per_second))
+            self.scrollbar.setRange(0, maximum // _SCROLL_UNIT_US)
+            self.scrollbar.setPageStep(max(1, visible // _SCROLL_UNIT_US))
+            self.scrollbar.setSingleStep(max(1, visible // _SCROLL_UNIT_US // 20))
+            self.scrollbar.setValue(self.view.scroll_us // _SCROLL_UNIT_US)
+        self.scrollbar.blockSignals(False)
+
+    def _on_scrollbar(self, value: int) -> None:
+        self.view.set_scroll_us(value * _SCROLL_UNIT_US)
+
+    # ----------------------------------------------------- model ↔ widgets
+    def refresh(self) -> None:
+        t = self.controller.timeline
+        self._updating = True
+        try:
+            enabled = t is not None
+            for widget in (self.gain_spin, self.fade_in_spin, self.fade_out_spin, self.mode_combo,
+                           self.zoom_in_button, self.zoom_out_button, self.zoom_fit_button):
+                widget.setEnabled(enabled)
+            if t is not None:
+                self.gain_spin.setValue(t.gain_db)
+                self.fade_in_spin.setValue(t.fade_in_us / US)
+                self.fade_out_spin.setValue(t.fade_out_us / US)
+            self.mode_combo.setCurrentIndex(self.mode_combo.findData(self.controller.selected_mute_mode()))
+        finally:
+            self._updating = False
+        self._sync_scrollbar()
+        self._update_info()
+
+    def _update_info(self) -> None:
+        t = self.controller.timeline
+        if t is None:
+            self.info_label.setText("")
             return
+        parts = [format_timecode(self.controller.playhead_us), f"Output {format_timecode(t.output_us)}"]
+        if self.controller.range:
+            start, end = self.controller.range
+            parts.append(f"Selection {format_timecode(end - start)}")
+        elif self.controller.selected and self.controller.selected[0] == MUTE:
+            region = t.mute(self.controller.selected[1])
+            if region:
+                parts.append(f"Mute {format_timecode(region.length_us)}")
+        self.info_label.setText("   ·   ".join(parts))
 
-        # Ruler ticks roughly every 80 px, rounded to whole seconds.
-        width = self.width() - 20
-        seconds = self._duration_ms / 1000
-        step = max(1, round(seconds / max(1, width / 80)))
-        p.setPen(QColor("#6b6d72"))
-        t = 0
-        while t <= seconds:
-            x = self._x_for(int(t * 1000))
-            p.drawLine(int(x), 0, int(x), 10)
-            p.drawText(int(x) + 3, 20, format_duration(t)[:-4])
-            t += step
+    def _on_gain(self, value: float) -> None:
+        if not self._updating:
+            self.controller.set_gain_db(value)
 
-        # Clip block.
-        clip = QRectF(10, 30, width, 32)
-        p.fillRect(clip, QColor("#3b2a7a"))
-        p.setPen(QColor("#7c4dff"))
-        p.drawRect(clip)
-
-        # Playhead.
-        x = self._x_for(self._position_ms)
-        p.setPen(QPen(QColor("#ff4d6d"), 2))
-        p.drawLine(int(x), 0, int(x), self.height())
+    def _on_fades(self) -> None:
+        if not self._updating:
+            self.controller.set_fades(
+                int(round(self.fade_in_spin.value() * US)), int(round(self.fade_out_spin.value() * US))
+            )

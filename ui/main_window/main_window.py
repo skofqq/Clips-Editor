@@ -18,8 +18,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.config import APP_NAME, APP_VERSION, AppConfig
+from core.audio.waveform import load_waveform
 from core.editor.composition import default_composition
 from core.editor.presets import PresetStore
+from core.history import History
 from core.media.errors import MediaError
 from core.media.ffmpeg_locator import FFmpegPaths, tool_version
 from core.media.probe import SUPPORTED_EXTENSIONS, MediaInfo, probe_media
@@ -31,15 +33,21 @@ from core.projects.project import (
     load_project,
     save_project,
 )
+from core.timeline.model import Timeline
+from core.timeline.timebase import ms_to_us, seconds_to_us, us_to_ms
 from core.workers import Worker
 from ui.editor.composition_controller import CompositionController
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
 from ui.panels.properties_panel import PropertiesPanel
 from ui.panels.timeline_panel import TimelinePanel
+from ui.preview.edit_playback import EditPlayback
 from ui.preview.preview_panel import PreviewPanel
+from ui.timeline.timeline_controller import TimelineController
 
 log = logging.getLogger(__name__)
+
+LAYOUT_VERSION = 3  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -67,7 +75,9 @@ class MainWindow(QMainWindow):
 
         self.composition = CompositionController(self)
         self.presets = PresetStore(config.data_dir / "presets.json")
-        self._loading_composition = False
+        self.timeline = TimelineController(self)
+        self._loading_composition = False  # True while state is pushed in, not edited
+        self.history: History = History((self.composition.composition, None))
 
         self.preview = PreviewPanel(self.composition, self)
         self.setCentralWidget(self.preview)
@@ -75,7 +85,8 @@ class MainWindow(QMainWindow):
         self.media_panel = MediaPanel(self)
         self.properties_panel = PropertiesPanel(self)  # media info
         self.composition_panel = CompositionPanel(self.composition, self.presets, self)
-        self.timeline_panel = TimelinePanel(self)
+        self.timeline_panel = TimelinePanel(self.timeline, self)
+        self.edit_playback = EditPlayback(self.preview, self.timeline, self)
 
         composition_scroll = QScrollArea(self)
         composition_scroll.setWidgetResizable(True)
@@ -95,8 +106,8 @@ class MainWindow(QMainWindow):
             "Timeline", "dock_timeline", self.timeline_panel, Qt.DockWidgetArea.BottomDockWidgetArea
         )
         self.resizeDocks([self.media_dock, self.properties_dock], [240, 340], Qt.Orientation.Horizontal)
-        self.resizeDocks([self.timeline_dock], [160], Qt.Orientation.Vertical)
-        self._default_state = self.saveState()
+        self.resizeDocks([self.timeline_dock], [250], Qt.Orientation.Vertical)
+        self._default_state = self.saveState(LAYOUT_VERSION)
 
         self._create_actions()
         self._create_menus()
@@ -135,7 +146,25 @@ class MainWindow(QMainWindow):
         self.act_reset_layout = QAction("Reset Layout", self)
         self.act_about = QAction("About", self)
         self.act_ffmpeg_info = QAction("FFmpeg Info", self)
-        for action in (self.act_play, self.act_prev, self.act_next):
+        self.act_undo = QAction("Undo", self, shortcut=QKeySequence.StandardKey.Undo)
+        self.act_redo = QAction("Redo", self)
+        self.act_redo.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
+        self.act_split = QAction("Split", self, shortcut=QKeySequence(Qt.Key.Key_S))
+        self.act_split.setToolTip("Split the clip at the playhead (S)")
+        self.act_delete = QAction("Delete", self, shortcut=QKeySequence(Qt.Key.Key_Delete))
+        self.act_delete.setToolTip("Delete the selected mute region, range or segment (Del)")
+        self.act_trim = QAction("Trim to selection", self, shortcut=QKeySequence(Qt.Key.Key_T))
+        self.act_trim.setToolTip("Keep only the selected range (T)")
+        self.act_restore = QAction("Restore all", self)
+        self.act_restore.setToolTip("Bring back everything that was cut")
+        self.act_mute = QAction("Mute selection", self, shortcut=QKeySequence(Qt.Key.Key_M))
+        self.act_mute.setToolTip("Create a Mute Region from the selected range (M)")
+        self.act_merge_mutes = QAction("Merge overlapping mutes", self)
+        self._edit_actions = (
+            self.act_undo, self.act_redo, self.act_split, self.act_delete, self.act_trim,
+            self.act_restore, self.act_mute, self.act_merge_mutes,
+        )
+        for action in (self.act_play, self.act_prev, self.act_next, *self._edit_actions):
             action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             self.addAction(action)
 
@@ -147,6 +176,17 @@ class MainWindow(QMainWindow):
         self.recent_menu = file_menu.addMenu("Recent Files")
         file_menu.addSeparator()
         file_menu.addAction(self.act_exit)
+
+        edit = self.menuBar().addMenu("&Edit")
+        edit.addActions([self.act_undo, self.act_redo])
+        edit.addSeparator()
+        edit.addActions([self.act_split, self.act_delete, self.act_trim, self.act_restore])
+        edit.addSeparator()
+        edit.addActions([self.act_mute, self.act_merge_mutes])
+        self.timeline_panel.add_actions([
+            self.act_undo, self.act_redo, None, self.act_split, self.act_delete,
+            self.act_trim, None, self.act_mute,
+        ])
 
         playback = self.menuBar().addMenu("&Playback")
         playback.addActions([self.act_play, self.act_prev, self.act_next])
@@ -178,10 +218,22 @@ class MainWindow(QMainWindow):
         self.media_panel.import_requested.connect(self.choose_files)
         self.media_panel.media_selected.connect(self._on_media_selected)
         self.media_panel.remove_requested.connect(self._on_remove_media)
-        self.preview.position_changed.connect(self.timeline_panel.set_position)
-        self.preview.player.durationChanged.connect(self.timeline_panel.set_duration)
-        self.timeline_panel.seek_requested.connect(self.preview.seek)
-        self.composition.changed.connect(self._on_composition_changed)
+        self.act_undo.triggered.connect(self.undo)
+        self.act_redo.triggered.connect(self.redo)
+        self.act_split.triggered.connect(self.timeline.split_at_playhead)
+        self.act_delete.triggered.connect(self.timeline.delete_selection)
+        self.act_trim.triggered.connect(self.timeline.trim_to_range)
+        self.act_restore.triggered.connect(self.timeline.restore_all)
+        self.act_mute.triggered.connect(lambda: self.timeline.mute_range())
+        self.act_merge_mutes.triggered.connect(self.timeline.merge_mutes)
+
+        self.preview.position_changed.connect(lambda ms: self.timeline.set_playhead(ms_to_us(ms)))
+        self.timeline_panel.view.seek_requested.connect(lambda us: self.preview.seek(us_to_ms(us)))
+        self.timeline_panel.view.gesture_finished.connect(self.history.break_merge)
+        self.composition.changed.connect(lambda: self._on_edit_changed("composition"))
+        self.timeline.changed.connect(lambda: self._on_edit_changed(self.timeline.last_change_key))
+        self.timeline.selection_changed.connect(self._update_edit_actions)
+        self._update_edit_actions()
         self.media_imported.connect(self._on_media_imported)
         self.import_failed.connect(self._on_import_failed)
 
@@ -252,7 +304,7 @@ class MainWindow(QMainWindow):
         self.properties_panel.show_media(info)
         if info is None:
             self.preview.unload()
-            self.timeline_panel.set_duration(0)
+            self._show_timeline(None)
         elif self.preview.media is None or self.preview.media.path != info.path:
             self._loading_composition = True
             try:
@@ -263,14 +315,97 @@ class MainWindow(QMainWindow):
                     self.composition.set_composition(self.project.composition)
             finally:
                 self._loading_composition = False
-            self.timeline_panel.set_duration(int(info.duration_s * 1000))
+            self._show_timeline(info)
 
-    def _on_composition_changed(self) -> None:
+    def _show_timeline(self, info: MediaInfo | None) -> None:
+        """Load (or create) the edit of ``info`` and start a fresh undo history."""
+        timeline = None
+        if info is not None:
+            duration_us = seconds_to_us(info.duration_s)
+            timeline = self.project.timeline_for(str(info.path))
+            # A stored edit is only valid for the same source length.
+            if timeline is None or abs(timeline.duration_us - duration_us) > 50_000:
+                timeline = Timeline.for_source(duration_us)
+                self.project.set_timeline(str(info.path), timeline)
+            self.timeline.fps = (info.video.avg_fps or info.video.fps) if info.video else 0
+        self._loading_composition = True
+        try:
+            self.timeline.set_range(None)
+            self.timeline.select(None)
+            self.timeline.set_timeline(timeline)
+            self.timeline.set_playhead(0)
+        finally:
+            self._loading_composition = False
+        self.history.reset((self.composition.composition, timeline))
+        self._update_edit_actions()
+        view = self.timeline_panel.view
+        view.set_waveform(None)
+        view.request_fit()
+        if info is not None and info.has_audio and self.ffmpeg is not None:
+            worker = Worker(load_waveform, info.path, self.ffmpeg.ffmpeg, self.config.cache_dir)
+            worker.signals.finished.connect(lambda wave, w=worker, p=info.path: self._waveform_done(w, p, wave))
+            worker.signals.failed.connect(lambda exc, w=worker, p=info.path: self._waveform_done(w, p, None, exc))
+            self._pending.add(worker)
+            self.pool.start(worker)
+
+    def _waveform_done(self, worker: Worker, path: Path, waveform, error=None) -> None:
+        self._pending.discard(worker)
+        if error is not None:
+            log.warning("Waveform failed for %s: %s", path, error)
+            return
+        current = self.preview.media
+        if current is not None and current.path == path:
+            self.timeline_panel.view.set_waveform(waveform)
+
+    # -------------------------------------------------------- edit history
+    def _on_edit_changed(self, key: object) -> None:
+        """A controller changed: store it in the project and the undo history."""
         if self._loading_composition:
             return
-        if self.project.composition != self.composition.composition:
-            self.project.composition = self.composition.composition
-            self._set_dirty(True)
+        composition, timeline = self.composition.composition, self.timeline.timeline
+        if not self.history.record((composition, timeline), key=key):
+            return
+        self._store_edit(composition, timeline)
+        self._update_edit_actions()
+
+    def _store_edit(self, composition, timeline) -> None:
+        self.project.composition = composition
+        media = self.preview.media
+        if media is not None and timeline is not None:
+            self.project.set_timeline(str(media.path), timeline)
+        self._set_dirty(True)
+
+    def _apply_history_state(self, state) -> None:
+        if state is None:
+            return
+        composition, timeline = state
+        self._loading_composition = True
+        try:
+            self.composition.set_composition(composition)
+            self.timeline.set_timeline(timeline)
+        finally:
+            self._loading_composition = False
+        self._store_edit(composition, timeline)
+        self._update_edit_actions()
+
+    def undo(self) -> None:
+        self._apply_history_state(self.history.undo())
+
+    def redo(self) -> None:
+        self._apply_history_state(self.history.redo())
+
+    def _update_edit_actions(self) -> None:
+        t = self.timeline.timeline
+        has = t is not None
+        selected, rng = self.timeline.selected, self.timeline.range
+        self.act_undo.setEnabled(self.history.can_undo)
+        self.act_redo.setEnabled(self.history.can_redo)
+        self.act_split.setEnabled(has)
+        self.act_delete.setEnabled(has and (selected is not None or rng is not None))
+        self.act_trim.setEnabled(has and rng is not None)
+        self.act_mute.setEnabled(has and rng is not None)
+        self.act_restore.setEnabled(has and t.output_us < t.duration_us)
+        self.act_merge_mutes.setEnabled(has and len(t.merged_mutes()) < len(t.mutes))
 
     def _on_remove_media(self, info: MediaInfo) -> None:
         self.project.remove_media(str(info.path))
@@ -326,6 +461,8 @@ class MainWindow(QMainWindow):
             )
         finally:
             self._loading_composition = False
+        self.history.reset((self.composition.composition, self.timeline.timeline))
+        self._update_edit_actions()
 
     def save(self) -> bool:
         if self.project_path is None:
@@ -377,13 +514,13 @@ class MainWindow(QMainWindow):
         for dock in (self.media_dock, self.properties_dock, self.timeline_dock):
             dock.setFloating(False)
             dock.show()
-        self.restoreState(self._default_state)
+        self.restoreState(self._default_state, LAYOUT_VERSION)
 
     def _restore_layout(self) -> None:
         if self.config.window_geometry:
             self.restoreGeometry(QByteArray.fromBase64(self.config.window_geometry.encode()))
         if self.config.window_state:
-            self.restoreState(QByteArray.fromBase64(self.config.window_state.encode()))
+            self.restoreState(QByteArray.fromBase64(self.config.window_state.encode()), LAYOUT_VERSION)
 
     def _rebuild_recent_menu(self) -> None:
         self.recent_menu.clear()
@@ -410,9 +547,10 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             event.ignore()
             return
+        self.edit_playback.shutdown()
         self.preview.player.stop()
         self.config.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
-        self.config.window_state = bytes(self.saveState().toBase64()).decode()
+        self.config.window_state = bytes(self.saveState(LAYOUT_VERSION).toBase64()).decode()
         self.pool.waitForDone(3000)
         event.accept()
 
@@ -422,7 +560,7 @@ class MainWindow(QMainWindow):
             self,
             f"About {APP_NAME}",
             f"<b>{APP_NAME}</b> {APP_VERSION}<br>"
-            "Vertical Shorts editor for Twitch clips.<br>Phase 2: vertical Stacked Layout editor.",
+            "Vertical Shorts editor for Twitch clips.<br>Phase 3: timeline and audio editing.",
         )
 
     def _show_ffmpeg_info(self) -> None:

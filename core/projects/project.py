@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from core.editor.composition import Composition
+from core.timeline.model import Timeline
 
 PROJECT_EXTENSION = ".tssproj"
 SCHEMA_VERSION = 1
@@ -47,6 +48,7 @@ class Project:
     name: str = "Untitled"
     media: list[MediaRef] = field(default_factory=list)
     composition: Composition | None = None  # None until the first media sets a default
+    timelines: dict[str, Timeline] = field(default_factory=dict)  # edits per media path
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -60,6 +62,18 @@ class Project:
     def remove_media(self, path: str) -> None:
         key = _norm(path)
         self.media = [m for m in self.media if _norm(m.path) != key]
+        for stored in [p for p in self.timelines if _norm(p) == key]:
+            del self.timelines[stored]
+
+    def timeline_for(self, path: str) -> Timeline | None:
+        key = _norm(path)
+        return next((t for p, t in self.timelines.items() if _norm(p) == key), None)
+
+    def set_timeline(self, path: str, timeline: Timeline) -> None:
+        key = _norm(path)
+        for stored in [p for p in self.timelines if _norm(p) == key and p != path]:
+            del self.timelines[stored]
+        self.timelines[path] = timeline
 
     def to_dict(self) -> dict[str, Any]:
         data = dict(self.extra)
@@ -72,6 +86,10 @@ class Project:
         )
         if self.composition is not None:
             data["composition"] = self.composition.to_dict()
+        if self.timelines:
+            data["timelines"] = [
+                {"media": path, **timeline.to_dict()} for path, timeline in self.timelines.items()
+            ]
         return data
 
     @classmethod
@@ -85,7 +103,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition"}
+        known = {"schema_version", "name", "media", "composition", "timelines"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -93,10 +111,17 @@ class Project:
                 composition = Composition.from_dict(data["composition"])
             except (TypeError, ValueError) as exc:
                 raise ProjectFormatError(f"Invalid composition: {exc}") from exc
+        timelines: dict[str, Timeline] = {}
+        for entry in data.get("timelines") or []:
+            try:
+                timelines[str(entry["media"])] = Timeline.from_dict(entry)
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ProjectFormatError(f"Invalid timeline: {exc}") from exc
         return cls(
             name=str(data.get("name") or "Untitled"),
             media=[MediaRef.from_dict(m) for m in data.get("media") or []],
             composition=composition,
+            timelines=timelines,
             extra=extra,
         )
 

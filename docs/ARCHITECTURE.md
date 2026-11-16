@@ -82,9 +82,24 @@ PresetStore(path): built-in + user presets (presets.json in the user data dir)
 # ui/editor/CompositionController: single shared editing state (Qt signals)
 #   used by SourceView, OutputView and CompositionPanel.
 
-# core/timeline (Phase 3)
-Times stored as integer microseconds or Fraction seconds; frame/sample
-positions derived on demand to avoid rounding drift.
+# core/timeline (implemented in Phase 3)
+# All positions are integer microseconds in SOURCE time; frames and audio
+# samples are derived with rational maths (timebase.py), so nothing drifts.
+Timeline(duration_us, segments: tuple[Segment], mutes: tuple[MuteRegion],
+         gain_db, fade_in_us, fade_out_us)            # immutable
+#   segments = kept source ranges (trim / split / cut only edit this list)
+#   mutes    = source-time ranges, mode "silence" | "beep"; transcript and
+#              censor results (Phases 4-5) map onto them without conversion
+Timeline.merged_mutes()  -> ranges for preview/render (originals stay editable)
+Timeline.volume_at(us)   -> linear multiplier (mute, gain, fades)
+Timeline.source_to_output(us) / output_to_source(us)
+# core/history.History: snapshot undo/redo over (Composition, Timeline);
+#   a drag is folded into one step.
+# core/audio/waveform: FFmpeg -> 8 kHz mono -> 100 peaks/s, cached in
+#   <data dir>/cache/waveforms keyed by path+size+mtime.
+# ui/timeline/TimelineController + TimelineView; ui/preview/EditPlayback
+#   makes the preview skip cuts and follow mutes/gain/fades.
+# Project file: "timelines": one entry per media path.
 
 # core/render (Phase 6)
 detect_encoders(ffmpeg) -> list[EncoderInfo]   # h264_nvenc, hevc_nvenc, h264_qsv, h264_amf, libx264, libx265

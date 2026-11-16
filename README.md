@@ -17,6 +17,31 @@ original; independent Webcam and Gameplay crop rectangles; divider,
 Fit/Fill, zoom and position per region; swap and disable regions;
 composition presets; everything saved in the `.tssproj`.
 
+**Phase 3 — Timeline and audio** (done): timeline with zoom and scroll,
+cached audio waveform, trimming, splitting and cutting, multiple Mute
+Regions (Silence or Beep), overall gain, Fade In / Fade Out, snapping,
+undo/redo. The preview plays the edit: cuts are skipped and mutes,
+gain and fades are audible. Sources are never modified.
+
+### Editing on the timeline
+
+| Action | How |
+|---|---|
+| Move the playhead | click the ruler or a track |
+| Trim | drag the left or right edge of a segment |
+| Split at the playhead | `S` |
+| Select a range | drag across the audio or video track |
+| Cut the selected range / delete a segment or mute | `Del` |
+| Keep only the selected range | `T` |
+| Mute the selected range | `M`, then pick Silence or Beep |
+| Move / resize a Mute Region | drag it or its edges on the Mute track |
+| Zoom / scroll | `Ctrl`+wheel / wheel |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
+
+Edges snap to the playhead and to other edges; hold `Alt` to turn
+snapping off. Beep regions sound silent in the preview; the tone is
+added on export (Phase 6), as is gain above 0 dB.
+
 ### Editing the composition
 
 | Where | Mouse | Result |

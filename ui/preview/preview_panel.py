@@ -42,6 +42,7 @@ class PreviewPanel(QWidget):
         self._frame_ms = 33
         self._duration_ms = 0
         self._was_playing_before_scrub = False
+        self._audio_factor = 1.0  # timeline gain / mute / fade, 0..1
 
         self.source_view = SourceView(self.controller, self)
         self.output_view = OutputView(self.controller, self)
@@ -127,7 +128,7 @@ class PreviewPanel(QWidget):
         self.slider.sliderPressed.connect(self._on_scrub_start)
         self.slider.sliderMoved.connect(self.seek)
         self.slider.sliderReleased.connect(self._on_scrub_end)
-        self.volume.valueChanged.connect(lambda v: self.audio.setVolume(v / 100))
+        self.volume.valueChanged.connect(lambda _v: self._apply_volume())
 
         self._set_enabled(False)
 
@@ -172,6 +173,16 @@ class PreviewPanel(QWidget):
         self.canvas.clear("Import a video to start (File → Import or drag and drop)")
         self.output_view.clear()
         self._set_enabled(False)
+
+    def set_audio_factor(self, factor: float) -> None:
+        """Extra volume multiplier from the edit (mutes, gain, fades)."""
+        factor = max(0.0, min(1.0, float(factor)))
+        if abs(factor - self._audio_factor) > 1e-4:
+            self._audio_factor = factor
+            self._apply_volume()
+
+    def _apply_volume(self) -> None:
+        self.audio.setVolume(self.volume.value() / 100 * self._audio_factor)
 
     def toggle_play(self) -> None:
         if self._media is None:
