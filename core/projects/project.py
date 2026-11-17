@@ -14,6 +14,7 @@ from typing import Any
 
 from core.censor.review import CensorState
 from core.editor.composition import Composition
+from core.metadata.generate import ClipMetadata
 from core.timeline.model import Timeline
 from core.transcription.model import Transcript
 
@@ -53,6 +54,7 @@ class Project:
     timelines: dict[str, Timeline] = field(default_factory=dict)  # edits per media path
     transcripts: dict[str, Transcript] = field(default_factory=dict)  # per media path
     censors: dict[str, CensorState] = field(default_factory=dict)  # censor review per media path
+    metadata: ClipMetadata = field(default_factory=ClipMetadata)  # YouTube title/description/tags choices
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -123,6 +125,8 @@ class Project:
             ]
         if self.censors:
             data["censor"] = [{"media": path, **state.to_dict()} for path, state in self.censors.items()]
+        if not self.metadata.empty:
+            data["metadata"] = self.metadata.to_dict()
         return data
 
     @classmethod
@@ -136,7 +140,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor"}
+        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -162,6 +166,12 @@ class Project:
                 censors[str(entry["media"])] = CensorState.from_dict(entry)
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise ProjectFormatError(f"Invalid censor data: {exc}") from exc
+        metadata = ClipMetadata()
+        if data.get("metadata") is not None:
+            try:
+                metadata = ClipMetadata.from_dict(data["metadata"])
+            except (TypeError, ValueError) as exc:
+                raise ProjectFormatError(f"Invalid metadata: {exc}") from exc
         return cls(
             name=str(data.get("name") or "Untitled"),
             media=[MediaRef.from_dict(m) for m in data.get("media") or []],
@@ -169,6 +179,7 @@ class Project:
             timelines=timelines,
             transcripts=transcripts,
             censors=censors,
+            metadata=metadata,
             extra=extra,
         )
 

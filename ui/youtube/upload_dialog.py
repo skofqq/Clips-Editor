@@ -73,6 +73,7 @@ class UploadDialog(QDialog):
         defaults: dict | None = None,
         manage_accounts=None,  # callable opening the accounts dialog
         parent: QWidget | None = None,
+        metadata=None,  # ClipMetadata from the project's Metadata tab
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Upload to YouTube")
@@ -104,7 +105,8 @@ class UploadDialog(QDialog):
         self.description_edit.setPlaceholderText("Description, links, #hashtags")
         self.description_edit.setMinimumHeight(110)
         self.description_count = QLabel(self)
-        self.tags_edit = QLineEdit(str(defaults.get("tags", "")), self)
+        self._default_tags = str(defaults.get("tags", ""))
+        self.tags_edit = QLineEdit(self._default_tags, self)
         self.tags_edit.setPlaceholderText("twitch, shorts, streamer name")
         self.category_combo = QComboBox(self)
         for cid, name in CATEGORIES.items():
@@ -186,6 +188,14 @@ class UploadDialog(QDialog):
         self._select(self.category_combo, defaults.get("category", DEFAULT_CATEGORY))
         self._select(self.privacy_combo, defaults.get("privacy", PRIVATE))
         self._select(self.language_combo, defaults.get("language", ""))
+        self.from_metadata = False
+        if metadata is not None and metadata.title.strip():
+            self.from_metadata = True
+            self.title_edit.setText(metadata.title)
+            self.description_edit.setPlainText(metadata.description)
+            self.tags_edit.setText(", ".join(metadata.tags))
+            if metadata.generated is not None and metadata.generated.category_id:
+                self._select(self.category_combo, metadata.generated.category_id)
 
         for signal in (self.title_edit.textChanged, self.description_edit.textChanged, self.tags_edit.textChanged,
                        self.privacy_combo.currentIndexChanged, self.category_combo.currentIndexChanged,
@@ -291,6 +301,9 @@ class UploadDialog(QDialog):
         self.problems_label.setText("\n".join(issues))
         self.problems_label.setVisible(bool(issues))
         notes = list(getattr(self, "_file_notes", []))
+        if getattr(self, "from_metadata", False):
+            notes.append("Title, description and tags come from the project's Metadata tab; changes here "
+                         "apply to this upload only.")
         if meta.publish_at is not None:
             notes.append("Scheduled videos stay private until the chosen time, then become public.")
         self.note_label.setText("\n".join(notes))
@@ -308,7 +321,7 @@ class UploadDialog(QDialog):
             "category": self.category_combo.currentData(),
             "privacy": self.privacy_combo.currentData() if not self.schedule_check.isChecked() else PRIVATE,
             "language": self.language_combo.currentData(),
-            "tags": self.tags_edit.text(),
+            "tags": self.tags_edit.text() if not self.from_metadata else self._default_tags,
         }
 
     # ------------------------------------------------------------ upload

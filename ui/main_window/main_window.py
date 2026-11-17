@@ -23,6 +23,7 @@ from core.censor.dictionary import Dictionary
 from core.censor.review import detect
 from core.render.encoders import detect_encoders
 from core.render.settings import RenderSettings
+from core.metadata.library import Library
 from core.youtube.history import UploadHistory
 from core.youtube.service import YouTubeService
 from core.editor.composition import default_composition
@@ -56,6 +57,8 @@ from ui.censor.censor_panel import CensorPanel
 from ui.censor.dictionary_dialog import DictionaryDialog
 from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
+from ui.metadata.library_dialog import LibraryDialog
+from ui.metadata.metadata_panel import MetadataPanel
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.upload_dialog import UploadDialog
 from ui.panels.composition_panel import CompositionPanel
@@ -70,7 +73,7 @@ from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 5  # bump when the dock arrangement changes
+LAYOUT_VERSION = 6  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -111,6 +114,7 @@ class MainWindow(QMainWindow):
         self.encoders = None  # usable video encoders, detected in the background
         self.youtube = YouTubeService(config)
         self.upload_history = UploadHistory(config.data_dir / "youtube_uploads.json")  # pause here when listening to a suggestion
+        self.metadata_library = Library(config.data_dir / "metadata_library.sqlite")
         self.history: History = History(self._edit_state())
 
         self.preview = PreviewPanel(self.composition, self)
@@ -123,6 +127,12 @@ class MainWindow(QMainWindow):
         self.edit_playback = EditPlayback(self.preview, self.timeline, self)
         self.transcript_panel = TranscriptPanel(self.transcript, self)
         self.censor_panel = CensorPanel(self.censor, self)
+        self.metadata_panel = MetadataPanel(self.metadata_library, self)
+        metadata_scroll = QScrollArea(self)
+        metadata_scroll.setWidgetResizable(True)
+        metadata_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        metadata_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        metadata_scroll.setWidget(self.metadata_panel)
 
         composition_scroll = QScrollArea(self)
         composition_scroll.setWidgetResizable(True)
@@ -148,7 +158,11 @@ class MainWindow(QMainWindow):
             "Censor", "dock_censor", self.censor_panel, Qt.DockWidgetArea.RightDockWidgetArea
         )
         self.tabifyDockWidget(self.properties_dock, self.transcript_dock)
+        self.metadata_dock = self._add_dock(
+            "Metadata", "dock_metadata", metadata_scroll, Qt.DockWidgetArea.RightDockWidgetArea
+        )
         self.tabifyDockWidget(self.transcript_dock, self.censor_dock)
+        self.tabifyDockWidget(self.censor_dock, self.metadata_dock)
         self.properties_dock.raise_()
         self.resizeDocks([self.media_dock, self.properties_dock], [240, 360], Qt.Orientation.Horizontal)
         self.resizeDocks([self.timeline_dock], [250], Qt.Orientation.Vertical)
@@ -187,6 +201,8 @@ class MainWindow(QMainWindow):
         self.act_upload = QAction("&Upload to YouTube…", self, shortcut=QKeySequence("Ctrl+U"))
         self.act_upload.setToolTip("Upload a rendered video to YouTube (Ctrl+U)")
         self.act_youtube_accounts = QAction("YouTube Accounts…", self)
+        self.act_metadata_library = QAction("Metadata Library…", self)
+        self.act_metadata_library.setToolTip("Streamers, participants, games, stream types and templates")
         self.act_new = QAction("&New Project", self, shortcut=QKeySequence.StandardKey.New)
         self.act_open = QAction("&Open Project…", self, shortcut=QKeySequence.StandardKey.Open)
         self.act_save = QAction("&Save Project", self, shortcut=QKeySequence.StandardKey.Save)
@@ -247,12 +263,13 @@ class MainWindow(QMainWindow):
 
         view = self.menuBar().addMenu("&View")
         for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.censor_dock,
-                     self.timeline_dock):
+                     self.metadata_dock, self.timeline_dock):
             view.addAction(dock.toggleViewAction())
         view.addSeparator()
         view.addAction(self.act_reset_layout)
 
         settings_menu = self.menuBar().addMenu("&Settings")
+        settings_menu.addAction(self.act_metadata_library)
         integrations = settings_menu.addMenu("Integrations")
         integrations.addAction(self.act_youtube_accounts)
 
@@ -265,6 +282,9 @@ class MainWindow(QMainWindow):
         self.act_export.triggered.connect(self.export_video)
         self.act_upload.triggered.connect(lambda: self.upload_to_youtube())
         self.act_youtube_accounts.triggered.connect(self.manage_youtube_accounts)
+        self.act_metadata_library.triggered.connect(lambda: self.open_metadata_library())
+        self.metadata_panel.metadata_changed.connect(self._metadata_changed)
+        self.metadata_panel.library_requested.connect(self.open_metadata_library)
         self.act_new.triggered.connect(self.new_project)
         self.act_open.triggered.connect(self.choose_project)
         self.act_save.triggered.connect(self.save)
@@ -698,11 +718,26 @@ class MainWindow(QMainWindow):
         dialog = UploadDialog(
             self.youtube, self.upload_history, Path(path), self.ffmpeg.ffprobe if self.ffmpeg else None,
             self.config.youtube_defaults, self.manage_youtube_accounts, self,
+            metadata=self.project.metadata,
         )
         dialog.exec()
         self.config.youtube_defaults = dialog.defaults()
         if dialog.result is not None:
             self.statusBar().showMessage(f"Uploaded to YouTube: {dialog.result.url}", 10000)
+
+    # ------------------------------------------------------------- metadata
+    def open_metadata_library(self, kind: str = "", entity_id: str = "") -> None:
+        dialog = LibraryDialog(self.metadata_library, kind or "streamer", self)
+        if kind and entity_id:
+            dialog.edit(kind, entity_id)
+        dialog.library_changed.connect(self.metadata_panel.refresh_library)
+        dialog.exec()
+        self.metadata_panel.refresh_library()
+
+    def _metadata_changed(self, metadata) -> None:
+        if metadata != self.project.metadata:
+            self.project.metadata = metadata
+            self._set_dirty(True)
 
     # -------------------------------------------------------- transcription
     def start_transcription(self, options) -> None:
@@ -872,6 +907,7 @@ class MainWindow(QMainWindow):
             return
         self.project = Project()
         self.project_path = None
+        self.metadata_panel.set_metadata(self.project.metadata)
         self.media_panel.clear()
         self.preview.unload()
         self.properties_panel.show_media(None)
@@ -895,6 +931,7 @@ class MainWindow(QMainWindow):
             return
         self.project = project
         self.project_path = path
+        self.metadata_panel.set_metadata(project.metadata)
         self.media_panel.clear()
         self.preview.unload()
         self._apply_project_composition()
@@ -1008,6 +1045,7 @@ class MainWindow(QMainWindow):
         self.config.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         self.config.window_state = bytes(self.saveState(LAYOUT_VERSION).toBase64()).decode()
         self.pool.waitForDone(3000)
+        self.metadata_library.close()
         event.accept()
 
     # --------------------------------------------------------------- help

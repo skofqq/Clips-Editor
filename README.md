@@ -64,6 +64,36 @@ refresh. The video ID and link are shown and kept in
 `youtube_uploads.json`. Setup of your own Google OAuth client:
 [docs/YOUTUBE_SETUP_RU.md](docs/YOUTUBE_SETUP_RU.md).
 
+**Phase 8 — Metadata manager** (done): a **Metadata** tab (next to
+Censor) and **Settings → Metadata Library…**. Pick the streamer,
+participants, game and stream types as chips, choose a template and press
+**Generate metadata** to get the title, description, YouTube tags and
+hashtags. Everything stays editable; generating again never overwrites
+your hand edits silently (it asks whether to keep them). Upload to YouTube
+starts from these values.
+
+### Metadata
+
+Typing a name in a chip field offers matching profiles (also by username
+or alternative names such as “GTA 6”). A name that is not in the library
+yet is added on the spot; double-click its chip to add links and default
+tags. The library (SQLite, `metadata_library.sqlite` in the data folder) is
+shared by all projects; the project file stores only which profiles you
+picked and the final texts.
+
+Templates use variables: `{streamer}`, `{streamer_username}`,
+`{streamer_channel_url}`, `{streamer_twitch_url}`, `{game}`,
+`{stream_type}`, `{participants}`, `{participants_links}`, `{stream_url}`,
+`{clip_title}`, `{date}`, `{hashtags}`, plus your own from the
+**Variables** box (`promo = https://t.me/…`). Text in `[[ … ]]` is left
+out when a variable inside is empty, and a line whose variables are all
+empty disappears, so `Game: {game}` never shows a bare label. Template
+choice: the one picked on the tab, else the streamer's, game's or stream
+type's own template, else the default (★). YouTube tags (sent as
+`snippet.tags`, up to 500 characters) are collected from the streamer,
+game, participants, stream types, template and the clip's extra tags
+without duplicates; hashtags only go into the description.
+
 ### Exporting
 
 Press `Ctrl+E`. **YouTube Shorts · H.264 MP4** (1080 × 1920, quality 20)

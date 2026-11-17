@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.8.0"
 
 log = logging.getLogger(__name__)
 

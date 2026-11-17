@@ -46,9 +46,8 @@ core/
   transcription/(Phase 4) faster-whisper + Silero VAD
   censor/       (Phase 5) dictionaries, normaliser, matcher, region merger
   render/       (Phase 6) filter-graph builder, encoder detection, render job
-  metadata/     (Phase 8) templates, chips libraries
+  metadata/     (Phase 8) library.py (SQLite profiles + migrations), template.py, generate.py
   publishing/youtube/ (Phase 7) OAuth, channels, resumable upload
-database/       (Phase 8) SQLite models, repositories, migrations
 tools/          setup_ffmpeg.py — downloads a Windows FFmpeg build into tools/ffmpeg/
 tests/          pytest; GUI smoke tests run with QT_QPA_PLATFORM=offscreen
 ```
@@ -164,6 +163,22 @@ YouTubeClient(token_provider).my_channels() / .upload(path, VideoMetadata,
 VideoMetadata.problems(): title <= 100, description <= 5000 bytes, no < >,
 #   tags <= 500, category, privacy, future publishAt (forces private).
 UploadHistory(<data dir>/youtube_uploads.json): video ID + URL per upload.
+
+# core/metadata (implemented in Phase 8)
+Library(<data dir>/metadata_library.sqlite): tables streamers, participants, games,
+#   stream_types, templates (id, name, unique normalised key, JSON data); schema
+#   changes are MIGRATIONS run by PRAGMA user_version; migration 2 seeds templates,
+#   stream types and a few games. save() rejects empty names and duplicates.
+template.render(text, values) / render_title(): {var}, {{ }} literal braces,
+#   [[optional sections]], lines whose variables are all empty are dropped.
+generate(library, MetadataSelection) -> GeneratedMetadata(title, description,
+#   tags, hashtags, category_id, warnings). Template: explicit > streamer > game >
+#   stream type > default. Tags deduplicated and cut to YouTube's 500 characters.
+ClipMetadata (Project.metadata, key "metadata" in .tssproj): selection, last
+#   generated values and current fields; edited_fields() = fields that differ from
+#   the last generation, with_generated(new, keep=...) preserves chosen edits.
+# ui/chips/chip_input.py: ChipInput (FlowLayout of removable chips + completer).
+# ui/metadata: MetadataPanel (dock), LibraryDialog (per-kind editors, template preview).
 ```
 
 ## 4. Preview strategy
