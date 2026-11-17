@@ -40,11 +40,10 @@ mutes exactly that word.
 
 For NVIDIA GPU acceleration install the CUDA libraries once (≈ 1 GB):
 
-```bat
-.venv\Scripts\pip install -r requirements-gpu.txt
-```
+double-click `install_gpu.bat` (or run `.venv\Scripts\pip install -r requirements-gpu.txt`).
 
-Without them the app uses the CPU automatically.
+Without them the app uses the CPU automatically and says so in the
+Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
 
 ### Editing on the timeline
 

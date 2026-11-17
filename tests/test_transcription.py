@@ -152,11 +152,25 @@ def fake_whisper(monkeypatch):
 
 def test_resolve_device(monkeypatch):
     monkeypatch.setattr(engine_mod, "cuda_available", lambda: False)
-    assert resolve_device("auto") == [("cpu", "int8")]
+    assert resolve_device("auto") == ([("cpu", "int8")], "")
+    devices, note = resolve_device("cuda")
+    assert devices == [("cpu", "int8")] and "No CUDA" in note
     monkeypatch.setattr(engine_mod, "cuda_available", lambda: True)
-    assert resolve_device("auto")[0] == ("cuda", "float16")
-    assert resolve_device("auto")[-1] == ("cpu", "int8")
-    assert resolve_device("cpu") == [("cpu", "int8")]
+    monkeypatch.setattr(engine_mod, "missing_cuda_libraries", lambda: [])
+    devices, note = resolve_device("auto")
+    assert devices[0] == ("cuda", "float16") and devices[-1] == ("cpu", "int8") and note == ""
+    assert resolve_device("cpu") == ([("cpu", "int8")], "")
+    # GPU present but cuBLAS/cuDNN missing (the usual Windows case): CPU, with advice.
+    monkeypatch.setattr(engine_mod, "missing_cuda_libraries", lambda: ["cublas64_12.dll", "cudnn64_9.dll"])
+    for requested in ("auto", "cuda"):
+        devices, note = resolve_device(requested)
+        assert devices == [("cpu", "int8")]
+        assert "cublas64_12.dll" in note and "install_gpu.bat" in note
+
+
+def test_missing_cuda_libraries_returns_names():
+    missing = engine_mod.missing_cuda_libraries()
+    assert set(missing) <= set(engine_mod.CUDA_LIBRARIES)
 
 
 def test_engine_transcribes_and_reuses_model(fake_whisper, tmp_path, monkeypatch):
@@ -175,6 +189,7 @@ def test_engine_transcribes_and_reuses_model(fake_whisper, tmp_path, monkeypatch
 
 def test_engine_falls_back_to_cpu(fake_whisper, tmp_path, monkeypatch):
     monkeypatch.setattr(engine_mod, "cuda_available", lambda: True)
+    monkeypatch.setattr(engine_mod, "missing_cuda_libraries", lambda: [])
     fake_whisper.fail_on = {"cuda"}
     engine = WhisperEngine(tmp_path)
     t = engine.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), TranscribeOptions())
@@ -196,6 +211,14 @@ def test_engine_falls_back_to_cpu(fake_whisper, tmp_path, monkeypatch):
     t = engine.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), TranscribeOptions())
     assert engine.device_used == "cpu" and t.segments
     assert [c[1] for c in fake_whisper.calls] == ["cuda", "cpu"]
+    assert "GPU failed" in engine.notice and "cublas64_12.dll" in engine.notice
+
+    # Same when the user explicitly picked the GPU.
+    fake_whisper.fail_on = {"runtime"}
+    fake_whisper.calls = []
+    engine = WhisperEngine(tmp_path)
+    t = engine.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), TranscribeOptions(device="cuda"))
+    assert engine.device_used == "cpu" and t.segments
 
     fake_whisper.fail_on = {"cuda", "cpu"}
     with pytest.raises(TranscriptionError):

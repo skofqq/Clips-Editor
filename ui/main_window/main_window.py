@@ -458,7 +458,10 @@ class MainWindow(QMainWindow):
     def _transcription_done(self, transcript) -> None:
         path = self._finish_transcription()
         device = self.engine.device_used.upper() or "CPU"
-        self.transcript_panel.set_busy(False, f"Done on {device}: {len(transcript.segments)} segments.")
+        message = f"Done on {device}: {len(transcript.segments)} segments."
+        if self.engine.notice:
+            message += "\n" + self.engine.notice
+        self.transcript_panel.set_busy(False, message)
         media = self.preview.media
         if path is None:
             return

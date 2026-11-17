@@ -82,14 +82,48 @@ def cuda_available() -> bool:
         return False
 
 
-def resolve_device(requested: str) -> list[tuple[str, str]]:
-    """(device, compute_type) pairs to try, best first."""
+if sys.platform == "win32":
+    CUDA_LIBRARIES = ("cublas64_12.dll", "cublasLt64_12.dll", "cudnn64_9.dll", "cudnn_ops64_9.dll", "cudnn_cnn64_9.dll")
+else:
+    CUDA_LIBRARIES = ("libcublas.so.12", "libcublasLt.so.12", "libcudnn.so.9", "libcudnn_ops.so.9", "libcudnn_cnn.so.9")
+
+GPU_HELP = "Run install_gpu.bat in the application folder to add GPU support (about 1 GB)."
+
+
+def missing_cuda_libraries() -> list[str]:
+    """CUDA runtime libraries that cannot be loaded.
+
+    CTranslate2 only loads cuBLAS/cuDNN when it first runs on the GPU, and a
+    missing cuDNN can kill the whole process instead of raising, so this is
+    checked up front.
+    """
+    import ctypes
+
+    add_cuda_dll_dirs()
+    loader = ctypes.WinDLL if sys.platform == "win32" else ctypes.CDLL  # type: ignore[attr-defined]
+    missing = []
+    for name in CUDA_LIBRARIES:
+        try:
+            loader(name)
+        except OSError:
+            missing.append(name)
+    return missing
+
+
+def resolve_device(requested: str) -> tuple[list[tuple[str, str]], str]:
+    """(device, compute_type) pairs to try, best first, and a note for the
+    user when the GPU cannot be used."""
     cpu = ("cpu", "int8")
     if requested == "cpu":
-        return [cpu]
-    if requested == "cuda" or (requested == AUTO and cuda_available()):
-        return [("cuda", "float16"), ("cuda", "int8_float16"), cpu]
-    return [cpu]
+        return [cpu], ""
+    if not cuda_available():
+        note = "" if requested == AUTO else "No CUDA-capable GPU was found, so the CPU was used."
+        return [cpu], note
+    missing = missing_cuda_libraries()
+    if missing:
+        note = f"GPU libraries are not installed ({', '.join(missing[:2])}…), so the CPU was used. {GPU_HELP}"
+        return [cpu], note
+    return [("cuda", "float16"), ("cuda", "int8_float16"), cpu], ""
 
 
 def decode_audio(path: Path, ffmpeg: Path, audio_stream: int = 0, cancel: threading.Event | None = None) -> np.ndarray:
@@ -157,34 +191,57 @@ class WhisperEngine:
         self._model = None
         self._key: tuple[str, str, str] | None = None
         self.device_used = ""
+        self.notice = ""  # why the GPU was not used, if it was requested/available
         self._lock = threading.Lock()
 
-    def _load(self, options: TranscribeOptions, progress: Progress) -> None:
+    def _load(self, model: str, candidates: list[tuple[str, str]], progress: Progress) -> None:
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:  # pragma: no cover - dependency missing
             raise TranscriptionError("faster-whisper is not installed. Run run.bat again.") from exc
-        add_cuda_dll_dirs()
         errors: list[str] = []
-        for device, compute in resolve_device(options.device):
-            key = (options.model, device, compute)
+        for device, compute in candidates:
+            key = (model, device, compute)
             if self._model is not None and self._key == key:
                 return
-            progress(0.0, f"Loading model '{options.model}' on {device.upper()} (first use downloads it)…")
+            progress(0.0, f"Loading model '{model}' on {device.upper()} (first use downloads it)…")
             try:
                 self.models_dir.mkdir(parents=True, exist_ok=True)
-                self._model = WhisperModel(
-                    options.model, device=device, compute_type=compute, download_root=str(self.models_dir)
-                )
+                self._model = WhisperModel(model, device=device, compute_type=compute, download_root=str(self.models_dir))
                 self._key = key
                 self.device_used = device
-                log.info("Whisper model %s loaded on %s (%s)", options.model, device, compute)
+                log.info("Whisper model %s loaded on %s (%s)", model, device, compute)
                 return
             except Exception as exc:  # noqa: BLE001 - try the next device
                 log.warning("Could not load model on %s/%s: %s", device, compute, exc)
                 errors.append(f"{device}: {exc}")
                 self._model = None
+                self._key = None
         raise TranscriptionError("Could not load the speech model.\n" + "\n".join(errors))
+
+    def _run(self, audio: np.ndarray, options: TranscribeOptions, progress: Progress, cancel):
+        duration_s = len(audio) / SAMPLE_RATE
+        language = None if options.language == AUTO else options.language
+        segments_iter, info = self._model.transcribe(
+            audio,
+            language=language,
+            task="transcribe",
+            beam_size=options.beam_size,
+            word_timestamps=True,
+            vad_filter=options.vad,
+            vad_parameters={"min_silence_duration_ms": 500},
+            condition_on_previous_text=False,
+        )
+        raw = []
+        progress(0.02, f"Recognising ({info.language}) on {self.device_used.upper()}…")
+        for seg in segments_iter:  # the generator does the actual work
+            if cancel is not None and cancel.is_set():
+                raise TranscriptionCancelled()
+            raw.append(seg)
+            if duration_s > 0:
+                progress(min(0.99, seg.end / duration_s),
+                         f"Recognising ({info.language}) on {self.device_used.upper()}… {len(raw)} segments")
+        return raw, info
 
     def transcribe(
         self,
@@ -193,50 +250,37 @@ class WhisperEngine:
         progress: Progress = lambda f, m: None,
         cancel: threading.Event | None = None,
     ) -> Transcript:
-        duration_s = len(audio) / SAMPLE_RATE
         with self._lock:
-            self._load(options, progress)
-            language = None if options.language == AUTO else options.language
+            candidates, self.notice = resolve_device(options.device)
+            if self.notice:
+                log.warning("%s", self.notice)
+            self._load(options.model, candidates, progress)
             try:
-                segments_iter, info = self._model.transcribe(
-                    audio,
-                    language=language,
-                    task="transcribe",
-                    beam_size=options.beam_size,
-                    word_timestamps=True,
-                    vad_filter=options.vad,
-                    vad_parameters={"min_silence_duration_ms": 500},
-                    condition_on_previous_text=False,
-                )
-                raw = []
-                progress(0.02, f"Recognising ({info.language})…")
-                for seg in segments_iter:  # the generator does the actual work
-                    if cancel is not None and cancel.is_set():
-                        raise TranscriptionCancelled()
-                    raw.append(seg)
-                    if duration_s > 0:
-                        progress(min(0.99, seg.end / duration_s), f"Recognising ({info.language})… {len(raw)} segments")
+                raw, info = self._run(audio, options, progress, cancel)
             except TranscriptionCancelled:
                 raise
             except Exception as exc:  # noqa: BLE001
-                if self.device_used == "cuda" and options.device == AUTO:
-                    # Typical cause: cuBLAS/cuDNN missing. Retry once on CPU.
-                    log.warning("GPU transcription failed (%s); retrying on CPU", exc)
-                    self._model = None
-                    cpu = TranscribeOptions(options.model, options.language, "cpu", options.vad, options.beam_size)
-                    self._lock.release()
-                    try:
-                        return self.transcribe(audio, cpu, progress, cancel)
-                    finally:
-                        self._lock.acquire()
-                raise TranscriptionError(f"Transcription failed: {exc}") from exc
+                if self.device_used != "cuda":
+                    raise TranscriptionError(f"Transcription failed: {exc}") from exc
+                # The GPU failed while running (e.g. a CUDA library is broken). Retry on CPU.
+                log.warning("GPU transcription failed (%s); retrying on CPU", exc)
+                self.notice = f"The GPU failed ({exc}), so the CPU was used. {GPU_HELP}"
+                self._model = None
+                self._key = None
+                self._load(options.model, [("cpu", "int8")], progress)
+                try:
+                    raw, info = self._run(audio, options, progress, cancel)
+                except TranscriptionCancelled:
+                    raise
+                except Exception as exc2:  # noqa: BLE001
+                    raise TranscriptionError(f"Transcription failed: {exc2}") from exc2
         progress(1.0, "Done")
         return Transcript(
             language=info.language,
             language_probability=float(info.language_probability),
             model=options.model,
             segments=convert_segments(raw),
-            duration_us=seconds_to_us(duration_s),
+            duration_us=seconds_to_us(len(audio) / SAMPLE_RATE),
         )
 
 
