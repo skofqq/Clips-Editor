@@ -46,6 +46,7 @@ class AppConfig:
     window_state: str = ""  # base64 of QMainWindow.saveState()
     transcribe_vocabulary: str = ""  # nicknames / slang, comma separated
     transcribe_uncensored: bool = True
+    transcribe_slang: bool = True
     transcribe_model: str = ""
     transcribe_language: str = ""
 
@@ -97,6 +98,8 @@ class AppConfig:
                 setattr(config, key, raw[key])
         if isinstance(raw.get("transcribe_uncensored"), bool):
             config.transcribe_uncensored = raw["transcribe_uncensored"]
+        if isinstance(raw.get("transcribe_slang"), bool):
+            config.transcribe_slang = raw["transcribe_slang"]
         recent = raw.get("recent_files")
         if isinstance(recent, list):
             config.recent_files = [item for item in recent if isinstance(item, str)]

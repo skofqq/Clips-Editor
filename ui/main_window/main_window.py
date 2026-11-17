@@ -261,6 +261,7 @@ class MainWindow(QMainWindow):
             self.config.transcribe_language,
             self.config.transcribe_vocabulary,
             self.config.transcribe_uncensored,
+            self.config.transcribe_slang,
         )
         self.timeline.selection_changed.connect(self._update_edit_actions)
         self._update_edit_actions()
@@ -440,6 +441,7 @@ class MainWindow(QMainWindow):
         self.config.transcribe_language = options.language
         self.config.transcribe_vocabulary = ", ".join(options.vocabulary)
         self.config.transcribe_uncensored = options.uncensored
+        self.config.transcribe_slang = options.slang
         task = CancellableTask(transcribe_file, self.engine, media.path, self.ffmpeg.ffmpeg, options)
         task.signals.progress.connect(self.transcript_panel.set_progress)
         task.signals.finished.connect(self._transcription_done)

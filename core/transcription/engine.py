@@ -56,6 +56,7 @@ class TranscribeOptions:
     beam_size: int = 5
     vocabulary: tuple[str, ...] = ()  # nicknames, slang: biases recognition towards them
     uncensored: bool = True  # prime the model to write swear words as spoken
+    slang: bool = True  # prime the model with gaming / streaming slang
 
 
 Progress = Callable[[float, str], None]  # fraction 0..1, message
@@ -71,6 +72,20 @@ _PRIMING = {
     "en": "Twitch stream, casual uncensored speech with swearing: fuck, fucking, shit, bitch, damn.",
 }
 _PLAIN = {"ru": "Стрим на Twitch, живая разговорная речь.", "en": "Twitch stream, casual speech."}
+# Gaming and streaming slang that Whisper otherwise "corrects" into ordinary
+# words. Kept short: Whisper only reads the last ~220 prompt tokens, so the
+# user's own names go last and are never cut off by this list.
+SLANG = {
+    "ru": (
+        "катка", "тиммейты", "рофл", "кринж", "имба", "изи", "гг", "донат", "сабы", "лут", "фармить",
+        "тильт", "руинер", "кд", "респавн", "пушить", "рейд", "клатч", "ваншот", "хедшот", "бафф", "нерф",
+        "лагает", "афк", "ачивка", "жиза", "модер", "нуб", "скилл", "агрится",
+    ),
+    "en": (
+        "GG", "clutch", "poggers", "KEKW", "copium", "sus", "based", "cracked", "nerf", "one-tap",
+        "headshot", "respawn", "smurf", "tryhard", "raid", "gifted subs", "AFK", "grind", "noob", "no cap",
+    ),
+}
 MAX_VOCABULARY_CHARS = 300  # Whisper keeps only ~220 prompt tokens
 
 
@@ -84,7 +99,9 @@ def parse_vocabulary(text: str) -> tuple[str, ...]:
     return tuple(seen.values())
 
 
-def build_prompt(language: str, vocabulary: tuple[str, ...] = (), uncensored: bool = True) -> str | None:
+def build_prompt(
+    language: str, vocabulary: tuple[str, ...] = (), uncensored: bool = True, slang: bool = False
+) -> str | None:
     """Context prompt for Whisper, or None when there is nothing to add."""
     table = _PRIMING if uncensored else _PLAIN
     if language in table:
@@ -93,6 +110,11 @@ def build_prompt(language: str, vocabulary: tuple[str, ...] = (), uncensored: bo
         parts = [_PRIMING["ru"], _PRIMING["en"]]
     else:
         parts = []
+    if slang:
+        languages = [language] if language in SLANG else ["ru", "en"]
+        for lang in languages:
+            label = "Сленг" if lang == "ru" else "Slang"
+            parts.append(f"{label}: {', '.join(SLANG[lang])}.")
     if vocabulary:
         names = ", ".join(vocabulary)
         if len(names) > MAX_VOCABULARY_CHARS:
@@ -266,7 +288,7 @@ class WhisperEngine:
     def _run(self, audio: np.ndarray, options: TranscribeOptions, progress: Progress, cancel):
         duration_s = len(audio) / SAMPLE_RATE
         language = None if options.language == AUTO else options.language
-        prompt = build_prompt(options.language, options.vocabulary, options.uncensored)
+        prompt = build_prompt(options.language, options.vocabulary, options.uncensored, options.slang)
         segments_iter, info = self._model.transcribe(
             audio,
             language=language,

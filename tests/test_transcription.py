@@ -439,6 +439,12 @@ def test_vocabulary_and_uncensored_prompt():
     assert "блять" in auto and "fuck" in auto
     assert build_prompt("auto", (), False) is None
     assert "блять" not in build_prompt("ru", (), False)
+    slang = build_prompt("ru", ("sasavot",), True, slang=True)
+    assert "Сленг: катка" in slang and "clutch" not in slang
+    assert slang.endswith("Ники и имена: sasavot.")  # names last: never cut off
+    both = build_prompt("auto", (), False, slang=True)
+    assert "катка" in both and "clutch" in both
+    assert "катка" not in build_prompt("ru", (), True)
     long = build_prompt("en", tuple(f"name{i:03d}" for i in range(100)), False)
     assert len(long) < 400 and long.endswith(".")
 
@@ -447,10 +453,11 @@ def test_engine_passes_prompt_as_hotwords(fake_whisper, tmp_path, monkeypatch):
     monkeypatch.setattr(engine_mod, "cuda_available", lambda: False)
     WhisperEngine(tmp_path).transcribe(
         np.zeros(SAMPLE_RATE, dtype=np.float32),
-        TranscribeOptions(language="ru", vocabulary=("sasavot",), uncensored=True),
+        TranscribeOptions(language="ru", vocabulary=("sasavot",), uncensored=True, slang=True),
     )
     kwargs = FakeModel.last_kwargs
     assert "sasavot" in kwargs["hotwords"] and kwargs["initial_prompt"] == kwargs["hotwords"]
+    assert "катка" in kwargs["hotwords"]
 
 
 def test_panel_vocabulary_options(qapp):
@@ -459,5 +466,8 @@ def test_panel_vocabulary_options(qapp):
     options = panel.options()
     assert (options.model, options.language) == ("medium", "ru")
     assert options.vocabulary == ("sasavot", "helin139") and not options.uncensored
+    assert options.slang
+    panel.set_preferences("medium", "ru", "", True, False)
+    assert not panel.options().slang
     panel.set_preferences("unknown-model", "xx", "", True)
     assert panel.options().model == "medium" and panel.options().uncensored

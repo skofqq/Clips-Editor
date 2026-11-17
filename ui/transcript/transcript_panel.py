@@ -84,6 +84,13 @@ class TranscriptPanel(QWidget):
             "which the automatic censor (Phase 5) needs."
         )
 
+        self.slang_check = QCheckBox("Expect gaming / streaming slang (катка, рофл, клатч, GG, KEKW…)", self)
+        self.slang_check.setChecked(True)
+        self.slang_check.setToolTip(
+            "Primes the model with common gamer and Twitch slang so it is written as spoken\n"
+            "instead of being 'corrected' into ordinary words. Add your own words above."
+        )
+
         self.transcribe_button = QPushButton("Transcribe", self)
         self.transcribe_button.setObjectName("primary")
         self.cancel_button = QPushButton("Cancel", self)
@@ -130,6 +137,7 @@ class TranscriptPanel(QWidget):
         layout.addLayout(options)
         layout.addWidget(self.vocabulary_edit)
         layout.addWidget(self.uncensored_check)
+        layout.addWidget(self.slang_check)
         layout.addLayout(buttons)
         layout.addWidget(self.progress)
         layout.addWidget(self.status_label)
@@ -158,9 +166,12 @@ class TranscriptPanel(QWidget):
             device=self.device_combo.currentData(),
             vocabulary=parse_vocabulary(self.vocabulary_edit.text()),
             uncensored=self.uncensored_check.isChecked(),
+            slang=self.slang_check.isChecked(),
         )
 
-    def set_preferences(self, model: str, language: str, vocabulary: str, uncensored: bool) -> None:
+    def set_preferences(
+        self, model: str, language: str, vocabulary: str, uncensored: bool, slang: bool = True
+    ) -> None:
         index = self.model_combo.findData(model)
         if index >= 0:
             self.model_combo.setCurrentIndex(index)
@@ -169,6 +180,7 @@ class TranscriptPanel(QWidget):
             self.language_combo.setCurrentIndex(index)
         self.vocabulary_edit.setText(vocabulary)
         self.uncensored_check.setChecked(uncensored)
+        self.slang_check.setChecked(slang)
 
     def set_downloaded_models(self, names: list[str]) -> None:
         for i in range(self.model_combo.count()):
@@ -193,7 +205,7 @@ class TranscriptPanel(QWidget):
         self.cancel_button.setVisible(busy)
         self.clear_button.setEnabled(not busy and self.controller.transcript is not None)
         for combo in (self.language_combo, self.model_combo, self.device_combo, self.vocabulary_edit,
-                      self.uncensored_check):
+                      self.uncensored_check, self.slang_check):
             combo.setEnabled(not busy)
         self.progress.setVisible(busy)
 
