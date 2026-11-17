@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
@@ -14,17 +13,12 @@ from core.media.ffmpeg_locator import FFmpegPaths, locate_ffmpeg
 
 log = logging.getLogger(__name__)
 
-THEME_FILE = Path(__file__).resolve().parent.parent / "ui" / "theme" / "dark.qss"
 
 
 def load_theme() -> str:
-    try:
-        text = THEME_FILE.read_text(encoding="utf-8")
-    except OSError as exc:
-        log.warning("Theme not loaded: %s", exc)
-        return ""
-    # Qt wants forward slashes in url(); the folder may contain spaces, so urls are quoted.
-    return text.replace("@ICONS@", (THEME_FILE.parent / "icons").as_posix())
+    from ui.theme import stylesheet
+
+    return stylesheet()
 
 
 def create_application(argv: list[str]) -> QApplication:
@@ -32,6 +26,9 @@ def create_application(argv: list[str]) -> QApplication:
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setStyle("Fusion")
+    from ui.theme import windows
+
+    windows.install(app)
     app.setStyleSheet(load_theme())
     return app
 

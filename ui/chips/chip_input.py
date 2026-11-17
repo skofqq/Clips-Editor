@@ -24,12 +24,14 @@ from PySide6.QtWidgets import (
 )
 
 CHIP_STYLE = (
-    "QWidget#chipInput { background: #16171c; border: 1px solid #2a2c35; border-radius: 8px; }"
-    "QWidget#chipInput:hover { border-color: #3a3d48; }"
+    "QWidget#chipInput { background: #2d2d2d; border: 1px solid #363636; border-bottom: 1px solid #8a8a8a;"
+    " border-radius: 4px; }"
+    "QWidget#chipInput:hover { background: #323232; }"
     "QWidget#chipInput QLineEdit { background: transparent; border: none; padding: 3px 2px; }"
-    "QFrame#chip { background: #2a2148; border: 1px solid #6d4fd6; border-radius: 11px; }"
+    "QFrame#chip { background: #3a3a3a; border: 1px solid #454545; border-radius: 4px; }"
+    "QFrame#chip:hover { background: #414141; }"
     "QFrame#chip QLabel { color: #ffffff; background: transparent; padding: 0; }"
-    "QFrame#chip QToolButton { border: none; background: transparent; color: #c9b8ff; padding: 0 5px; }"
+    "QFrame#chip QToolButton { border: none; background: transparent; color: #c5c5c5; padding: 0 5px; }"
     "QFrame#chip QToolButton:hover { color: #ffffff; }"
 )
 

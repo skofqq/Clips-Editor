@@ -31,13 +31,14 @@ from core.censor.dictionary import CUSTOM, MILD, STRONG
 from core.censor.review import ACCEPTED, PENDING, REJECTED, CensorSettings
 from core.timeline.model import BEEP, SILENCE
 from core.timeline.timebase import format_timecode
+from ui.theme import palette
 from ui.censor.censor_controller import CensorController
 
 COL_TIME, COL_WORD, COL_MATCH, COL_STATUS = range(4)
 ROLE_ID = Qt.ItemDataRole.UserRole + 1
 
 STATUS_TEXT = {PENDING: "To review", ACCEPTED: "Accepted", REJECTED: "Rejected"}
-STATUS_COLOR = {PENDING: QColor("#ffd23a"), ACCEPTED: QColor("#ff4d6d"), REJECTED: QColor("#85878c")}
+STATUS_COLOR = {PENDING: QColor(palette.CAUTION), ACCEPTED: QColor(palette.CRITICAL), REJECTED: QColor(palette.TEXT_TERTIARY)}
 CATEGORY_TEXT = {STRONG: "strong", MILD: "mild", CUSTOM: "custom"}
 
 

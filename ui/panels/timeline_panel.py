@@ -28,7 +28,7 @@ _SCROLL_UNIT_US = 10_000  # scroll bar resolution: 10 ms
 def _separator(parent: QWidget) -> QFrame:
     line = QFrame(parent)
     line.setFixedWidth(1)
-    line.setStyleSheet("background: #23252d; margin: 4px 4px;")
+    line.setStyleSheet("background: #3b3b3b; margin: 6px 4px;")
     return line
 
 

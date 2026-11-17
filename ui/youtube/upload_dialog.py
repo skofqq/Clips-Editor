@@ -43,6 +43,7 @@ from core.youtube.metadata import (
     tags_length,
 )
 from core.youtube.service import YouTubeService
+from ui.theme import palette
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class UploadDialog(QDialog):
         self.kids_check = QCheckBox("Made for kids", self)
         self.problems_label = QLabel(self)
         self.problems_label.setWordWrap(True)
-        self.problems_label.setStyleSheet("color: #ff6b81")
+        self.problems_label.setStyleSheet(f"color: {palette.CRITICAL}")
         self.note_label = QLabel(self)
         self.note_label.setObjectName("muted")
         self.note_label.setWordWrap(True)

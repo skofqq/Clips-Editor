@@ -22,7 +22,7 @@ from core.media.probe import MediaInfo, format_duration
 from ui.editor.composition_controller import CompositionController
 from ui.preview.output_view import OutputView
 from ui.preview.source_view import SourceView
-from ui.theme import icon
+from ui.theme import icon, palette
 
 VIEW_MODES = ("original", "both", "output")
 
@@ -86,7 +86,7 @@ class PreviewPanel(QWidget):
 
         self.play_button = QPushButton(self)
         self.play_button.setObjectName("playButton")
-        self.play_button.setIcon(icon("play"))
+        self.play_button.setIcon(icon("play", palette.accent().on_fill))
         self.play_button.setIconSize(QSize(18, 18))
         self.play_button.setToolTip("Play / Pause (Space)")
         self.prev_frame_button = QPushButton(self)
@@ -119,7 +119,7 @@ class PreviewPanel(QWidget):
         controls.addWidget(self.time_label)
         controls.addSpacing(10)
         volume_icon = QLabel(self)
-        volume_icon.setPixmap(icon("volume").pixmap(18, 18))
+        volume_icon.setPixmap(icon("volume", palette.TEXT_SECONDARY).pixmap(18, 18))
         volume_icon.setToolTip("Preview volume")
         controls.addWidget(volume_icon)
         controls.addWidget(self.volume)
@@ -253,7 +253,7 @@ class PreviewPanel(QWidget):
 
     def _on_state(self, state: QMediaPlayer.PlaybackState) -> None:
         playing = state == QMediaPlayer.PlaybackState.PlayingState
-        self.play_button.setIcon(icon("pause" if playing else "play"))
+        self.play_button.setIcon(icon("pause" if playing else "play", palette.accent().on_fill))
 
     def _on_error(self, error, message: str) -> None:
         if error != QMediaPlayer.Error.NoError:

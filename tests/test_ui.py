@@ -119,12 +119,29 @@ def test_theme_icons_resolve(qapp):
     from ui.theme import icon
 
     qss = load_theme()
-    assert "@ICONS@" not in qss
+    assert "@" + "ACCENT@" not in qss and "@GLYPHS@" not in qss
     urls = re.findall(r'url\("([^"]+)"\)', qss)
     assert urls and all(Path(u).is_file() for u in urls)
     for name in ("import", "folder", "save", "undo", "redo", "export", "youtube", "play", "pause", "prev",
-                 "next", "volume"):
+                 "next", "volume", "library", "sparkle"):
         assert not icon(name).isNull(), name
+    assert icon("missing-icon").isNull()
+
+
+def test_fluent_accent(monkeypatch):
+    from ui.theme import palette
+
+    light = palette.make_accent("#60cdff")
+    assert light.on_fill == "#000000" and light.fill == "#60cdff"
+    dark = palette.make_accent("#0063b1")
+    assert dark.on_fill == "#ffffff" and palette.luminance(dark.text) > palette.luminance(dark.fill)
+    assert palette.mix("#000000", "#ffffff", 0.5) == "#808080"
+    palette.accent.cache_clear()
+    monkeypatch.setenv("TSS_ACCENT", "#ff8800")
+    try:
+        assert palette.accent().fill == "#ff8800"
+    finally:
+        palette.accent.cache_clear()
 
 
 def test_main_toolbar_actions(qapp, data_dir):

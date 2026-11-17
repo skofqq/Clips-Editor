@@ -56,9 +56,9 @@ class VideoCanvas(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0f0f11"))
+        painter.fillRect(self.rect(), QColor("#1c1c1c"))
         if self._image is None:
-            painter.setPen(QColor("#6b6d72"))
+            painter.setPen(QColor("#9d9d9d"))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._placeholder)
             return
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)

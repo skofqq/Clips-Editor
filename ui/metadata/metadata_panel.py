@@ -32,6 +32,7 @@ from core.metadata.generate import (
 from core.metadata.library import GAME, PARTICIPANT, STREAM_TYPE, STREAMER, TEMPLATE, Library, clean_tags
 from core.youtube.metadata import MAX_DESCRIPTION_BYTES, MAX_TAGS_CHARS, MAX_TITLE, tags_length
 from ui.chips.chip_input import ChipInput
+from ui.theme import icon, palette
 
 FIELD_NAMES = {"title": "title", "description": "description", "tags": "tags"}
 
@@ -47,6 +48,7 @@ class MetadataPanel(QWidget):
         self._loading = False
 
         self.library_button = QPushButton("Library…", self)
+        self.library_button.setIcon(icon("library"))
         self.library_button.setToolTip("Streamers, participants, games, stream types and templates")
         self.template_combo = QComboBox(self)
         self.streamer_chips = ChipInput("Streamer…", single=True, parent=self)
@@ -64,6 +66,7 @@ class MetadataPanel(QWidget):
         self.custom_edit.setFixedHeight(54)
         self.extra_tag_chips = ChipInput("Extra tags for this clip…", free_text=True, parent=self)
         self.generate_button = QPushButton("Generate metadata", self)
+        self.generate_button.setIcon(icon("sparkle", palette.accent().on_fill))
         self.generate_button.setObjectName("primary")
 
         self.title_edit = QLineEdit(self)
@@ -243,17 +246,17 @@ class MetadataPanel(QWidget):
         mark = " · edited by you"
         title_len = len(current.title.strip())
         self.title_count.setText(f"{title_len}/{MAX_TITLE}" + (mark if "title" in edited else ""))
-        self.title_count.setStyleSheet("color: #ff6b81" if title_len > MAX_TITLE else "")
+        self.title_count.setStyleSheet(f"color: {palette.CRITICAL}" if title_len > MAX_TITLE else "")
         size = len(current.description.encode("utf-8"))
         self.description_count.setText(
             f"{size}/{MAX_DESCRIPTION_BYTES} bytes" + (mark if "description" in edited else "")
         )
-        self.description_count.setStyleSheet("color: #ff6b81" if size > MAX_DESCRIPTION_BYTES else "")
+        self.description_count.setStyleSheet(f"color: {palette.CRITICAL}" if size > MAX_DESCRIPTION_BYTES else "")
         length = tags_length(current.tags)
         self.tags_count.setText(
             f"{len(current.tags)} tags · {length}/{MAX_TAGS_CHARS} characters" + (mark if "tags" in edited else "")
         )
-        self.tags_count.setStyleSheet("color: #ff6b81" if length > MAX_TAGS_CHARS else "")
+        self.tags_count.setStyleSheet(f"color: {palette.CRITICAL}" if length > MAX_TAGS_CHARS else "")
 
     # ------------------------------------------------------------ generate
     def ask_keep_edits(self, fields: list[str]) -> tuple[str, ...] | None:

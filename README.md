@@ -77,8 +77,17 @@ starts from these values.
 The top bar holds the main actions: Import, Open, Save, Undo / Redo, and
 on the right **Upload** and **Export**. Panels on the right (Properties,
 Transcript, Censor, Metadata) are tabs at the top; drag a tab out to
-float it, **View → Reset Layout** puts everything back. The theme lives in
-`ui/theme/dark.qss` with line icons in `ui/theme/icons/`.
+float it, **View → Reset Layout** puts everything back.
+
+The look follows Microsoft's Fluent Design (Windows 11 dark): WinUI
+neutrals, 4 px controls and 8 px menus, text boxes with an accent
+underline when focused, pivot tabs, Fluent check boxes and sliders. The
+accent colour is taken from Windows (Settings → Personalization →
+Colors), so changing it there changes the app on the next start;
+`TSS_ACCENT=#rrggbb` overrides it. On Windows 11 the title bar is dark,
+blends with the window and has rounded corners. Files: `ui/theme/dark.qss`
+(stylesheet), `ui/theme/palette.py` (tokens, accent), `ui/theme/windows.py`
+(title bar, menus), `ui/theme/icons/` (line icons tinted in code).
 
 ### Metadata
 

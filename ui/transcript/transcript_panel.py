@@ -32,6 +32,7 @@ from core.transcription.engine import (
     parse_vocabulary,
 )
 from core.transcription.model import LANGUAGES, Transcript
+from ui.theme import palette
 from ui.transcript.transcript_controller import TranscriptController
 
 ROLE_KIND = Qt.ItemDataRole.UserRole + 1  # "segment" | "word"
@@ -50,7 +51,7 @@ MODEL_HINTS = {
 }
 CUSTOM_MODEL = "__custom__"
 VAD_OFF = "off"
-APPROX_COLOR = QColor("#85878c")
+APPROX_COLOR = QColor(palette.TEXT_TERTIARY)
 
 
 class TranscriptPanel(QWidget):
@@ -438,7 +439,7 @@ class TranscriptPanel(QWidget):
             font = item.font(COL_TIME)
             font.setBold(current)
             item.setFont(COL_TIME, font)
-            item.setBackground(COL_TIME, QBrush(QColor("#4a2fa8")) if current else QBrush())
+            item.setBackground(COL_TIME, QBrush(QColor(palette.accent().soft)) if current else QBrush())
             if current and self.tree.state() != QAbstractItemView.State.EditingState:
                 self.tree.scrollToItem(item)
 

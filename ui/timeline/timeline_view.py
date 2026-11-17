@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 from core.audio.waveform import Waveform
 from core.censor.review import ACCEPTED, PENDING, CensorState
 from core.timeline.model import BEEP, Timeline
+from ui.theme import palette
 from core.timeline.timebase import US, format_timecode
 from core.transcription.model import Transcript
 from ui.timeline.timeline_controller import MUTE, SEGMENT, TimelineController
@@ -30,20 +31,22 @@ DRAG_THRESHOLD = 3
 MIN_PPS, MAX_PPS = 2.0, 2000.0  # pixels per second
 _TICK_STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
 
-C_BG = QColor("#0e0f12")
-C_RULER = QColor("#121317")
-C_TRACK = QColor("#16171c")
-C_SEGMENT = QColor("#4c2fb0")
-C_SEGMENT_SEL = QColor("#8b5cf6")
-C_WAVE = QColor("#38bdf8")
-C_WAVE_DIM = QColor("#2a3640")
-C_MUTE = QColor("#ff4d6d")
-C_BEEP = QColor("#ffa23a")
-C_PLAYHEAD = QColor("#ffffff")
-C_TEXT = QColor("#7d808c")
-C_SPEECH = QColor("#2e6b4f")
-C_WORD = QColor("#3fbf7f")
-C_SUGGEST = QColor("#ffd23a")  # pending censor suggestion
+_ACCENT = palette.accent()
+C_BG = QColor(palette.BASE_ALT)
+C_RULER = QColor(palette.BASE)
+C_TRACK = QColor(palette.LAYER)
+C_SEGMENT = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.42))
+C_SEGMENT_SEL = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.72))
+C_SEGMENT_EDGE = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.7))
+C_WAVE = QColor(_ACCENT.text)
+C_WAVE_DIM = QColor("#3a3a3a")
+C_MUTE = QColor("#ff6b7a")
+C_BEEP = QColor("#ffb34d")
+C_PLAYHEAD = QColor(palette.TEXT)
+C_TEXT = QColor(palette.TEXT_TERTIARY)
+C_SPEECH = QColor("#2f5a3f")
+C_WORD = QColor(palette.SUCCESS)
+C_SUGGEST = QColor(palette.CAUTION)  # pending censor suggestion
 
 
 class TimelineView(QWidget):
@@ -375,7 +378,7 @@ class TimelineView(QWidget):
         p.fillRect(self.rect(), C_BG)
         t = self.timeline
         if t is None:
-            p.setPen(QColor("#6b6d72"))
+            p.setPen(QColor(palette.TEXT_TERTIARY))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Import a video to edit it on the timeline")
             return
         c = self.controller
@@ -422,7 +425,7 @@ class TimelineView(QWidget):
             gradient.setColorAt(1, base)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setBrush(gradient)
-            p.setPen(QPen(QColor("#d4c4ff") if selected else QColor("#7c5cf0"), 1))
+            p.setPen(QPen(QColor("#ffffff") if selected else C_SEGMENT_EDGE, 1))
             p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             if rect.width() > 60:
@@ -455,7 +458,7 @@ class TimelineView(QWidget):
             p.setPen(QPen(C_WAVE, 1))
             p.drawLines(kept)
         else:
-            p.setPen(QColor("#6b6d72"))
+            p.setPen(QColor(palette.TEXT_TERTIARY))
             p.drawText(QRectF(8, AUDIO_Y, w, AUDIO_H), Qt.AlignmentFlag.AlignVCenter, "No waveform")
 
         # Fades (drawn over the audio track in output order).

@@ -138,7 +138,7 @@ class EntityPage(QWidget):
         self.preview_label = QLabel(self)
         self.preview_label.setWordWrap(True)
         self.preview_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.preview_label.setStyleSheet("background: #1b1c1f; padding: 6px; border-radius: 4px;")
+        self.preview_label.setStyleSheet("background: #1c1c1c; border: 1px solid #2f2f2f; padding: 8px; border-radius: 8px;")
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)

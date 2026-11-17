@@ -165,7 +165,7 @@ class OutputView(QWidget):
     # ------------------------------------------------------------ paint
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0f0f11"))
+        painter.fillRect(self.rect(), QColor("#1c1c1c"))
         canvas = self.canvas_rect()
         if canvas.isEmpty():
             return
@@ -188,7 +188,7 @@ class OutputView(QWidget):
                 fill = QColor(REGION_COLORS[placement.name])
                 fill.setAlpha(60)
                 painter.fillRect(target, fill)
-                painter.setPen(QColor("#dcdde0"))
+                painter.setPen(QColor("#ffffff"))
                 painter.drawText(target, Qt.AlignmentFlag.AlignCenter, REGION_LABELS[placement.name])
 
         # Selected slot outline.
@@ -210,6 +210,6 @@ class OutputView(QWidget):
             painter.drawRoundedRect(grip, 4, 4)
 
         painter.setClipping(False)
-        painter.setPen(QPen(QColor("#3a3c42"), 1))
+        painter.setPen(QPen(QColor("#3b3b3b"), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(canvas)

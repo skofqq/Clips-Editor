@@ -63,7 +63,7 @@ from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
 from ui.metadata.library_dialog import LibraryDialog
 from ui.metadata.metadata_panel import MetadataPanel
-from ui.theme import icon
+from ui.theme import icon, palette
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.upload_dialog import UploadDialog
 from ui.panels.composition_panel import CompositionPanel
@@ -228,7 +228,7 @@ class MainWindow(QMainWindow):
         self.act_upload.setIcon(icon("youtube"))
         bar.addAction(self.act_upload)
         bar.widgetForAction(self.act_upload).setObjectName("youtubeAction")
-        self.act_export.setIcon(icon("export"))
+        self.act_export.setIcon(icon("export", palette.accent().on_fill))
         bar.addAction(self.act_export)
         bar.widgetForAction(self.act_export).setObjectName("primaryAction")
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
