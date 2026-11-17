@@ -148,6 +148,22 @@ render(source, composition, timeline, settings, output, ffmpeg, ffprobe, encoder
 #   the CPU if a hardware encoder fails, validate_output() with FFprobe
 #   (codec, size, duration ±3 %, audio), then renames. Cancel kills FFmpeg and
 #   deletes the partial file.
+
+# core/youtube (implemented in Phase 7) - standard library HTTP only
+oauth.sign_in(ClientConfig, open_browser, cancel) -> Credentials
+#   installed-app flow: PKCE S256, state, loopback redirect on 127.0.0.1:<random>,
+#   scopes youtube.upload + youtube.readonly, access_type=offline.
+storage.default_store(): KeyringStore (Windows Credential Manager) or, if no
+#   secure backend exists, MemoryStore (session only) - never plaintext files.
+YouTubeService(config, store): accounts (config.youtube_accounts: id/title/handle/
+#   avatar only), active channel, thread-safe access_token() with refresh.
+YouTubeClient(token_provider).my_channels() / .upload(path, VideoMetadata,
+#   progress, cancel): resumable session, 8 MiB chunks sent in 256 KiB pieces,
+#   308 + Range to continue, status query + exponential backoff after network
+#   errors / 5xx, 401 -> refresh, quota / upload-limit errors mapped to messages.
+VideoMetadata.problems(): title <= 100, description <= 5000 bytes, no < >,
+#   tags <= 500, category, privacy, future publishAt (forces private).
+UploadHistory(<data dir>/youtube_uploads.json): video ID + URL per upload.
 ```
 
 ## 4. Preview strategy

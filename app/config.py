@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,9 @@ class AppConfig:
     transcribe_language: str = ""
     export_dir: str = ""  # last folder a video was exported to
     export_settings: dict = field(default_factory=dict)  # RenderSettings.to_dict()
+    youtube_accounts: list[dict] = field(default_factory=list)  # Channel.to_dict(); tokens are NOT here
+    youtube_active: str = ""  # channel id
+    youtube_defaults: dict = field(default_factory=dict)  # last category / visibility / language / tags
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -95,6 +98,7 @@ class AppConfig:
         for key in (
             "ffmpeg_dir", "last_import_dir", "window_geometry", "window_state",
             "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
+            "youtube_active",
         ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
@@ -102,8 +106,12 @@ class AppConfig:
             config.transcribe_uncensored = raw["transcribe_uncensored"]
         if isinstance(raw.get("transcribe_slang"), bool):
             config.transcribe_slang = raw["transcribe_slang"]
-        if isinstance(raw.get("export_settings"), dict):
-            config.export_settings = raw["export_settings"]
+        for key in ("export_settings", "youtube_defaults"):
+            if isinstance(raw.get(key), dict):
+                setattr(config, key, raw[key])
+        accounts = raw.get("youtube_accounts")
+        if isinstance(accounts, list):
+            config.youtube_accounts = [a for a in accounts if isinstance(a, dict) and a.get("id")]
         recent = raw.get("recent_files")
         if isinstance(recent, list):
             config.recent_files = [item for item in recent if isinstance(item, str)]

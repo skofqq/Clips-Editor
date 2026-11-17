@@ -82,6 +82,7 @@ class ExportDialog(QDialog):
         output: Path,
         encoders: list[EncoderInfo] | None = None,
         parent: QWidget | None = None,
+        upload=None,  # callable(path) opening the YouTube upload dialog
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Export Video")
@@ -92,6 +93,7 @@ class ExportDialog(QDialog):
         self.ffmpeg = ffmpeg
         self.encoders = encoders
         self.result_path: Path | None = None
+        self.upload = upload
         self._task: CancellableTask | None = None
         self._close_when_stopped = False
         self._loading = False
@@ -153,6 +155,7 @@ class ExportDialog(QDialog):
         self.cancel_button = QPushButton("Cancel render", self)
         self.open_button = QPushButton("Show in folder", self)
         self.close_button = QPushButton("Close", self)
+        self.upload_button = QPushButton("Upload to YouTube…", self)
 
         # ------------------------------------------------------ layout
         form = QFormLayout()
@@ -185,6 +188,7 @@ class ExportDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.open_button)
+        buttons.addWidget(self.upload_button)
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.render_button)
@@ -213,10 +217,12 @@ class ExportDialog(QDialog):
         self.cancel_button.clicked.connect(self.cancel_render)
         self.open_button.clicked.connect(self._show_in_folder)
         self.close_button.clicked.connect(self.reject)
+        self.upload_button.clicked.connect(self._upload)
 
         self.set_settings(settings)
         self._set_busy(False)
         self.open_button.setVisible(False)
+        self.upload_button.setVisible(False)
 
     # ------------------------------------------------------------ helpers
     def _spin(self, low: int, high: int, step: int, suffix: str) -> QSpinBox:
@@ -440,6 +446,7 @@ class ExportDialog(QDialog):
         self._task = task
         self.result_path = None
         self.open_button.setVisible(False)
+        self.upload_button.setVisible(False)
         self.progress.setValue(0)
         self.status_label.setText(f"Rendering to {output}…")
         self._set_busy(True)
@@ -472,6 +479,7 @@ class ExportDialog(QDialog):
             text += "\n" + result.notice
         self.status_label.setText(text)
         self.open_button.setVisible(True)
+        self.upload_button.setVisible(self.upload is not None)
         self._finish()
 
     def _on_failed(self, error) -> None:
@@ -485,6 +493,10 @@ class ExportDialog(QDialog):
     def _on_cancelled(self) -> None:
         self.status_label.setText("Cancelled. The unfinished file was removed.")
         self._finish()
+
+    def _upload(self) -> None:
+        if self.upload is not None and self.result_path is not None:
+            self.upload(self.result_path)
 
     def _show_in_folder(self) -> None:
         path = self.result_path

@@ -23,6 +23,8 @@ from core.censor.dictionary import Dictionary
 from core.censor.review import detect
 from core.render.encoders import detect_encoders
 from core.render.settings import RenderSettings
+from core.youtube.history import UploadHistory
+from core.youtube.service import YouTubeService
 from core.editor.composition import default_composition
 from core.editor.presets import PresetStore
 from core.history import History
@@ -46,6 +48,8 @@ from ui.censor.censor_panel import CensorPanel
 from ui.censor.dictionary_dialog import DictionaryDialog
 from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
+from ui.youtube.accounts_dialog import YouTubeAccountsDialog
+from ui.youtube.upload_dialog import UploadDialog
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
 from ui.panels.properties_panel import PropertiesPanel
@@ -96,7 +100,9 @@ class MainWindow(QMainWindow):
         self.censor_dictionary_path = config.data_dir / "censor_dictionary.json"
         self.censor_dictionary = Dictionary.load(self.censor_dictionary_path)
         self._preview_stop_us: int | None = None
-        self.encoders = None  # usable video encoders, detected in the background  # pause here when listening to a suggestion
+        self.encoders = None  # usable video encoders, detected in the background
+        self.youtube = YouTubeService(config)
+        self.upload_history = UploadHistory(config.data_dir / "youtube_uploads.json")  # pause here when listening to a suggestion
         self.history: History = History(self._edit_state())
 
         self.preview = PreviewPanel(self.composition, self)
@@ -170,6 +176,9 @@ class MainWindow(QMainWindow):
         self.act_import = QAction("&Import Video…", self, shortcut=QKeySequence("Ctrl+I"))
         self.act_export = QAction("&Export Video…", self, shortcut=QKeySequence("Ctrl+E"))
         self.act_export.setToolTip("Render the Short to MP4 / MKV (Ctrl+E)")
+        self.act_upload = QAction("&Upload to YouTube…", self, shortcut=QKeySequence("Ctrl+U"))
+        self.act_upload.setToolTip("Upload a rendered video to YouTube (Ctrl+U)")
+        self.act_youtube_accounts = QAction("YouTube Accounts…", self)
         self.act_new = QAction("&New Project", self, shortcut=QKeySequence.StandardKey.New)
         self.act_open = QAction("&Open Project…", self, shortcut=QKeySequence.StandardKey.Open)
         self.act_save = QAction("&Save Project", self, shortcut=QKeySequence.StandardKey.Save)
@@ -209,6 +218,7 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.act_import)
         file_menu.addAction(self.act_export)
+        file_menu.addAction(self.act_upload)
         self.recent_menu = file_menu.addMenu("Recent Files")
         file_menu.addSeparator()
         file_menu.addAction(self.act_exit)
@@ -234,6 +244,10 @@ class MainWindow(QMainWindow):
         view.addSeparator()
         view.addAction(self.act_reset_layout)
 
+        settings_menu = self.menuBar().addMenu("&Settings")
+        integrations = settings_menu.addMenu("Integrations")
+        integrations.addAction(self.act_youtube_accounts)
+
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addActions([self.act_ffmpeg_info, self.act_about])
         self._rebuild_recent_menu()
@@ -241,6 +255,8 @@ class MainWindow(QMainWindow):
     def _connect(self) -> None:
         self.act_import.triggered.connect(self.choose_files)
         self.act_export.triggered.connect(self.export_video)
+        self.act_upload.triggered.connect(lambda: self.upload_to_youtube())
+        self.act_youtube_accounts.triggered.connect(self.manage_youtube_accounts)
         self.act_new.triggered.connect(self.new_project)
         self.act_open.triggered.connect(self.choose_project)
         self.act_save.triggered.connect(self.save)
@@ -619,7 +635,10 @@ class MainWindow(QMainWindow):
         defaults = RenderSettings(width=composition.output_w, height=composition.output_h)
         settings = RenderSettings.from_dict(self.config.export_settings) if self.config.export_settings else defaults
         output = default_output_path(Path(media.path), self.config.export_dir, settings.extension)
-        dialog = ExportDialog(media, composition, timeline, self.ffmpeg, settings, output, self.encoders, self)
+        dialog = ExportDialog(
+            media, composition, timeline, self.ffmpeg, settings, output, self.encoders, self,
+            upload=self.upload_to_youtube,
+        )
         self._export_dialog = dialog
         try:
             dialog.exec()
@@ -629,6 +648,37 @@ class MainWindow(QMainWindow):
         self.config.export_dir = str(dialog.output_path().parent)
         if dialog.result_path is not None:
             self.statusBar().showMessage(f"Exported {dialog.result_path}", 8000)
+
+    # -------------------------------------------------------------- youtube
+    def manage_youtube_accounts(self) -> None:
+        dialog = YouTubeAccountsDialog(self.youtube, self)
+        dialog.exec()
+        self.config.save()  # account list (no secrets) and the active channel
+
+    def upload_to_youtube(self, path: Path | None = None) -> None:
+        if path is None:
+            start = self.config.export_dir or self.config.last_import_dir
+            file, _ = QFileDialog.getOpenFileName(
+                self, "Upload to YouTube", start, "Rendered video (*.mp4 *.mkv *.mov *.webm);;All files (*)"
+            )
+            if not file:
+                return
+            path = Path(file)
+        sources = {str(Path(m.path)).casefold() for m in self.project.media}
+        if str(Path(path)).casefold() in sources:
+            QMessageBox.warning(
+                self, "Upload to YouTube",
+                "This is a source clip of the project. Export the edited video first (Ctrl+E) and upload that.",
+            )
+            return
+        dialog = UploadDialog(
+            self.youtube, self.upload_history, Path(path), self.ffmpeg.ffprobe if self.ffmpeg else None,
+            self.config.youtube_defaults, self.manage_youtube_accounts, self,
+        )
+        dialog.exec()
+        self.config.youtube_defaults = dialog.defaults()
+        if dialog.result is not None:
+            self.statusBar().showMessage(f"Uploaded to YouTube: {dialog.result.url}", 10000)
 
     # -------------------------------------------------------- transcription
     def start_transcription(self, options) -> None:
@@ -875,7 +925,7 @@ class MainWindow(QMainWindow):
             self,
             f"About {APP_NAME}",
             f"<b>{APP_NAME}</b> {APP_VERSION}<br>"
-            "Vertical Shorts editor for Twitch clips.<br>Phase 6: rendering with NVENC / QSV / AMF / CPU.",
+            "Vertical Shorts editor for Twitch clips.<br>Phase 7: YouTube upload.",
         )
 
     def _show_ffmpeg_info(self) -> None:

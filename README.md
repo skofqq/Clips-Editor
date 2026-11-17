@@ -50,6 +50,20 @@ Progress, speed, time left and Cancel are shown, the file is written under
 a temporary name and only appears once FFmpeg succeeded and FFprobe
 confirmed codec, size and length.
 
+**Phase 7 — YouTube upload** (done): **Settings → Integrations → YouTube
+Accounts…** connects channels with Google's OAuth 2.0 in the browser
+(PKCE, loopback redirect; the app never sees the password). Refresh tokens
+and the OAuth client are stored in Windows Credential Manager, never in
+config or project files. **Upload to YouTube…** (`Ctrl+U`, or the button
+after an export) shows the file's size, resolution, length and codecs,
+lets you set title, description, tags, category, visibility, scheduled
+publication, language and "made for kids", checks YouTube's limits before
+sending, and uploads with the resumable protocol: progress, speed, time
+left, Cancel, automatic retries after network or server errors and token
+refresh. The video ID and link are shown and kept in
+`youtube_uploads.json`. Setup of your own Google OAuth client:
+[docs/YOUTUBE_SETUP_RU.md](docs/YOUTUBE_SETUP_RU.md).
+
 ### Exporting
 
 Press `Ctrl+E`. **YouTube Shorts · H.264 MP4** (1080 × 1920, quality 20)
@@ -164,6 +178,7 @@ Settings and logs live in `%LOCALAPPDATA%\TwitchShortsStudio`.
 | ← / → | Previous / next frame |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+E | Export video |
+| Ctrl+U | Upload a rendered video to YouTube |
 | A / R / P | Censor tab: accept / reject / listen to the selected suggestion |
 
 Videos and `.tssproj` files can also be dragged onto the window.
