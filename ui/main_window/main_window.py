@@ -21,6 +21,8 @@ from app.config import APP_NAME, APP_VERSION, AppConfig
 from core.audio.waveform import load_waveform
 from core.censor.dictionary import Dictionary
 from core.censor.review import detect
+from core.render.encoders import detect_encoders
+from core.render.settings import RenderSettings
 from core.editor.composition import default_composition
 from core.editor.presets import PresetStore
 from core.history import History
@@ -43,6 +45,7 @@ from ui.censor.censor_controller import CensorController
 from ui.censor.censor_panel import CensorPanel
 from ui.censor.dictionary_dialog import DictionaryDialog
 from ui.editor.composition_controller import CompositionController
+from ui.export.export_dialog import ExportDialog, default_output_path
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
 from ui.panels.properties_panel import PropertiesPanel
@@ -92,7 +95,8 @@ class MainWindow(QMainWindow):
         self.censor = CensorController(self)
         self.censor_dictionary_path = config.data_dir / "censor_dictionary.json"
         self.censor_dictionary = Dictionary.load(self.censor_dictionary_path)
-        self._preview_stop_us: int | None = None  # pause here when listening to a suggestion
+        self._preview_stop_us: int | None = None
+        self.encoders = None  # usable video encoders, detected in the background  # pause here when listening to a suggestion
         self.history: History = History(self._edit_state())
 
         self.preview = PreviewPanel(self.composition, self)
@@ -142,6 +146,8 @@ class MainWindow(QMainWindow):
         self._restore_layout()
         self._update_title()
 
+        if self.ffmpeg is not None:
+            self._start_encoder_detection()
         if self.ffmpeg is None:
             self.statusBar().showMessage("FFmpeg not found: run tools\\setup_ffmpeg.py, then restart.")
         else:
@@ -162,6 +168,8 @@ class MainWindow(QMainWindow):
 
     def _create_actions(self) -> None:
         self.act_import = QAction("&Import Video…", self, shortcut=QKeySequence("Ctrl+I"))
+        self.act_export = QAction("&Export Video…", self, shortcut=QKeySequence("Ctrl+E"))
+        self.act_export.setToolTip("Render the Short to MP4 / MKV (Ctrl+E)")
         self.act_new = QAction("&New Project", self, shortcut=QKeySequence.StandardKey.New)
         self.act_open = QAction("&Open Project…", self, shortcut=QKeySequence.StandardKey.Open)
         self.act_save = QAction("&Save Project", self, shortcut=QKeySequence.StandardKey.Save)
@@ -200,6 +208,7 @@ class MainWindow(QMainWindow):
         file_menu.addActions([self.act_new, self.act_open, self.act_save, self.act_save_as])
         file_menu.addSeparator()
         file_menu.addAction(self.act_import)
+        file_menu.addAction(self.act_export)
         self.recent_menu = file_menu.addMenu("Recent Files")
         file_menu.addSeparator()
         file_menu.addAction(self.act_exit)
@@ -212,7 +221,7 @@ class MainWindow(QMainWindow):
         edit.addActions([self.act_mute, self.act_merge_mutes])
         self.timeline_panel.add_actions([
             self.act_undo, self.act_redo, None, self.act_split, self.act_delete,
-            self.act_trim, None, self.act_mute,
+            self.act_trim, None, self.act_mute, None, self.act_export,
         ])
 
         playback = self.menuBar().addMenu("&Playback")
@@ -231,6 +240,7 @@ class MainWindow(QMainWindow):
 
     def _connect(self) -> None:
         self.act_import.triggered.connect(self.choose_files)
+        self.act_export.triggered.connect(self.export_video)
         self.act_new.triggered.connect(self.new_project)
         self.act_open.triggered.connect(self.choose_project)
         self.act_save.triggered.connect(self.save)
@@ -584,6 +594,42 @@ class MainWindow(QMainWindow):
             self._preview_stop_us = None
             self.preview.pause()
 
+    # --------------------------------------------------------------- export
+    def _start_encoder_detection(self) -> None:
+        worker = Worker(detect_encoders, self.ffmpeg.ffmpeg)
+        worker.signals.finished.connect(lambda found, w=worker: self._encoders_detected(w, found))
+        worker.signals.failed.connect(lambda exc, w=worker: self._encoders_detected(w, []))
+        self._pending.add(worker)
+        self.pool.start(worker)
+
+    def _encoders_detected(self, worker: Worker, found) -> None:
+        self._pending.discard(worker)
+        self.encoders = list(found)
+        dialog = getattr(self, "_export_dialog", None)
+        if dialog is not None:
+            dialog.set_encoders(self.encoders)
+
+    def export_video(self) -> None:
+        media, timeline = self.preview.media, self.timeline.timeline
+        composition = self.composition.composition
+        if media is None or media.video is None or timeline is None or self.ffmpeg is None:
+            return
+        if self.preview.is_playing:
+            self.preview.pause()
+        defaults = RenderSettings(width=composition.output_w, height=composition.output_h)
+        settings = RenderSettings.from_dict(self.config.export_settings) if self.config.export_settings else defaults
+        output = default_output_path(Path(media.path), self.config.export_dir, settings.extension)
+        dialog = ExportDialog(media, composition, timeline, self.ffmpeg, settings, output, self.encoders, self)
+        self._export_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._export_dialog = None
+        self.config.export_settings = dialog.settings().to_dict()
+        self.config.export_dir = str(dialog.output_path().parent)
+        if dialog.result_path is not None:
+            self.statusBar().showMessage(f"Exported {dialog.result_path}", 8000)
+
     # -------------------------------------------------------- transcription
     def start_transcription(self, options) -> None:
         media = self.preview.media
@@ -669,6 +715,10 @@ class MainWindow(QMainWindow):
         self.act_mute.setEnabled(has and rng is not None)
         self.act_restore.setEnabled(has and t.output_us < t.duration_us)
         self.act_merge_mutes.setEnabled(has and len(t.merged_mutes()) < len(t.mutes))
+        media = self.preview.media
+        self.act_export.setEnabled(
+            has and self.ffmpeg is not None and media is not None and media.video is not None
+        )
 
     def _on_remove_media(self, info: MediaInfo) -> None:
         self.project.remove_media(str(info.path))
@@ -825,7 +875,7 @@ class MainWindow(QMainWindow):
             self,
             f"About {APP_NAME}",
             f"<b>{APP_NAME}</b> {APP_VERSION}<br>"
-            "Vertical Shorts editor for Twitch clips.<br>Phase 5: automatic censorship with review.",
+            "Vertical Shorts editor for Twitch clips.<br>Phase 6: rendering with NVENC / QSV / AMF / CPU.",
         )
 
     def _show_ffmpeg_info(self) -> None:

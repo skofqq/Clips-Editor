@@ -39,6 +39,25 @@ never censor this word) and only accepted ones become Mute Regions, in
 Silence or Beep mode, when you press **Apply to timeline**. Nothing is ever
 muted automatically.
 
+**Phase 6 — Rendering** (done): **File → Export Video…** (`Ctrl+E`) renders
+the Short with FFmpeg exactly as the preview shows it: Stacked Layout
+regions, cuts, Mute Regions (Silence or a Beep tone), gain and fades.
+H.264 or H.265, MP4 or MKV, AAC or Opus at 48 kHz, constant quality or a
+target bitrate. Encoders are detected at startup (NVIDIA NVENC, Intel
+Quick Sync, AMD AMF) and the CPU is used when none works; if the GPU
+encoder fails mid-way the render is repeated on the CPU automatically.
+Progress, speed, time left and Cancel are shown, the file is written under
+a temporary name and only appears once FFmpeg succeeded and FFprobe
+confirmed codec, size and length.
+
+### Exporting
+
+Press `Ctrl+E`. **YouTube Shorts · H.264 MP4** (1080 × 1920, quality 20)
+is the safe default; HEVC presets give smaller files. Lower quality
+numbers mean better quality and bigger files (18–23 is a good range).
+Other resolutions such as 1:1 or 16:9 scale the 9:16 layout to fit and
+pad with black. The last settings and folder are remembered.
+
 ### Speech recognition
 
 Open the **Transcript** tab (next to Properties), pick the language and
@@ -144,6 +163,7 @@ Settings and logs live in `%LOCALAPPDATA%\TwitchShortsStudio`.
 | Space | Play / pause |
 | ← / → | Previous / next frame |
 | Ctrl+S / Ctrl+O | Save / open project |
+| Ctrl+E | Export video |
 | A / R / P | Censor tab: accept / reject / listen to the selected suggestion |
 
 Videos and `.tssproj` files can also be dragged onto the window.

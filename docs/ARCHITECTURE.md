@@ -129,10 +129,25 @@ transcribe_file(engine, path, ffmpeg, options, progress, cancel)   # FFmpeg deco
 #   Apply changes timeline + censor in one step.
 # Project file: "censor": one entry per media path.
 
-# core/render (Phase 6)
-detect_encoders(ffmpeg) -> list[EncoderInfo]   # h264_nvenc, hevc_nvenc, h264_qsv, h264_amf, libx264, libx265
-build_filtergraph(project, media_info) -> str
-RenderJob(project, settings) -> worker with progress(fps, percent, eta), cancel()
+# core/render (implemented in Phase 6)
+RenderSettings(width, height, fps (0 = source, max 60), video_codec h264|hevc,
+               container mp4|mkv, audio_codec aac|opus, rate_control quality|bitrate,
+               quality (CRF/CQ), video_bitrate_k, encoder auto|cpu|<name>, beep_hz); PRESETS
+detect_encoders(ffmpeg) -> [EncoderInfo]   # listed in -encoders AND a 3-frame test encode works
+choose_encoder(settings, encoders): NVENC > QSV > AMF > libx264/libx265
+build_graph(composition, timeline, media_info, settings) -> RenderGraph
+#   video: trim+concat kept segments -> fps -> crop/scale every Placement of
+#   Composition.layout() onto a black canvas (same placements as the preview)
+#   -> optional fit+pad to another output size.
+#   audio: aeval per sample in SOURCE time (silence / sine beep in mute regions)
+#   -> atrim+concat -> volume (gain) -> afade in/out in OUTPUT time -> 48 kHz.
+render(source, composition, timeline, settings, output, ffmpeg, ffprobe, encoders,
+       progress, cancel) -> RenderResult
+#   filter graph in a script file (-/filter_complex on FFmpeg 7+), -progress
+#   pipe:1 for percent/fps/ETA, writes <name>.rendering.<ext>, retries once on
+#   the CPU if a hardware encoder fails, validate_output() with FFprobe
+#   (codec, size, duration ±3 %, audio), then renames. Cancel kills FFmpeg and
+#   deletes the partial file.
 ```
 
 ## 4. Preview strategy

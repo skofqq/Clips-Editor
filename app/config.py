@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,8 @@ class AppConfig:
     transcribe_slang: bool = True
     transcribe_model: str = ""
     transcribe_language: str = ""
+    export_dir: str = ""  # last folder a video was exported to
+    export_settings: dict = field(default_factory=dict)  # RenderSettings.to_dict()
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -92,7 +94,7 @@ class AppConfig:
             return config
         for key in (
             "ffmpeg_dir", "last_import_dir", "window_geometry", "window_state",
-            "transcribe_vocabulary", "transcribe_model", "transcribe_language",
+            "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
         ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
@@ -100,6 +102,8 @@ class AppConfig:
             config.transcribe_uncensored = raw["transcribe_uncensored"]
         if isinstance(raw.get("transcribe_slang"), bool):
             config.transcribe_slang = raw["transcribe_slang"]
+        if isinstance(raw.get("export_settings"), dict):
+            config.export_settings = raw["export_settings"]
         recent = raw.get("recent_files")
         if isinstance(recent, list):
             config.recent_files = [item for item in recent if isinstance(item, str)]
