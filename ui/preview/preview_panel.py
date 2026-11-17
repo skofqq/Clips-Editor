@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -23,6 +22,7 @@ from ui.editor.composition_controller import CompositionController
 from ui.preview.output_view import OutputView
 from ui.preview.source_view import SourceView
 from ui.theme import icon, palette
+from ui.widgets.jump_slider import JumpSlider
 
 VIEW_MODES = ("original", "both", "output")
 
@@ -98,20 +98,21 @@ class PreviewPanel(QWidget):
         self.next_frame_button.setIcon(icon("next"))
         self.next_frame_button.setToolTip("Next frame (Right)")
 
-        self.slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.slider = JumpSlider(Qt.Orientation.Horizontal, self)
+        self.slider.setObjectName("seekSlider")
         self.slider.setRange(0, 0)
         self.time_label = QLabel("00:00.000 / 00:00.000", self)
         self.time_label.setObjectName("timecode")
 
-        self.volume = QSlider(Qt.Orientation.Horizontal, self)
+        self.volume = JumpSlider(Qt.Orientation.Horizontal, self)
         self.volume.setRange(0, 100)
         self.volume.setValue(80)
-        self.volume.setFixedWidth(90)
+        self.volume.setFixedWidth(110)
         self.volume.setToolTip("Preview volume")
 
         controls = QHBoxLayout()
-        controls.setContentsMargins(12, 6, 12, 8)
-        controls.setSpacing(6)
+        controls.setContentsMargins(12, 8, 12, 10)
+        controls.setSpacing(8)
         controls.addWidget(self.prev_frame_button)
         controls.addWidget(self.play_button)
         controls.addWidget(self.next_frame_button)

@@ -157,3 +157,37 @@ def test_main_toolbar_actions(qapp, data_dir):
     assert "unsaved" in w.project_label.text()
     w._dirty = False
     w.close()
+
+
+def test_jump_slider_click_anywhere(qapp):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    from app.bootstrap import load_theme
+    from ui.widgets.jump_slider import JumpSlider
+
+    qapp.setStyleSheet(load_theme())
+    try:
+        slider = JumpSlider()
+        slider.setRange(0, 1000)
+        slider.resize(400, 36)
+        slider.show()
+        qapp.processEvents()
+        assert slider.height() >= 36
+        moved, released = [], []
+        slider.sliderMoved.connect(moved.append)
+        slider.sliderReleased.connect(lambda: released.append(slider.value()))
+        # Click near the top edge, far from the thin track: still jumps there.
+        QTest.mouseClick(slider, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 2))
+        assert 700 <= slider.value() <= 800 and moved and released == [slider.value()]
+        QTest.mouseClick(slider, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(1, 34))
+        assert slider.value() <= 20
+        # Press off the track, drag along it, release: one scrub.
+        QTest.mousePress(slider, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 30))
+        assert slider.isSliderDown()
+        QTest.mouseMove(slider, QPoint(200, 30))
+        QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(200, 30))
+        assert not slider.isSliderDown() and 450 <= slider.value() <= 550 and released[-1] == slider.value()
+        slider.close()
+    finally:
+        qapp.setStyleSheet("")

@@ -297,8 +297,10 @@ QProgressBar {
 }
 QProgressBar::chunk { border-radius: 2px; background: @ACCENT@; }
 
-/* Fluent slider: thin track, accent fill, round thumb with an accent core. */
-QSlider { background: transparent; min-height: 22px; }
+/* Fluent slider: thin track, accent fill, round thumb with an accent core.
+   The look stays slim, but the widget is 36px tall and a click anywhere on
+   that height jumps the thumb there (ui/widgets/jump_slider.py). */
+QSlider { background: transparent; min-height: 36px; }
 QSlider::groove:horizontal { height: 4px; background: #9a9a9a; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: @ACCENT@; border-radius: 2px; }
 QSlider::add-page:horizontal { background: #6a6a6a; border-radius: 2px; }
