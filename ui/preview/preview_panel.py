@@ -194,6 +194,18 @@ class PreviewPanel(QWidget):
                 self.player.setPosition(0)
             self.player.play()
 
+    @property
+    def is_playing(self) -> bool:
+        return self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+
+    def play(self) -> None:
+        if self._media is not None:
+            self.player.play()
+
+    def pause(self) -> None:
+        if self._media is not None:
+            self.player.pause()
+
     def seek(self, ms: int) -> None:
         if self._media is None:
             return

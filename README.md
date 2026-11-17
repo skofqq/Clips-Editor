@@ -30,6 +30,15 @@ Speech track on the timeline. Words without reliable timing are marked
 `≈` and never presented as exact. Runs on the GPU when CUDA is available
 and falls back to the CPU otherwise.
 
+**Phase 5 — Automatic censorship** (done): Russian and English profanity
+dictionaries that catch inflections and spelling tricks (ё/е, Latin
+look-alikes, digits, stretched letters, transliteration such as `blyat`,
+words already bleeped as `б**дь`). Results are **suggestions**: each one
+is reviewed (accept, reject, adjust start/end, listen, correct the word,
+never censor this word) and only accepted ones become Mute Regions, in
+Silence or Beep mode, when you press **Apply to timeline**. Nothing is ever
+muted automatically.
+
 ### Speech recognition
 
 Open the **Transcript** tab (next to Properties), pick the language and
@@ -41,7 +50,9 @@ mutes exactly that word.
 Accuracy tips: list nicknames, guest names and slang in the
 **Nicknames and special words** field (comma separated; remembered
 between sessions), and keep **Write swear words as spoken** on, so that
-profanity is transcribed literally instead of being softened. Larger
+profanity is transcribed literally instead of being softened.
+**Expect gaming / streaming slang** primes the model with common gamer and
+Twitch words (катка, рофл, клатч, GG, KEKW…). Larger
 models (`large-v3`, `large-v3-turbo`) recognise Russian noticeably better.
 
 For NVIDIA GPU acceleration install the CUDA libraries once (≈ 1 GB):
@@ -50,6 +61,26 @@ double-click `install_gpu.bat` (or run `.venv\Scripts\pip install -r requirement
 
 Without them the app uses the CPU automatically and says so in the
 Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
+
+### Censoring swear words
+
+1. Transcribe the clip, then open the **Censor** tab and press
+   **Find swear words**. Choose the categories (Strong: mat and slurs;
+   Mild: жопа, damn…; My words), the padding (default 150 ms before and
+   250 ms after each word) and Silence or Beep.
+2. Suggestions appear in the list and as dashed yellow boxes on the Mute
+   track. Select one to jump to it; `P` (or double-click) plays it with a
+   little context, `A` accepts, `R` rejects and moves to the next one.
+   Words marked `≈` only have approximate timing: listen and adjust
+   Start/End before accepting.
+3. Double-click a word to correct a misrecognition; **Never censor this
+   word** adds it to your exclusions. **Dictionary…** edits your own words
+   (`word`, `word*` for prefixes, `*word*` for parts of words) and exclusions,
+   stored in `%LOCALAPPDATA%\TwitchShortsStudio\censor_dictionary.json`.
+4. **Apply to timeline** creates merged Mute Regions for the accepted
+   suggestions only (one undo step). Applying again replaces the censor's
+   regions; mutes you drew yourself are never touched. **Remove censor
+   mutes** takes them off again. The review is saved in the project.
 
 ### Editing on the timeline
 
@@ -110,6 +141,7 @@ Settings and logs live in `%LOCALAPPDATA%\TwitchShortsStudio`.
 | Space | Play / pause |
 | ← / → | Previous / next frame |
 | Ctrl+S / Ctrl+O | Save / open project |
+| A / R / P | Censor tab: accept / reject / listen to the selected suggestion |
 
 Videos and `.tssproj` files can also be dragged onto the window.
 

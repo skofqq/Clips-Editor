@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPolygonF, QWheel
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from core.audio.waveform import Waveform
+from core.censor.review import ACCEPTED, PENDING, CensorState
 from core.timeline.model import BEEP, Timeline
 from core.timeline.timebase import US, format_timecode
 from core.transcription.model import Transcript
@@ -41,6 +42,7 @@ C_PLAYHEAD = QColor("#ffffff")
 C_TEXT = QColor("#a9abb0")
 C_SPEECH = QColor("#2e6b4f")
 C_WORD = QColor("#3fbf7f")
+C_SUGGEST = QColor("#ffd23a")  # pending censor suggestion
 
 
 class TimelineView(QWidget):
@@ -54,6 +56,8 @@ class TimelineView(QWidget):
         self.controller = controller
         self._waveform: Waveform | None = None
         self._transcript: Transcript | None = None
+        self._censor: CensorState | None = None
+        self._current_suggestion: int | None = None
         self._pps = 100.0
         self._scroll_us = 0
         self._fit_pending = True
@@ -90,6 +94,12 @@ class TimelineView(QWidget):
 
     def set_transcript(self, transcript: Transcript | None) -> None:
         self._transcript = transcript
+        self.update()
+
+    def set_censor(self, state: CensorState | None, current: int | None = None) -> None:
+        """Show censor suggestions (outlines on the mute track); nothing is muted by this."""
+        self._censor = state
+        self._current_suggestion = current
         self.update()
 
     def speech_item_at(self, x: float):
@@ -465,6 +475,23 @@ class TimelineView(QWidget):
             if block.width() > 34:
                 p.setPen(QColor("#101014"))
                 p.drawText(block, Qt.AlignmentFlag.AlignCenter, "BEEP" if m.mode == BEEP else "MUTE")
+
+        # Censor suggestions: dashed = waiting for review, solid = accepted.
+        if self._censor is not None:
+            for sug in self._censor.suggestions:
+                if sug.status not in (PENDING, ACCEPTED):
+                    continue
+                x0, x1 = self.us_to_x(sug.start_us), self.us_to_x(sug.end_us)
+                if x1 < 0 or x0 > w:
+                    continue
+                pen = QPen(C_SUGGEST if sug.status == PENDING else QColor("#ffffff"), 2)
+                if sug.status == PENDING:
+                    pen.setStyle(Qt.PenStyle.DashLine)
+                if sug.id == self._current_suggestion:
+                    pen.setWidth(3)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(QRectF(x0, MUTE_Y + 1, max(3.0, x1 - x0), MUTE_H - 2))
 
         # Speech track: segments, and words when zoomed in far enough.
         p.fillRect(QRectF(0, SPEECH_Y, min(w, max(0.0, x_end)), SPEECH_H), C_TRACK)

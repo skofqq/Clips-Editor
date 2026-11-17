@@ -93,7 +93,7 @@ Timeline(duration_us, segments: tuple[Segment], mutes: tuple[MuteRegion],
 Timeline.merged_mutes()  -> ranges for preview/render (originals stay editable)
 Timeline.volume_at(us)   -> linear multiplier (mute, gain, fades)
 Timeline.source_to_output(us) / output_to_source(us)
-# core/history.History: snapshot undo/redo over (Composition, Timeline);
+# core/history.History: snapshot undo/redo over the editor state tuple;
 #   a drag is folded into one step.
 # core/audio/waveform: FFmpeg -> 8 kHz mono -> 100 peaks/s, cached in
 #   <data dir>/cache/waveforms keyed by path+size+mtime.
@@ -112,8 +112,22 @@ transcribe_file(engine, path, ffmpeg, options, progress, cancel)   # FFmpeg deco
 #   faster-whisper with vad_filter (Silero VAD) and word_timestamps; CUDA float16
 #   when available, CPU int8 otherwise, CPU retry if CUDA fails at runtime.
 # core/workers.CancellableTask: QRunnable with progress + cancel for long jobs.
-# Undo history state is (Composition, Timeline, Transcript).
 # Project file: "transcripts": one entry per media path.
+
+# core/censor (implemented in Phase 5)
+# normalize.forms(word): canonical + look-alike/digit/transliterated spellings,
+#   each also with stretched letters collapsed. Same normalisation for entries.
+# dictionary.Dictionary(custom_words, exclusions).match(word, categories)
+#   built-in regex roots (ru/en, strong/mild) + user entries (word, word*, *word*),
+#   exceptions per root ("хлеб" for е-б); <data dir>/censor_dictionary.json.
+# review.detect(transcript, dictionary, CensorSettings, previous) -> CensorState
+#   with PENDING Suggestions (padded ranges; exact=False for "segment" timing).
+#   Re-detection keeps statuses and hand-adjusted ranges of the same word.
+# CensorState.apply(timeline) -> (timeline, state): replaces the censor-owned
+#   mutes (applied_mute_ids) with merged ACCEPTED ranges. Nothing else mutes.
+# Undo history state is (Composition, Timeline, Transcript, CensorState);
+#   Apply changes timeline + censor in one step.
+# Project file: "censor": one entry per media path.
 
 # core/render (Phase 6)
 detect_encoders(ffmpeg) -> list[EncoderInfo]   # h264_nvenc, hevc_nvenc, h264_qsv, h264_amf, libx264, libx265

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.censor.review import CensorState
 from core.editor.composition import Composition
 from core.timeline.model import Timeline
 from core.transcription.model import Transcript
@@ -51,6 +52,7 @@ class Project:
     composition: Composition | None = None  # None until the first media sets a default
     timelines: dict[str, Timeline] = field(default_factory=dict)  # edits per media path
     transcripts: dict[str, Transcript] = field(default_factory=dict)  # per media path
+    censors: dict[str, CensorState] = field(default_factory=dict)  # censor review per media path
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -64,7 +66,7 @@ class Project:
     def remove_media(self, path: str) -> None:
         key = _norm(path)
         self.media = [m for m in self.media if _norm(m.path) != key]
-        for store in (self.timelines, self.transcripts):
+        for store in (self.timelines, self.transcripts, self.censors):
             for stored in [p for p in store if _norm(p) == key]:
                 del store[stored]
 
@@ -82,6 +84,17 @@ class Project:
             del self.transcripts[stored]
         if transcript is not None:
             self.transcripts[path] = transcript
+
+    def censor_for(self, path: str) -> CensorState | None:
+        key = _norm(path)
+        return next((c for p, c in self.censors.items() if _norm(p) == key), None)
+
+    def set_censor(self, path: str, state: CensorState | None) -> None:
+        key = _norm(path)
+        for stored in [p for p in self.censors if _norm(p) == key]:
+            del self.censors[stored]
+        if state is not None and (state.suggestions or state.applied_mute_ids):
+            self.censors[path] = state
 
     def set_timeline(self, path: str, timeline: Timeline) -> None:
         key = _norm(path)
@@ -108,6 +121,8 @@ class Project:
             data["transcripts"] = [
                 {"media": path, **transcript.to_dict()} for path, transcript in self.transcripts.items()
             ]
+        if self.censors:
+            data["censor"] = [{"media": path, **state.to_dict()} for path, state in self.censors.items()]
         return data
 
     @classmethod
@@ -121,7 +136,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts"}
+        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -141,12 +156,19 @@ class Project:
                 transcripts[str(entry["media"])] = Transcript.from_dict(entry)
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise ProjectFormatError(f"Invalid transcript: {exc}") from exc
+        censors: dict[str, CensorState] = {}
+        for entry in data.get("censor") or []:
+            try:
+                censors[str(entry["media"])] = CensorState.from_dict(entry)
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ProjectFormatError(f"Invalid censor data: {exc}") from exc
         return cls(
             name=str(data.get("name") or "Untitled"),
             media=[MediaRef.from_dict(m) for m in data.get("media") or []],
             composition=composition,
             timelines=timelines,
             transcripts=transcripts,
+            censors=censors,
             extra=extra,
         )
 

@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 
 from app.config import APP_NAME, APP_VERSION, AppConfig
 from core.audio.waveform import load_waveform
+from core.censor.dictionary import Dictionary
+from core.censor.review import detect
 from core.editor.composition import default_composition
 from core.editor.presets import PresetStore
 from core.history import History
@@ -37,6 +39,9 @@ from core.timeline.model import Timeline
 from core.transcription.engine import TranscriptionError, WhisperEngine, downloaded_models, transcribe_file
 from core.timeline.timebase import ms_to_us, seconds_to_us, us_to_ms
 from core.workers import CancellableTask, Worker
+from ui.censor.censor_controller import CensorController
+from ui.censor.censor_panel import CensorPanel
+from ui.censor.dictionary_dialog import DictionaryDialog
 from ui.editor.composition_controller import CompositionController
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
@@ -50,7 +55,7 @@ from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 4  # bump when the dock arrangement changes
+LAYOUT_VERSION = 5  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -84,6 +89,10 @@ class MainWindow(QMainWindow):
         self.engine = WhisperEngine(config.data_dir / "models")
         self._transcribe_task: CancellableTask | None = None
         self._transcribe_path: Path | None = None
+        self.censor = CensorController(self)
+        self.censor_dictionary_path = config.data_dir / "censor_dictionary.json"
+        self.censor_dictionary = Dictionary.load(self.censor_dictionary_path)
+        self._preview_stop_us: int | None = None  # pause here when listening to a suggestion
         self.history: History = History(self._edit_state())
 
         self.preview = PreviewPanel(self.composition, self)
@@ -95,6 +104,7 @@ class MainWindow(QMainWindow):
         self.timeline_panel = TimelinePanel(self.timeline, self)
         self.edit_playback = EditPlayback(self.preview, self.timeline, self)
         self.transcript_panel = TranscriptPanel(self.transcript, self)
+        self.censor_panel = CensorPanel(self.censor, self)
 
         composition_scroll = QScrollArea(self)
         composition_scroll.setWidgetResizable(True)
@@ -116,7 +126,11 @@ class MainWindow(QMainWindow):
         self.transcript_dock = self._add_dock(
             "Transcript", "dock_transcript", self.transcript_panel, Qt.DockWidgetArea.RightDockWidgetArea
         )
+        self.censor_dock = self._add_dock(
+            "Censor", "dock_censor", self.censor_panel, Qt.DockWidgetArea.RightDockWidgetArea
+        )
         self.tabifyDockWidget(self.properties_dock, self.transcript_dock)
+        self.tabifyDockWidget(self.transcript_dock, self.censor_dock)
         self.properties_dock.raise_()
         self.resizeDocks([self.media_dock, self.properties_dock], [240, 360], Qt.Orientation.Horizontal)
         self.resizeDocks([self.timeline_dock], [250], Qt.Orientation.Vertical)
@@ -205,7 +219,8 @@ class MainWindow(QMainWindow):
         playback.addActions([self.act_play, self.act_prev, self.act_next])
 
         view = self.menuBar().addMenu("&View")
-        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.timeline_dock):
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.censor_dock,
+                     self.timeline_dock):
             view.addAction(dock.toggleViewAction())
         view.addSeparator()
         view.addAction(self.act_reset_layout)
@@ -263,6 +278,22 @@ class MainWindow(QMainWindow):
             self.config.transcribe_uncensored,
             self.config.transcribe_slang,
         )
+        self.censor.changed.connect(lambda: self._on_edit_changed(self.censor.last_change_key))
+        self.censor.changed.connect(self._refresh_censor_view)
+        self.censor.current_changed.connect(self._on_censor_current)
+        self.timeline.changed.connect(self._refresh_censor_view)
+        self.transcript.changed.connect(
+            lambda: self.censor_panel.set_has_transcript(self.transcript.transcript is not None)
+        )
+        self.censor_panel.detect_requested.connect(self.detect_censor)
+        self.censor_panel.apply_requested.connect(self.apply_censor)
+        self.censor_panel.remove_requested.connect(self.remove_censor_mutes)
+        self.censor_panel.exclude_requested.connect(self.exclude_censor_word)
+        self.censor_panel.word_edited.connect(self.edit_censor_word)
+        self.censor_panel.preview_requested.connect(self.preview_range)
+        self.censor_panel.dictionary_requested.connect(self.edit_censor_dictionary)
+        self.censor_panel.range_edit_finished.connect(self.history.break_merge)
+        self.timeline.playhead_changed.connect(self._check_preview_stop)
         self.timeline.selection_changed.connect(self._update_edit_actions)
         self._update_edit_actions()
         self.media_imported.connect(self._on_media_imported)
@@ -360,6 +391,8 @@ class MainWindow(QMainWindow):
                 self.project.set_timeline(str(info.path), timeline)
             self.timeline.fps = (info.video.avg_fps or info.video.fps) if info.video else 0
         transcript = self.project.transcript_for(str(info.path)) if info is not None else None
+        censor = self.project.censor_for(str(info.path)) if info is not None else None
+        self.censor.duration_us = timeline.duration_us if timeline is not None else 0
         self._loading_composition = True
         try:
             self.timeline.set_range(None)
@@ -367,8 +400,13 @@ class MainWindow(QMainWindow):
             self.timeline.set_timeline(timeline)
             self.timeline.set_playhead(0)
             self.transcript.set_transcript(transcript)
+            self.censor.set_current(None)
+            self.censor.set_state(censor)
         finally:
             self._loading_composition = False
+        self._preview_stop_us = None
+        self.censor_panel.set_has_transcript(transcript is not None)
+        self._refresh_censor_view()
         self.transcript_panel.set_has_audio(info is not None and info.has_audio)
         self.transcript_panel.rebuild()
         self.history.reset(self._edit_state())
@@ -394,7 +432,12 @@ class MainWindow(QMainWindow):
 
     # -------------------------------------------------------- edit history
     def _edit_state(self):
-        return (self.composition.composition, self.timeline.timeline, self.transcript.transcript)
+        return (
+            self.composition.composition,
+            self.timeline.timeline,
+            self.transcript.transcript,
+            self.censor.state,
+        )
 
     def _on_edit_changed(self, key: object) -> None:
         """A controller changed: store it in the project and the undo history."""
@@ -406,28 +449,140 @@ class MainWindow(QMainWindow):
         self._store_edit(*state)
         self._update_edit_actions()
 
-    def _store_edit(self, composition, timeline, transcript) -> None:
+    def _store_edit(self, composition, timeline, transcript, censor) -> None:
         self.project.composition = composition
         media = self.preview.media
         if media is not None:
             if timeline is not None:
                 self.project.set_timeline(str(media.path), timeline)
             self.project.set_transcript(str(media.path), transcript)
+            self.project.set_censor(str(media.path), censor)
         self._set_dirty(True)
 
     def _apply_history_state(self, state) -> None:
         if state is None:
             return
-        composition, timeline, transcript = state
+        composition, timeline, transcript, censor = state
         self._loading_composition = True
         try:
             self.composition.set_composition(composition)
             self.timeline.set_timeline(timeline)
             self.transcript.set_transcript(transcript)
+            self.censor.set_state(censor)
         finally:
             self._loading_composition = False
-        self._store_edit(composition, timeline, transcript)
+        self._store_edit(composition, timeline, transcript, censor)
         self._update_edit_actions()
+
+    def _commit(self, timeline=None, transcript=None, censor=None, *, set_censor: bool = False) -> None:
+        """Change several controllers as ONE undo step."""
+        self._loading_composition = True
+        try:
+            if timeline is not None:
+                self.timeline.set_timeline(timeline)
+            if transcript is not None:
+                self.transcript.set_transcript(transcript)
+            if set_censor or censor is not None:
+                self.censor.set_state(censor)
+        finally:
+            self._loading_composition = False
+        self._on_edit_changed(None)
+
+    # --------------------------------------------------------------- censor
+    def _refresh_censor_view(self) -> None:
+        state = self.censor.state
+        self.timeline_panel.view.set_censor(state, self.censor.current)
+        applied = state is None or state.is_applied(self.timeline.timeline)
+        self.censor_panel.set_applied(applied)
+
+    def _on_censor_current(self) -> None:
+        self._refresh_censor_view()
+        state, current = self.censor.state, self.censor.current
+        sug = state.get(current) if state is not None and current is not None else None
+        if sug is not None:
+            self.preview.seek(us_to_ms(sug.start_us))
+
+    def _redetect(self, transcript=None):
+        transcript = transcript if transcript is not None else self.transcript.transcript
+        return detect(
+            transcript,
+            self.censor_dictionary,
+            self.censor_panel.settings(),
+            previous=self.censor.state,
+            duration_us=self.censor.duration_us,
+        )
+
+    def detect_censor(self) -> None:
+        if self.transcript.transcript is None:
+            return
+        state = self._redetect()
+        self.censor.set_state(state)
+        self.censor_panel.rebuild()  # also refreshes the summary when nothing changed
+        self.dock_raise(self.censor_dock)
+        pending = state.count("pending")
+        self.statusBar().showMessage(
+            f"Censor: {len(state.suggestions)} found, {pending} to review. Nothing is muted until you apply.", 6000
+        )
+
+    def apply_censor(self) -> None:
+        state, timeline = self.censor.state, self.timeline.timeline
+        if state is None or timeline is None:
+            return
+        timeline, state = state.apply(timeline)
+        self._commit(timeline=timeline, censor=state)
+        self.statusBar().showMessage(
+            f"Censor applied: {len(state.applied_mute_ids)} mute region(s) on the timeline.", 5000
+        )
+
+    def remove_censor_mutes(self) -> None:
+        state, timeline = self.censor.state, self.timeline.timeline
+        if state is None or timeline is None:
+            return
+        timeline, state = state.remove_applied(timeline)
+        self._commit(timeline=timeline, censor=state)
+
+    def _save_censor_dictionary(self) -> None:
+        try:
+            self.censor_dictionary.save(self.censor_dictionary_path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Censor dictionary", f"Could not save the dictionary:\n{exc}")
+
+    def exclude_censor_word(self, word: str) -> None:
+        if self.censor_dictionary.add_exclusion(word):
+            self._save_censor_dictionary()
+        if self.censor.state is not None:
+            self.censor.set_state(self._redetect())
+        self.statusBar().showMessage(f"“{word}” will not be censored any more.", 5000)
+
+    def edit_censor_word(self, segment_id: int, index: int, text: str) -> None:
+        transcript = self.transcript.transcript
+        if transcript is None:
+            return
+        transcript = transcript.with_word_text(segment_id, index, text)
+        self._commit(transcript=transcript, censor=self._redetect(transcript), set_censor=True)
+        self.censor_panel.rebuild()
+
+    def edit_censor_dictionary(self) -> None:
+        dialog = DictionaryDialog(self.censor_dictionary, self)
+        if dialog.exec() != DictionaryDialog.DialogCode.Accepted:
+            return
+        self.censor_dictionary = dialog.result_dictionary()
+        self._save_censor_dictionary()
+        if self.censor.state is not None:
+            self.censor.set_state(self._redetect())
+
+    def preview_range(self, start_us: int, end_us: int) -> None:
+        """Play a little before and after a range, then pause."""
+        if self.preview.media is None:
+            return
+        self.preview.seek(us_to_ms(max(0, start_us - 800_000)))
+        self._preview_stop_us = end_us + 500_000
+        self.preview.play()
+
+    def _check_preview_stop(self, us: int) -> None:
+        if self._preview_stop_us is not None and us >= self._preview_stop_us:
+            self._preview_stop_us = None
+            self.preview.pause()
 
     # -------------------------------------------------------- transcription
     def start_transcription(self, options) -> None:
@@ -670,7 +825,7 @@ class MainWindow(QMainWindow):
             self,
             f"About {APP_NAME}",
             f"<b>{APP_NAME}</b> {APP_VERSION}<br>"
-            "Vertical Shorts editor for Twitch clips.<br>Phase 4: local speech transcription.",
+            "Vertical Shorts editor for Twitch clips.<br>Phase 5: automatic censorship with review.",
         )
 
     def _show_ffmpeg_info(self) -> None:
