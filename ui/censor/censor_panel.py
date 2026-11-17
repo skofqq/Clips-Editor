@@ -65,10 +65,10 @@ class CensorPanel(QWidget):
         self.custom_check = QCheckBox("My words", self)
         self.custom_check.setChecked(True)
         self.before_spin = self._ms_spin(
-            "Silence starts this long before the word.\nNegative: starts inside the word (keeps its first sound)."
+            "Silence starts this long before the word.\nNegative: starts inside the word (keeps its first sound).\nCapped at 1/4 of the word; words under 0.2 s are muted whole."
         )
         self.after_spin = self._ms_spin(
-            "Silence ends this long after the word.\nNegative: ends inside the word (keeps its last sound)."
+            "Silence ends this long after the word.\nNegative: ends inside the word (keeps its last sound).\nCapped at 1/4 of the word; words under 0.2 s are muted whole."
         )
         self.mode_combo = QComboBox(self)
         self.mode_combo.addItem("Silence", SILENCE)

@@ -278,17 +278,24 @@ class CensorState:
         )
 
 
+# Negative padding leaves the edges of a word audible ("б…"). It may never
+# uncover more than this share of the word on each side, and words shorter
+# than SHORT_WORD_US are always muted whole: their edges ARE the word.
+MAX_UNCOVER_SHARE = 0.25
+SHORT_WORD_US = 200_000
+
+
 def _padded(word_start: int, word_end: int, settings: CensorSettings, duration_us: int) -> dict[str, int]:
-    start = word_start - settings.pad_before_us
-    end = word_end + settings.pad_after_us
-    if end - start < MIN_RANGE_US:
-        # Negative padding ate the whole word: keep a short range around the
-        # point where the two edges met, never outside the word.
-        middle = (start + end) // 2
-        middle = max(word_start, min(word_end, middle))
-        start = middle - MIN_RANGE_US // 2
-        end = start + MIN_RANGE_US
-    start = max(0, start)
+    length = max(0, word_end - word_start)
+    before, after = settings.pad_before_us, settings.pad_after_us
+    if before < 0 or after < 0:
+        limit = 0 if length < SHORT_WORD_US else int(length * MAX_UNCOVER_SHARE)
+        if before < 0:
+            before = -min(-before, limit)
+        if after < 0:
+            after = -min(-after, limit)
+    start = max(0, word_start - before)
+    end = word_end + after
     if duration_us > 0:
         end = min(duration_us, end)
     if end - start < MIN_RANGE_US:

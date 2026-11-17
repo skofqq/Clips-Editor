@@ -333,11 +333,17 @@ def test_negative_padding_mutes_inside_the_word():
 
     settings = CensorSettings(pad_before_us=-100_000, pad_after_us=-50_000).cleaned()
     assert (settings.pad_before_us, settings.pad_after_us) == (-100_000, -50_000)
+    # 400 ms word: up to 100 ms may stay audible on each side.
     assert _padded(1_000_000, 1_400_000, settings, 0) == {"start_us": 1_100_000, "end_us": 1_350_000}
-    # Edges crossing each other: a minimal range inside the word.
-    eaten = _padded(1_000_000, 1_100_000, CensorSettings(-80_000, -80_000), 0)
-    assert 1_000_000 <= eaten["start_us"] and eaten["end_us"] <= 1_100_000
-    assert eaten["end_us"] - eaten["start_us"] == 20_000
+    # 300 ms word: capped at 25 % (75 ms) so most of the word stays muted.
+    capped = _padded(1_000_000, 1_300_000, CensorSettings(-200_000, -200_000), 0)
+    assert capped == {"start_us": 1_075_000, "end_us": 1_225_000}
+    # Short word (< 200 ms): negative padding is ignored, the whole word is muted.
+    assert _padded(1_000_000, 1_150_000, CensorSettings(-80_000, -80_000), 0) == {
+        "start_us": 1_000_000, "end_us": 1_150_000
+    }
+    # Positive padding on the other side still applies.
+    assert _padded(1_000_000, 1_150_000, CensorSettings(-80_000, 250_000), 0)["end_us"] == 1_400_000
     assert CensorSettings(-5_000_000, 0).cleaned().pad_before_us == -1_000_000
 
 
