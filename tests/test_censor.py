@@ -326,3 +326,25 @@ def test_dictionary_dialog(qapp):
     dialog.words_edit.setPlainText("кринж\n  рофл* \nКРИНЖ\n\n")
     d = dialog.result_dictionary()
     assert d.custom_words == ["кринж", "рофл*"] and d.exclusions == ["бляха"]
+
+
+def test_negative_padding_mutes_inside_the_word():
+    from core.censor.review import _padded
+
+    settings = CensorSettings(pad_before_us=-100_000, pad_after_us=-50_000).cleaned()
+    assert (settings.pad_before_us, settings.pad_after_us) == (-100_000, -50_000)
+    assert _padded(1_000_000, 1_400_000, settings, 0) == {"start_us": 1_100_000, "end_us": 1_350_000}
+    # Edges crossing each other: a minimal range inside the word.
+    eaten = _padded(1_000_000, 1_100_000, CensorSettings(-80_000, -80_000), 0)
+    assert 1_000_000 <= eaten["start_us"] and eaten["end_us"] <= 1_100_000
+    assert eaten["end_us"] - eaten["start_us"] == 20_000
+    assert CensorSettings(-5_000_000, 0).cleaned().pad_before_us == -1_000_000
+
+
+def test_panel_allows_negative_padding(qapp):
+    from ui.censor.censor_controller import CensorController
+    from ui.censor.censor_panel import CensorPanel
+
+    panel = CensorPanel(CensorController())
+    panel.before_spin.setValue(-60)
+    assert panel.settings().pad_before_us == -60_000

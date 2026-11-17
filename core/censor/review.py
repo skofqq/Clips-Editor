@@ -32,6 +32,7 @@ STATUSES = (PENDING, ACCEPTED, REJECTED)
 DEFAULT_PAD_BEFORE_US = 150_000
 DEFAULT_PAD_AFTER_US = 250_000
 MAX_PAD_US = 2_000_000
+MIN_PAD_US = -1_000_000  # negative padding mutes only the inside of the word
 MIN_RANGE_US = 20_000
 
 
@@ -45,8 +46,8 @@ class CensorSettings:
     def cleaned(self) -> "CensorSettings":
         cats = tuple(c for c in (STRONG, MILD, CUSTOM) if c in self.categories)
         return CensorSettings(
-            pad_before_us=max(0, min(MAX_PAD_US, int(self.pad_before_us))),
-            pad_after_us=max(0, min(MAX_PAD_US, int(self.pad_after_us))),
+            pad_before_us=max(MIN_PAD_US, min(MAX_PAD_US, int(self.pad_before_us))),
+            pad_after_us=max(MIN_PAD_US, min(MAX_PAD_US, int(self.pad_after_us))),
             mode=self.mode if self.mode in MUTE_MODES else SILENCE,
             categories=cats,
         )
@@ -278,8 +279,16 @@ class CensorState:
 
 
 def _padded(word_start: int, word_end: int, settings: CensorSettings, duration_us: int) -> dict[str, int]:
-    start = max(0, word_start - settings.pad_before_us)
+    start = word_start - settings.pad_before_us
     end = word_end + settings.pad_after_us
+    if end - start < MIN_RANGE_US:
+        # Negative padding ate the whole word: keep a short range around the
+        # point where the two edges met, never outside the word.
+        middle = (start + end) // 2
+        middle = max(word_start, min(word_end, middle))
+        start = middle - MIN_RANGE_US // 2
+        end = start + MIN_RANGE_US
+    start = max(0, start)
     if duration_us > 0:
         end = min(duration_us, end)
     if end - start < MIN_RANGE_US:

@@ -64,8 +64,12 @@ class CensorPanel(QWidget):
         self.mild_check = QCheckBox("Mild (жопа, damn…)", self)
         self.custom_check = QCheckBox("My words", self)
         self.custom_check.setChecked(True)
-        self.before_spin = self._ms_spin("Silence starts this long before the word")
-        self.after_spin = self._ms_spin("Silence ends this long after the word")
+        self.before_spin = self._ms_spin(
+            "Silence starts this long before the word.\nNegative: starts inside the word (keeps its first sound)."
+        )
+        self.after_spin = self._ms_spin(
+            "Silence ends this long after the word.\nNegative: ends inside the word (keeps its last sound)."
+        )
         self.mode_combo = QComboBox(self)
         self.mode_combo.addItem("Silence", SILENCE)
         self.mode_combo.addItem("Beep", BEEP)
@@ -200,7 +204,7 @@ class CensorPanel(QWidget):
     # ------------------------------------------------------------ widgets
     def _ms_spin(self, tip: str) -> QSpinBox:
         spin = QSpinBox(self)
-        spin.setRange(0, 2000)
+        spin.setRange(-1000, 2000)
         spin.setSingleStep(10)
         spin.setSuffix(" ms")
         spin.setToolTip(tip)

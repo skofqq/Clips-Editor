@@ -67,7 +67,8 @@ Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
 1. Transcribe the clip, then open the **Censor** tab and press
    **Find swear words**. Choose the categories (Strong: mat and slurs;
    Mild: жопа, damn…; My words), the padding (default 150 ms before and
-   250 ms after each word) and Silence or Beep.
+   250 ms after each word; negative values mute only the inside of the word,
+   e.g. -60 ms before keeps its first sound) and Silence or Beep.
 2. Suggestions appear in the list and as dashed yellow boxes on the Mute
    track. Select one to jump to it; `P` (or double-click) plays it with a
    little context, `A` accepts, `R` rejects and moves to the next one.
