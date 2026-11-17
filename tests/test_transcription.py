@@ -118,6 +118,7 @@ class FakeModel:
     """Stands in for faster_whisper.WhisperModel."""
 
     calls: list = []
+    last_kwargs: dict = {}
     fail_on: set = set()
 
     def __init__(self, size, device, compute_type, download_root):
@@ -128,6 +129,7 @@ class FakeModel:
 
     def transcribe(self, audio, language=None, **kwargs):
         assert kwargs["word_timestamps"] and kwargs["vad_filter"]
+        FakeModel.last_kwargs = kwargs
         info = SimpleNamespace(language=language or "en", language_probability=0.9)
         duration = len(audio) / SAMPLE_RATE
 
@@ -422,3 +424,40 @@ def test_window_reports_failure_and_cancel(window, fake_whisper, monkeypatch):
     assert _wait(lambda: window._transcribe_task is None)
     assert window.transcript.transcript is None
     assert "Cancelled" in window.transcript_panel.status_label.text()
+
+
+def test_vocabulary_and_uncensored_prompt():
+    from core.transcription.engine import build_prompt, parse_vocabulary
+
+    assert parse_vocabulary(" sasavot, rostikfacekid ,,\nSasavot; хелин ") == ("sasavot", "rostikfacekid", "хелин")
+    assert parse_vocabulary("") == ()
+    ru = build_prompt("ru", ("sasavot", "хелин"), True)
+    assert "блять" in ru and "Ники и имена: sasavot, хелин." in ru
+    en = build_prompt("en", (), True)
+    assert "fuck" in en and "Names" not in en
+    auto = build_prompt("auto", ("x",), True)
+    assert "блять" in auto and "fuck" in auto
+    assert build_prompt("auto", (), False) is None
+    assert "блять" not in build_prompt("ru", (), False)
+    long = build_prompt("en", tuple(f"name{i:03d}" for i in range(100)), False)
+    assert len(long) < 400 and long.endswith(".")
+
+
+def test_engine_passes_prompt_as_hotwords(fake_whisper, tmp_path, monkeypatch):
+    monkeypatch.setattr(engine_mod, "cuda_available", lambda: False)
+    WhisperEngine(tmp_path).transcribe(
+        np.zeros(SAMPLE_RATE, dtype=np.float32),
+        TranscribeOptions(language="ru", vocabulary=("sasavot",), uncensored=True),
+    )
+    kwargs = FakeModel.last_kwargs
+    assert "sasavot" in kwargs["hotwords"] and kwargs["initial_prompt"] == kwargs["hotwords"]
+
+
+def test_panel_vocabulary_options(qapp):
+    panel = TranscriptPanel(TranscriptController())
+    panel.set_preferences("medium", "ru", "sasavot, helin139", False)
+    options = panel.options()
+    assert (options.model, options.language) == ("medium", "ru")
+    assert options.vocabulary == ("sasavot", "helin139") and not options.uncensored
+    panel.set_preferences("unknown-model", "xx", "", True)
+    assert panel.options().model == "medium" and panel.options().uncensored

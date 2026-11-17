@@ -38,6 +38,12 @@ model, press **Transcribe**. The model is downloaded once into
 Clicking a word on the Speech track selects it on the timeline, so `M`
 mutes exactly that word.
 
+Accuracy tips: list nicknames, guest names and slang in the
+**Nicknames and special words** field (comma separated; remembered
+between sessions), and keep **Write swear words as spoken** on, so that
+profanity is transcribed literally instead of being softened. Larger
+models (`large-v3`, `large-v3-turbo`) recognise Russian noticeably better.
+
 For NVIDIA GPU acceleration install the CUDA libraries once (≈ 1 GB):
 
 double-click `install_gpu.bat` (or run `.venv\Scripts\pip install -r requirements-gpu.txt`).

@@ -256,6 +256,12 @@ class MainWindow(QMainWindow):
         self.transcript_panel.word_selected.connect(self.timeline.set_range)
         self.timeline.playhead_changed.connect(self.transcript_panel.follow_playhead)
         self.transcript_panel.set_downloaded_models(downloaded_models(self.engine.models_dir))
+        self.transcript_panel.set_preferences(
+            self.config.transcribe_model,
+            self.config.transcribe_language,
+            self.config.transcribe_vocabulary,
+            self.config.transcribe_uncensored,
+        )
         self.timeline.selection_changed.connect(self._update_edit_actions)
         self._update_edit_actions()
         self.media_imported.connect(self._on_media_imported)
@@ -429,6 +435,11 @@ class MainWindow(QMainWindow):
             return
         if self._transcribe_task is not None:
             return
+        # Remember the choices for next time.
+        self.config.transcribe_model = options.model
+        self.config.transcribe_language = options.language
+        self.config.transcribe_vocabulary = ", ".join(options.vocabulary)
+        self.config.transcribe_uncensored = options.uncensored
         task = CancellableTask(transcribe_file, self.engine, media.path, self.ffmpeg.ffmpeg, options)
         task.signals.progress.connect(self.transcript_panel.set_progress)
         task.signals.finished.connect(self._transcription_done)

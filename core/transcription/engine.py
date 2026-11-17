@@ -16,6 +16,7 @@ from __future__ import annotations
 import glob
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -53,9 +54,52 @@ class TranscribeOptions:
     device: str = AUTO  # "auto", "cuda" or "cpu"
     vad: bool = True
     beam_size: int = 5
+    vocabulary: tuple[str, ...] = ()  # nicknames, slang: biases recognition towards them
+    uncensored: bool = True  # prime the model to write swear words as spoken
 
 
 Progress = Callable[[float, str], None]  # fraction 0..1, message
+
+
+# ------------------------------------------------------------------ prompts
+
+# Whisper tends to soften or skip swear words and to "correct" unusual
+# nicknames into ordinary words. A short context prompt that already
+# contains such words makes it far more likely to write them as spoken.
+_PRIMING = {
+    "ru": "Стрим на Twitch, живая речь без цензуры, с матом: блять, сука, нахуй, пиздец, ебать, хуйня.",
+    "en": "Twitch stream, casual uncensored speech with swearing: fuck, fucking, shit, bitch, damn.",
+}
+_PLAIN = {"ru": "Стрим на Twitch, живая разговорная речь.", "en": "Twitch stream, casual speech."}
+MAX_VOCABULARY_CHARS = 300  # Whisper keeps only ~220 prompt tokens
+
+
+def parse_vocabulary(text: str) -> tuple[str, ...]:
+    """Split a comma/newline separated list, dropping blanks and duplicates."""
+    seen: dict[str, str] = {}
+    for item in re.split(r"[,;\n]+", text or ""):
+        item = " ".join(item.split())
+        if item and item.casefold() not in seen:
+            seen[item.casefold()] = item
+    return tuple(seen.values())
+
+
+def build_prompt(language: str, vocabulary: tuple[str, ...] = (), uncensored: bool = True) -> str | None:
+    """Context prompt for Whisper, or None when there is nothing to add."""
+    table = _PRIMING if uncensored else _PLAIN
+    if language in table:
+        parts = [table[language]]
+    elif uncensored:  # auto-detect: prime both languages
+        parts = [_PRIMING["ru"], _PRIMING["en"]]
+    else:
+        parts = []
+    if vocabulary:
+        names = ", ".join(vocabulary)
+        if len(names) > MAX_VOCABULARY_CHARS:
+            names = names[:MAX_VOCABULARY_CHARS].rsplit(",", 1)[0]
+        label = "Ники и имена" if language == "ru" else "Names"
+        parts.append(f"{label}: {names}.")
+    return " ".join(parts) if parts else None
 
 
 # ------------------------------------------------------------------ helpers
@@ -222,6 +266,7 @@ class WhisperEngine:
     def _run(self, audio: np.ndarray, options: TranscribeOptions, progress: Progress, cancel):
         duration_s = len(audio) / SAMPLE_RATE
         language = None if options.language == AUTO else options.language
+        prompt = build_prompt(options.language, options.vocabulary, options.uncensored)
         segments_iter, info = self._model.transcribe(
             audio,
             language=language,
@@ -231,6 +276,10 @@ class WhisperEngine:
             vad_filter=options.vad,
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
+            # initial_prompt only conditions the first 30 s window; hotwords are
+            # added to every window, so the context holds for the whole clip.
+            initial_prompt=prompt,
+            hotwords=prompt,
         )
         raw = []
         progress(0.02, f"Recognising ({info.language}) on {self.device_used.upper()}…")

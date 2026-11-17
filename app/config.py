@@ -44,6 +44,10 @@ class AppConfig:
     recent_files: list[str] = field(default_factory=list)
     window_geometry: str = ""  # base64 of QMainWindow.saveGeometry()
     window_state: str = ""  # base64 of QMainWindow.saveState()
+    transcribe_vocabulary: str = ""  # nicknames / slang, comma separated
+    transcribe_uncensored: bool = True
+    transcribe_model: str = ""
+    transcribe_language: str = ""
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -85,9 +89,14 @@ class AppConfig:
             return config
         if not isinstance(raw, dict):
             return config
-        for key in ("ffmpeg_dir", "last_import_dir", "window_geometry", "window_state"):
+        for key in (
+            "ffmpeg_dir", "last_import_dir", "window_geometry", "window_state",
+            "transcribe_vocabulary", "transcribe_model", "transcribe_language",
+        ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
+        if isinstance(raw.get("transcribe_uncensored"), bool):
+            config.transcribe_uncensored = raw["transcribe_uncensored"]
         recent = raw.get("recent_files")
         if isinstance(recent, list):
             config.recent_files = [item for item in recent if isinstance(item, str)]

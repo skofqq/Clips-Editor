@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.timeline.timebase import format_timecode
-from core.transcription.engine import AUTO, DEFAULT_MODEL, MODEL_SIZES, TranscribeOptions
+from core.transcription.engine import AUTO, DEFAULT_MODEL, MODEL_SIZES, TranscribeOptions, parse_vocabulary
 from core.transcription.model import LANGUAGES, Transcript
 from ui.transcript.transcript_controller import TranscriptController
 
@@ -70,6 +71,19 @@ class TranscriptPanel(QWidget):
         self.device_combo.addItem("GPU (CUDA)", "cuda")
         self.device_combo.addItem("CPU", "cpu")
 
+        self.vocabulary_edit = QLineEdit(self)
+        self.vocabulary_edit.setPlaceholderText("Nicknames and special words, comma separated")
+        self.vocabulary_edit.setToolTip(
+            "Words Whisper should expect: streamer and guest nicknames, game terms, slang.\n"
+            "Write them the way they should appear, e.g.  sasavot, rostikfacekid, хелин."
+        )
+        self.uncensored_check = QCheckBox("Write swear words as spoken (no self-censoring)", self)
+        self.uncensored_check.setChecked(True)
+        self.uncensored_check.setToolTip(
+            "Primes the model with uncensored speech so profanity is transcribed literally,\n"
+            "which the automatic censor (Phase 5) needs."
+        )
+
         self.transcribe_button = QPushButton("Transcribe", self)
         self.transcribe_button.setObjectName("primary")
         self.cancel_button = QPushButton("Cancel", self)
@@ -114,6 +128,8 @@ class TranscriptPanel(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
         layout.addLayout(options)
+        layout.addWidget(self.vocabulary_edit)
+        layout.addWidget(self.uncensored_check)
         layout.addLayout(buttons)
         layout.addWidget(self.progress)
         layout.addWidget(self.status_label)
@@ -140,7 +156,19 @@ class TranscriptPanel(QWidget):
             model=self.model_combo.currentData(),
             language=self.language_combo.currentData(),
             device=self.device_combo.currentData(),
+            vocabulary=parse_vocabulary(self.vocabulary_edit.text()),
+            uncensored=self.uncensored_check.isChecked(),
         )
+
+    def set_preferences(self, model: str, language: str, vocabulary: str, uncensored: bool) -> None:
+        index = self.model_combo.findData(model)
+        if index >= 0:
+            self.model_combo.setCurrentIndex(index)
+        index = self.language_combo.findData(language)
+        if index >= 0:
+            self.language_combo.setCurrentIndex(index)
+        self.vocabulary_edit.setText(vocabulary)
+        self.uncensored_check.setChecked(uncensored)
 
     def set_downloaded_models(self, names: list[str]) -> None:
         for i in range(self.model_combo.count()):
@@ -164,7 +192,8 @@ class TranscriptPanel(QWidget):
         self.transcribe_button.setEnabled(not busy and self._has_audio)
         self.cancel_button.setVisible(busy)
         self.clear_button.setEnabled(not busy and self.controller.transcript is not None)
-        for combo in (self.language_combo, self.model_combo, self.device_combo):
+        for combo in (self.language_combo, self.model_combo, self.device_combo, self.vocabulary_edit,
+                      self.uncensored_check):
             combo.setEnabled(not busy)
         self.progress.setVisible(busy)
 
