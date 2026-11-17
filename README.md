@@ -72,6 +72,14 @@ hashtags. Everything stays editable; generating again never overwrites
 your hand edits silently (it asks whether to keep them). Upload to YouTube
 starts from these values.
 
+### Interface
+
+The top bar holds the main actions: Import, Open, Save, Undo / Redo, and
+on the right **Upload** and **Export**. Panels on the right (Properties,
+Transcript, Censor, Metadata) are tabs at the top; drag a tab out to
+float it, **View → Reset Layout** puts everything back. The theme lives in
+`ui/theme/dark.qss` with line icons in `ui/theme/icons/`.
+
 ### Metadata
 
 Typing a name in a chip field offers matching profiles (also by username

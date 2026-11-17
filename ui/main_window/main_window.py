@@ -5,15 +5,19 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QThreadPool, Qt, Signal
+from PySide6.QtCore import QByteArray, QSize, QThreadPool, Qt, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
+    QFrame,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
+    QToolBar,
     QWidget,
 )
 
@@ -59,6 +63,7 @@ from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
 from ui.metadata.library_dialog import LibraryDialog
 from ui.metadata.metadata_panel import MetadataPanel
+from ui.theme import icon
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.upload_dialog import UploadDialog
 from ui.panels.composition_panel import CompositionPanel
@@ -73,7 +78,7 @@ from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 6  # bump when the dock arrangement changes
+LAYOUT_VERSION = 7  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -168,8 +173,10 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.timeline_dock], [250], Qt.Orientation.Vertical)
         self._default_state = self.saveState(LAYOUT_VERSION)
 
+        self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
         self._create_actions()
         self._create_menus()
+        self._create_toolbar()
         self._connect()
         self._restore_layout()
         self._update_title()
@@ -182,6 +189,56 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Ready · FFmpeg: {self.ffmpeg.ffmpeg}")
 
     # -------------------------------------------------------------- setup
+    def _create_toolbar(self) -> None:
+        """Top bar: app name, project, file and history actions, Export and Upload."""
+        bar = QToolBar("Main toolbar", self)
+        bar.setObjectName("mainToolbar")
+        bar.setMovable(False)
+        bar.setFloatable(False)
+        bar.toggleViewAction().setEnabled(False)
+        bar.setIconSize(QSize(18, 18))
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+        title = QLabel(APP_NAME, bar)
+        title.setObjectName("appTitle")
+        bar.addWidget(title)
+        self.project_label = QLabel(bar)
+        self.project_label.setObjectName("projectName")
+        bar.addWidget(self.project_label)
+
+        def separator() -> None:
+            line = QFrame(bar)
+            line.setObjectName("toolbarSeparator")
+            line.setFixedHeight(22)
+            bar.addWidget(line)
+
+        separator()
+        for action, name in ((self.act_import, "import"), (self.act_open, "folder"), (self.act_save, "save")):
+            action.setIcon(icon(name))
+            bar.addAction(action)
+        separator()
+        for action, name in ((self.act_undo, "undo"), (self.act_redo, "redo")):
+            action.setIcon(icon(name))
+            bar.addAction(action)
+            bar.widgetForAction(action).setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        spacer = QWidget(bar)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        spacer.setStyleSheet("background: transparent;")
+        bar.addWidget(spacer)
+        self.act_upload.setIcon(icon("youtube"))
+        bar.addAction(self.act_upload)
+        bar.widgetForAction(self.act_upload).setObjectName("youtubeAction")
+        self.act_export.setIcon(icon("export"))
+        bar.addAction(self.act_export)
+        bar.widgetForAction(self.act_export).setObjectName("primaryAction")
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
+        self.main_toolbar = bar
+        self.act_import.setIconText("Import")
+        self.act_open.setIconText("Open")
+        self.act_save.setIconText("Save")
+        self.act_export.setIconText("Export")
+        self.act_upload.setIconText("Upload")
+
     def _add_dock(self, title: str, name: str, widget: QWidget, area: Qt.DockWidgetArea) -> QDockWidget:
         dock = QDockWidget(title, self)
         dock.setObjectName(name)
@@ -255,7 +312,7 @@ class MainWindow(QMainWindow):
         edit.addActions([self.act_mute, self.act_merge_mutes])
         self.timeline_panel.add_actions([
             self.act_undo, self.act_redo, None, self.act_split, self.act_delete,
-            self.act_trim, None, self.act_mute, None, self.act_export,
+            self.act_trim, None, self.act_mute,
         ])
 
         playback = self.menuBar().addMenu("&Playback")
@@ -999,10 +1056,14 @@ class MainWindow(QMainWindow):
     def _update_title(self) -> None:
         name = self.project_path.name if self.project_path else "Untitled"
         self.setWindowTitle(f"{name}{' *' if self._dirty else ''} — {APP_NAME}")
+        if hasattr(self, "project_label"):
+            self.project_label.setText(f"{self.project_path.stem if self.project_path else 'Untitled project'}"
+                                       f"{'  •  unsaved' if self._dirty else ''}")
 
     # ------------------------------------------------------------- layout
     def reset_layout(self) -> None:
-        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.timeline_dock):
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.censor_dock,
+                     self.metadata_dock, self.timeline_dock):
             dock.setFloating(False)
             dock.show()
         self.restoreState(self._default_state, LAYOUT_VERSION)

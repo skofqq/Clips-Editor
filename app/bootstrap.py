@@ -19,10 +19,12 @@ THEME_FILE = Path(__file__).resolve().parent.parent / "ui" / "theme" / "dark.qss
 
 def load_theme() -> str:
     try:
-        return THEME_FILE.read_text(encoding="utf-8")
+        text = THEME_FILE.read_text(encoding="utf-8")
     except OSError as exc:
         log.warning("Theme not loaded: %s", exc)
         return ""
+    # Qt wants forward slashes in url(); the folder may contain spaces, so urls are quoted.
+    return text.replace("@ICONS@", (THEME_FILE.parent / "icons").as_posix())
 
 
 def create_application(argv: list[str]) -> QApplication:

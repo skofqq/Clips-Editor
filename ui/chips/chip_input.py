@@ -24,7 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 CHIP_STYLE = (
-    "QFrame#chip { background: #3a2a73; border: 1px solid #7c4dff; border-radius: 11px; }"
+    "QWidget#chipInput { background: #16171c; border: 1px solid #2a2c35; border-radius: 8px; }"
+    "QWidget#chipInput:hover { border-color: #3a3d48; }"
+    "QWidget#chipInput QLineEdit { background: transparent; border: none; padding: 3px 2px; }"
+    "QFrame#chip { background: #2a2148; border: 1px solid #6d4fd6; border-radius: 11px; }"
     "QFrame#chip QLabel { color: #ffffff; background: transparent; padding: 0; }"
     "QFrame#chip QToolButton { border: none; background: transparent; color: #c9b8ff; padding: 0 5px; }"
     "QFrame#chip QToolButton:hover { color: #ffffff; }"
@@ -145,6 +148,8 @@ class ChipInput(QWidget):
         self._items: list[tuple[str, str]] = []
         self._suggestions: list[tuple[str, str, tuple[str, ...]]] = []  # id, label, other names
         self._chips: dict[str, Chip] = {}
+        self.setObjectName("chipInput")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(CHIP_STYLE)
 
         self.edit = QLineEdit(self)
@@ -158,6 +163,7 @@ class ChipInput(QWidget):
         self.edit.setCompleter(self.completer)
 
         self.flow = FlowLayout(self)
+        self.flow.setContentsMargins(5, 4, 5, 4)
         self.flow.addWidget(self.edit)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
 

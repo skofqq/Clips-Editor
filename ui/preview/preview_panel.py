@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QSplitter,
-    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -23,6 +22,7 @@ from core.media.probe import MediaInfo, format_duration
 from ui.editor.composition_controller import CompositionController
 from ui.preview.output_view import OutputView
 from ui.preview.source_view import SourceView
+from ui.theme import icon
 
 VIEW_MODES = ("original", "both", "output")
 
@@ -58,15 +58,22 @@ class PreviewPanel(QWidget):
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
         mode_bar = QHBoxLayout()
-        mode_bar.setContentsMargins(8, 6, 8, 4)
+        mode_bar.setContentsMargins(8, 8, 8, 6)
         mode_bar.addStretch(1)
+        segmented = QWidget(self)
+        segmented.setObjectName("segmented")
+        segmented.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        seg_layout = QHBoxLayout(segmented)
+        seg_layout.setContentsMargins(3, 3, 3, 3)
+        seg_layout.setSpacing(2)
         for mode, text in zip(VIEW_MODES, ("Original", "Both", "Output 9:16")):
-            button = QPushButton(text, self)
+            button = QPushButton(text, segmented)
             button.setCheckable(True)
             button.setChecked(mode == self._view_mode)
             button.setProperty("mode", mode)
             self._mode_group.addButton(button)
-            mode_bar.addWidget(button)
+            seg_layout.addWidget(button)
+        mode_bar.addWidget(segmented)
         mode_bar.addStretch(1)
         self._mode_group.buttonClicked.connect(lambda b: self.set_view_mode(b.property("mode")))
 
@@ -77,15 +84,18 @@ class PreviewPanel(QWidget):
         self.player.setAudioOutput(self.audio)
         self.player.setVideoSink(self.sink)
 
-        style = self.style()
         self.play_button = QPushButton(self)
-        self.play_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.play_button.setObjectName("playButton")
+        self.play_button.setIcon(icon("play"))
+        self.play_button.setIconSize(QSize(18, 18))
         self.play_button.setToolTip("Play / Pause (Space)")
         self.prev_frame_button = QPushButton(self)
-        self.prev_frame_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaSeekBackward))
+        self.prev_frame_button.setObjectName("transportButton")
+        self.prev_frame_button.setIcon(icon("prev"))
         self.prev_frame_button.setToolTip("Previous frame (Left)")
         self.next_frame_button = QPushButton(self)
-        self.next_frame_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward))
+        self.next_frame_button.setObjectName("transportButton")
+        self.next_frame_button.setIcon(icon("next"))
         self.next_frame_button.setToolTip("Next frame (Right)")
 
         self.slider = QSlider(Qt.Orientation.Horizontal, self)
@@ -100,14 +110,18 @@ class PreviewPanel(QWidget):
         self.volume.setToolTip("Preview volume")
 
         controls = QHBoxLayout()
-        controls.setContentsMargins(8, 4, 8, 6)
+        controls.setContentsMargins(12, 6, 12, 8)
+        controls.setSpacing(6)
         controls.addWidget(self.prev_frame_button)
         controls.addWidget(self.play_button)
         controls.addWidget(self.next_frame_button)
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.time_label)
-        controls.addSpacing(8)
-        controls.addWidget(QLabel("Vol", self))
+        controls.addSpacing(10)
+        volume_icon = QLabel(self)
+        volume_icon.setPixmap(icon("volume").pixmap(18, 18))
+        volume_icon.setToolTip("Preview volume")
+        controls.addWidget(volume_icon)
         controls.addWidget(self.volume)
 
         layout = QVBoxLayout(self)
@@ -238,12 +252,8 @@ class PreviewPanel(QWidget):
         self.position_changed.emit(position)
 
     def _on_state(self, state: QMediaPlayer.PlaybackState) -> None:
-        icon = (
-            QStyle.StandardPixmap.SP_MediaPause
-            if state == QMediaPlayer.PlaybackState.PlayingState
-            else QStyle.StandardPixmap.SP_MediaPlay
-        )
-        self.play_button.setIcon(self.style().standardIcon(icon))
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
+        self.play_button.setIcon(icon("pause" if playing else "play"))
 
     def _on_error(self, error, message: str) -> None:
         if error != QMediaPlayer.Error.NoError:

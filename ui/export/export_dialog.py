@@ -86,7 +86,7 @@ class ExportDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Export Video")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(600)
         self.source = source
         self.composition = composition
         self.timeline = timeline
@@ -107,6 +107,8 @@ class ExportDialog(QDialog):
         for label, w, h in RESOLUTIONS:
             self.resolution_combo.addItem(label, f"{w}x{h}")
         self.resolution_combo.addItem("Custom", "")
+        self.resolution_combo.setMinimumContentsLength(11)
+        self.resolution_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.width_spin = self._spin(16, 4096, 2, " px")
         self.height_spin = self._spin(16, 4096, 2, " px")
         self.fps_combo = QComboBox(self)
@@ -162,7 +164,7 @@ class ExportDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.addRow("Preset", self.preset_combo)
         size = QHBoxLayout()
-        size.addWidget(self.resolution_combo, 2)
+        size.addWidget(self.resolution_combo, 3)
         size.addWidget(self.width_spin, 1)
         size.addWidget(QLabel("×", self))
         size.addWidget(self.height_spin, 1)

@@ -109,3 +109,34 @@ def test_save_and_reopen_project(qapp, data_dir, ffmpeg_paths, sample_clips, tmp
     assert _wait(lambda: other.media_panel.list.count() == 1)
     assert other.project.name == "session"
     other.close()
+
+
+def test_theme_icons_resolve(qapp):
+    import re
+    from pathlib import Path
+
+    from app.bootstrap import load_theme
+    from ui.theme import icon
+
+    qss = load_theme()
+    assert "@ICONS@" not in qss
+    urls = re.findall(r'url\("([^"]+)"\)', qss)
+    assert urls and all(Path(u).is_file() for u in urls)
+    for name in ("import", "folder", "save", "undo", "redo", "export", "youtube", "play", "pause", "prev",
+                 "next", "volume"):
+        assert not icon(name).isNull(), name
+
+
+def test_main_toolbar_actions(qapp, data_dir):
+    from app.config import AppConfig
+    from ui.main_window.main_window import MainWindow
+
+    w = MainWindow(config=AppConfig.load(data_dir), ffmpeg=None)
+    bar = w.main_toolbar
+    assert bar.widgetForAction(w.act_export).objectName() == "primaryAction"
+    assert bar.widgetForAction(w.act_upload).objectName() == "youtubeAction"
+    assert "Untitled" in w.project_label.text()
+    w._set_dirty(True)
+    assert "unsaved" in w.project_label.text()
+    w._dirty = False
+    w.close()

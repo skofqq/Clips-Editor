@@ -27,9 +27,15 @@ _SCROLL_UNIT_US = 10_000  # scroll bar resolution: 10 ms
 
 def _separator(parent: QWidget) -> QFrame:
     line = QFrame(parent)
-    line.setFrameShape(QFrame.Shape.VLine)
-    line.setStyleSheet("color: #3a3c42;")
+    line.setFixedWidth(1)
+    line.setStyleSheet("background: #23252d; margin: 4px 4px;")
     return line
+
+
+def _label(text: str, parent: QWidget) -> QLabel:
+    label = QLabel(text, parent)
+    label.setObjectName("muted")
+    return label
 
 
 class TimelinePanel(QWidget):
@@ -42,8 +48,8 @@ class TimelinePanel(QWidget):
         self.scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
 
         self.toolbar = QHBoxLayout()
-        self.toolbar.setContentsMargins(6, 4, 6, 4)
-        self.toolbar.setSpacing(4)
+        self.toolbar.setContentsMargins(8, 6, 8, 6)
+        self.toolbar.setSpacing(5)
         self._action_slot = QHBoxLayout()  # filled by add_actions()
         self._action_slot.setSpacing(4)
         self.toolbar.addLayout(self._action_slot)
@@ -58,6 +64,7 @@ class TimelinePanel(QWidget):
         self.gain_spin.setDecimals(1)
         self.gain_spin.setSingleStep(0.5)
         self.gain_spin.setSuffix(" dB")
+        self.gain_spin.setFixedWidth(92)
         self.gain_spin.setToolTip("Overall volume. Boost above 0 dB is applied on export; the preview cannot exceed 100%.")
         self.fade_in_spin = self._fade_spin("Fade In length")
         self.fade_out_spin = self._fade_spin("Fade Out length")
@@ -72,10 +79,10 @@ class TimelinePanel(QWidget):
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         for widget in (
-            _separator(self), QLabel("Mute:", self), self.mode_combo,
-            _separator(self), QLabel("Gain", self), self.gain_spin,
-            QLabel("Fade in", self), self.fade_in_spin,
-            QLabel("out", self), self.fade_out_spin,
+            _separator(self), _label("Mute", self), self.mode_combo,
+            _separator(self), _label("Gain", self), self.gain_spin,
+            _label("Fade in", self), self.fade_in_spin,
+            _label("out", self), self.fade_out_spin,
         ):
             self.toolbar.addWidget(widget)
         self.toolbar.addWidget(self.info_label, 1)
@@ -117,6 +124,7 @@ class TimelinePanel(QWidget):
         spin.setSingleStep(0.1)
         spin.setSuffix(" s")
         spin.setToolTip(tip)
+        spin.setFixedWidth(86)
         return spin
 
     def add_actions(self, actions: list[QAction | None]) -> None:

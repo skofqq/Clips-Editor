@@ -8,7 +8,7 @@ the transcript always line up with the original recording.
 from __future__ import annotations
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPolygonF, QWheelEvent
+from PySide6.QtGui import QColor, QLinearGradient, QMouseEvent, QPainter, QPen, QPolygonF, QWheelEvent
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from core.audio.waveform import Waveform
@@ -30,16 +30,17 @@ DRAG_THRESHOLD = 3
 MIN_PPS, MAX_PPS = 2.0, 2000.0  # pixels per second
 _TICK_STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
 
-C_BG = QColor("#18191c")
-C_TRACK = QColor("#202124")
-C_SEGMENT = QColor("#4a2fa8")
-C_SEGMENT_SEL = QColor("#7c4dff")
-C_WAVE = QColor("#35d0ff")
-C_WAVE_DIM = QColor("#3a4a52")
+C_BG = QColor("#0e0f12")
+C_RULER = QColor("#121317")
+C_TRACK = QColor("#16171c")
+C_SEGMENT = QColor("#4c2fb0")
+C_SEGMENT_SEL = QColor("#8b5cf6")
+C_WAVE = QColor("#38bdf8")
+C_WAVE_DIM = QColor("#2a3640")
 C_MUTE = QColor("#ff4d6d")
 C_BEEP = QColor("#ffa23a")
 C_PLAYHEAD = QColor("#ffffff")
-C_TEXT = QColor("#a9abb0")
+C_TEXT = QColor("#7d808c")
 C_SPEECH = QColor("#2e6b4f")
 C_WORD = QColor("#3fbf7f")
 C_SUGGEST = QColor("#ffd23a")  # pending censor suggestion
@@ -380,9 +381,15 @@ class TimelineView(QWidget):
         c = self.controller
         x_end = self.us_to_x(t.duration_us)
 
-        # Track backgrounds.
+        # Ruler band and rounded track backgrounds.
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.fillRect(QRectF(0, 0, w, RULER_H), C_RULER)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(C_TRACK)
+        track_w = min(w + 8.0, max(0.0, x_end))
         for y, height in ((VIDEO_Y, VIDEO_H), (AUDIO_Y, AUDIO_H), (MUTE_Y, MUTE_H)):
-            p.fillRect(QRectF(0, y, min(w, max(0.0, x_end)), height), C_TRACK)
+            p.drawRoundedRect(QRectF(0, y, track_w, height), 6, 6)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         # Ruler.
         seconds_per_tick = next((s for s in _TICK_STEPS if s * self._pps >= 70), _TICK_STEPS[-1])
@@ -409,9 +416,15 @@ class TimelineView(QWidget):
                 continue
             rect = QRectF(x0, VIDEO_Y, x1 - x0, VIDEO_H)
             selected = c.selected == (SEGMENT, index)
-            p.fillRect(rect, C_SEGMENT_SEL if selected else C_SEGMENT)
-            p.setPen(QPen(QColor("#b9a2ff") if selected else QColor("#7c4dff"), 1))
-            p.drawRect(rect.adjusted(0, 0, -1, -1))
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            base = C_SEGMENT_SEL if selected else C_SEGMENT
+            gradient.setColorAt(0, base.lighter(118))
+            gradient.setColorAt(1, base)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setBrush(gradient)
+            p.setPen(QPen(QColor("#d4c4ff") if selected else QColor("#7c5cf0"), 1))
+            p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             if rect.width() > 60:
                 p.setPen(QColor("#ffffff"))
                 p.drawText(
@@ -535,7 +548,7 @@ class TimelineView(QWidget):
             p.fillRect(QRectF(cursor, VIDEO_Y, x_end - cursor, SPEECH_Y + SPEECH_H - VIDEO_Y), dim)
 
         # Track captions.
-        p.setPen(QColor(255, 255, 255, 90))
+        p.setPen(QColor(255, 255, 255, 110))
         p.drawText(QPointF(6, AUDIO_Y + 13), "Audio")
         p.drawText(QPointF(6, MUTE_Y + 16), "Mute" if not t.mutes else "")
         if self._transcript is None:
@@ -553,8 +566,10 @@ class TimelineView(QWidget):
         # Playhead.
         x = self.us_to_x(c.playhead_us)
         if -2 <= x <= w + 2:
-            p.setPen(QPen(C_PLAYHEAD, 1))
-            p.drawLine(QLineF(x, 0, x, h))
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setPen(QPen(C_PLAYHEAD, 1.5))
+            p.drawLine(QLineF(x, 6, x, h))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(C_PLAYHEAD)
-            p.drawPolygon(QPolygonF([QPointF(x - 5, 0), QPointF(x + 5, 0), QPointF(x, 8)]))
+            p.drawRoundedRect(QRectF(x - 5, 1, 10, 9), 3, 3)
+            p.drawPolygon(QPolygonF([QPointF(x - 5, 8), QPointF(x + 5, 8), QPointF(x, 13)]))
