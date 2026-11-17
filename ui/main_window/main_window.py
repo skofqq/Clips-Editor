@@ -40,7 +40,15 @@ from core.projects.project import (
     save_project,
 )
 from core.timeline.model import Timeline
-from core.transcription.engine import TranscriptionError, WhisperEngine, downloaded_models, transcribe_file
+from core.transcription.engine import (
+    TranscriptionError,
+    WhisperEngine,
+    downloaded_models,
+    learned_words,
+    merge_learned,
+    transcribe_file,
+    transcribe_range,
+)
 from core.timeline.timebase import ms_to_us, seconds_to_us, us_to_ms
 from core.workers import CancellableTask, Worker
 from ui.censor.censor_controller import CensorController
@@ -304,6 +312,19 @@ class MainWindow(QMainWindow):
             self.config.transcribe_uncensored,
             self.config.transcribe_slang,
         )
+        self.transcript_panel.set_quality_preferences(
+            self.config.transcribe_clean_audio,
+            self.config.transcribe_vad,
+            self.config.transcribe_accurate,
+            self.config.transcribe_custom_model,
+        )
+        self.transcript_panel.set_learned(self.config.transcribe_learned)
+        self.transcript.corrected.connect(self.learn_correction)
+        self.transcript_panel.learned_cleared.connect(self.forget_learned)
+        self.transcript_panel.retranscribe_requested.connect(self.retranscribe_range)
+        self.timeline.selection_changed.connect(self._update_retranscribe)
+        self.timeline.playhead_changed.connect(lambda us: self._update_retranscribe())
+        self.transcript.changed.connect(self._update_retranscribe)
         self.censor.changed.connect(lambda: self._on_edit_changed(self.censor.last_change_key))
         self.censor.changed.connect(self._refresh_censor_view)
         self.censor.current_changed.connect(self._on_censor_current)
@@ -584,6 +605,9 @@ class MainWindow(QMainWindow):
         transcript = self.transcript.transcript
         if transcript is None:
             return
+        segment = transcript.segment(segment_id)
+        if segment is not None and 0 <= index < len(segment.words):
+            self.learn_correction(segment.words[index].text, text)
         transcript = transcript.with_word_text(segment_id, index, text)
         self._commit(transcript=transcript, censor=self._redetect(transcript), set_censor=True)
         self.censor_panel.rebuild()
@@ -688,11 +712,7 @@ class MainWindow(QMainWindow):
         if self._transcribe_task is not None:
             return
         # Remember the choices for next time.
-        self.config.transcribe_model = options.model
-        self.config.transcribe_language = options.language
-        self.config.transcribe_vocabulary = ", ".join(options.vocabulary)
-        self.config.transcribe_uncensored = options.uncensored
-        self.config.transcribe_slang = options.slang
+        self._remember_transcribe_preferences(options)
         task = CancellableTask(transcribe_file, self.engine, media.path, self.ffmpeg.ffmpeg, options)
         task.signals.progress.connect(self.transcript_panel.set_progress)
         task.signals.finished.connect(self._transcription_done)
@@ -704,6 +724,77 @@ class MainWindow(QMainWindow):
         self.dock_raise(self.transcript_dock)
         log.info("Transcribing %s with %s", media.path, options)
         self.pool.start(task)
+
+    def _remember_transcribe_preferences(self, options) -> None:
+        panel = self.transcript_panel
+        self.config.transcribe_model = options.model
+        self.config.transcribe_language = options.language
+        self.config.transcribe_vocabulary = panel.vocabulary_edit.text()  # without the learned words
+        self.config.transcribe_uncensored = options.uncensored
+        self.config.transcribe_slang = options.slang
+        quality = panel.quality_preferences()
+        self.config.transcribe_clean_audio = quality["clean"]
+        self.config.transcribe_vad = quality["vad"]
+        self.config.transcribe_accurate = quality["accurate"]
+        self.config.transcribe_custom_model = quality["custom_model"]
+
+    # ------------------------------------------------- learning / fragments
+    def learn_correction(self, old: str, new: str) -> None:
+        words = learned_words(old, new)
+        if words:
+            self.config.transcribe_learned = merge_learned(self.config.transcribe_learned, words)
+            self.transcript_panel.set_learned(self.config.transcribe_learned)
+
+    def forget_learned(self) -> None:
+        self.config.transcribe_learned = []
+        self.transcript_panel.set_learned([])
+
+    def _retranscribe_target(self) -> tuple[int, int] | None:
+        """Selected timeline range, else the phrase under the playhead."""
+        if self.timeline.range is not None:
+            return self.timeline.range
+        t = self.transcript.transcript
+        seg = t.segment_at(self.timeline.playhead_us) if t is not None else None
+        return (seg.start_us, seg.end_us) if seg is not None else None
+
+    def _update_retranscribe(self) -> None:
+        self.transcript_panel.set_range_available(self._retranscribe_target() is not None)
+
+    def retranscribe_range(self, options) -> None:
+        media, t = self.preview.media, self.transcript.transcript
+        target = self._retranscribe_target()
+        if media is None or t is None or target is None or self.ffmpeg is None or self._transcribe_task is not None:
+            return
+        start, end = t.covering_range(*target)
+        # Decode a little more audio so words at the edges are not cut, but replace only
+        # the covered phrases: neighbours stay as they are.
+        pad = 200_000
+        audio_start, audio_end = max(0, start - pad), min(t.duration_us or end + pad, end + pad)
+        self._remember_transcribe_preferences(options)
+        task = CancellableTask(
+            transcribe_range, self.engine, media.path, self.ffmpeg.ffmpeg, options, audio_start, audio_end
+        )
+        task.signals.progress.connect(self.transcript_panel.set_progress)
+        task.signals.finished.connect(lambda segs, s=start, e=end, p=media.path: self._range_done(p, s, e, segs))
+        task.signals.failed.connect(self._transcription_failed)
+        task.signals.cancelled.connect(self._transcription_cancelled)
+        self._transcribe_task = task
+        self._transcribe_path = media.path
+        self.transcript_panel.set_busy(True, "Re-transcribing the selection…")
+        log.info("Re-transcribing %s %d-%d us with %s", media.path, start, end, options)
+        self.pool.start(task)
+
+    def _range_done(self, path, start_us: int, end_us: int, segments) -> None:
+        self._finish_transcription()
+        media, t = self.preview.media, self.transcript.transcript
+        if media is None or media.path != path or t is None:
+            self.transcript_panel.set_busy(False, "The clip changed; the result was dropped.")
+            return
+        segments = tuple(s for s in segments if start_us <= (s.start_us + s.end_us) // 2 < end_us)
+        updated = t.with_range_replaced(start_us, end_us, segments)
+        self.transcript.set_transcript(updated)  # undoable
+        text = " ".join(s.text for s in segments) or "(no speech found)"
+        self.transcript_panel.set_busy(False, f"Re-transcribed {len(segments)} phrase(s): {text[:160]}")
 
     def dock_raise(self, dock: QDockWidget) -> None:
         dock.show()

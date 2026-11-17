@@ -57,6 +57,23 @@ class TranscribeOptions:
     vocabulary: tuple[str, ...] = ()  # nicknames, slang: biases recognition towards them
     uncensored: bool = True  # prime the model to write swear words as spoken
     slang: bool = True  # prime the model with gaming / streaming slang
+    clean_audio: bool = True  # band-pass + loudness levelling before recognition
+    vad_threshold: float = 0.5  # Silero speech probability; lower catches quieter speech
+    accurate: bool = False  # wider beam search: slower, a little more accurate
+
+
+VAD_LEVELS = {"normal": 0.5, "sensitive": 0.3}
+# Speech lives in roughly 80 Hz – 8 kHz; game rumble and hiss outside it only
+# confuse the model.
+AUDIO_CLEANUP = (
+    "highpass=f=70,lowpass=f=7800,"
+    # Shouting: squash peaks so clipped, overloaded words become readable...
+    "acompressor=threshold=-20dB:ratio=4:attack=5:release=150:makeup=2,"
+    # ...and lift quiet speech under loud game audio.
+    "dynaudnorm=f=250:g=15:m=12,"
+    "alimiter=limit=0.9:level=disabled"
+)
+MAX_LEARNED_WORDS = 60
 
 
 Progress = Callable[[float, str], None]  # fraction 0..1, message
@@ -232,13 +249,26 @@ def resolve_device(requested: str) -> tuple[list[tuple[str, str]], str]:
     return [("cuda", "float16"), ("cuda", "int8_float16"), cpu], ""
 
 
-def decode_audio(path: Path, ffmpeg: Path, audio_stream: int = 0, cancel: threading.Event | None = None) -> np.ndarray:
-    """Decode an audio track to 16 kHz mono float32 samples."""
-    cmd = [
-        str(ffmpeg), "-v", "error", "-nostdin", "-i", str(path),
-        "-map", f"0:a:{audio_stream}", "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE),
-        "-f", "f32le", "-",
-    ]
+def decode_audio(
+    path: Path,
+    ffmpeg: Path,
+    audio_stream: int = 0,
+    cancel: threading.Event | None = None,
+    clean: bool = False,
+    start_us: int | None = None,
+    end_us: int | None = None,
+) -> np.ndarray:
+    """Decode an audio track (or a part of it) to 16 kHz mono float32 samples."""
+    cmd = [str(ffmpeg), "-v", "error", "-nostdin"]
+    if start_us is not None:
+        cmd += ["-ss", f"{start_us / 1e6:.6f}"]
+    cmd += ["-i", str(path)]
+    if end_us is not None:
+        cmd += ["-t", f"{(end_us - (start_us or 0)) / 1e6:.6f}"]
+    cmd += ["-map", f"0:a:{audio_stream}", "-vn", "-ac", "1"]
+    if clean:
+        cmd += ["-af", AUDIO_CLEANUP]
+    cmd += ["-ar", str(SAMPLE_RATE), "-f", "f32le", "-"]
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **no_window_kwargs())
     except OSError as exc:
@@ -346,11 +376,20 @@ class WhisperEngine:
             audio,
             language=language,
             task="transcribe",
-            beam_size=options.beam_size,
+            beam_size=max(options.beam_size, 8) if options.accurate else options.beam_size,
+            best_of=5,
+            patience=1.5 if options.accurate else 1.0,
             word_timestamps=True,
             vad_filter=options.vad,
-            vad_parameters={"min_silence_duration_ms": 500},
+            # speech_pad_ms keeps word edges that the detector would clip.
+            vad_parameters={
+                "threshold": options.vad_threshold,
+                "min_silence_duration_ms": 500,
+                "speech_pad_ms": 300,
+            },
             condition_on_previous_text=False,
+            # Skip text "heard" in long silent stretches (typical hallucinations).
+            hallucination_silence_threshold=2.0,
             # hotwords are added to every 30 s window, so the context holds for
             # the whole clip. Passing the same text as initial_prompt too would
             # double it in the first window and overflow the decoder.
@@ -418,10 +457,73 @@ def transcribe_file(
     audio_stream: int = 0,
 ) -> Transcript:
     progress(0.0, "Decoding audio…")
-    audio = decode_audio(path, ffmpeg, audio_stream, cancel)
+    audio = decode_audio(path, ffmpeg, audio_stream, cancel, clean=options.clean_audio)
     if audio.size == 0:
         raise TranscriptionError("The audio track is empty.")
     return engine.transcribe(audio, options, progress, cancel)
+
+
+def transcribe_range(
+    engine: WhisperEngine,
+    path: Path,
+    ffmpeg: Path,
+    options: TranscribeOptions,
+    start_us: int,
+    end_us: int,
+    progress: Progress = lambda f, m: None,
+    cancel: threading.Event | None = None,
+    audio_stream: int = 0,
+) -> tuple[Segment, ...]:
+    """Recognise only ``start_us``–``end_us``; segments come back in clip time."""
+    progress(0.0, "Decoding audio…")
+    audio = decode_audio(path, ffmpeg, audio_stream, cancel, options.clean_audio, start_us, end_us)
+    if audio.size == 0:
+        raise TranscriptionError("No audio in the selected range.")
+    part = engine.transcribe(audio, options, progress, cancel)
+    return shift_segments(part.segments, start_us)
+
+
+def shift_segments(segments, offset_us: int) -> tuple[Segment, ...]:
+    from dataclasses import replace as _replace
+
+    return tuple(
+        _replace(
+            s,
+            start_us=s.start_us + offset_us,
+            end_us=s.end_us + offset_us,
+            words=tuple(_replace(w, start_us=w.start_us + offset_us, end_us=w.end_us + offset_us) for w in s.words),
+        )
+        for s in segments
+    )
+
+
+_WORD = re.compile(r"[\w@'’-]+", re.UNICODE)
+
+
+def learned_words(old_text: str, new_text: str) -> list[str]:
+    """Words the user typed in a correction that were not there before."""
+    before = {w.casefold() for w in _WORD.findall(old_text)}
+    found: list[str] = []
+    for word in _WORD.findall(new_text):
+        word = word.strip("'’-")
+        if len(word) < 3 or word.isdigit() or word.casefold() in before:
+            continue
+        if word.casefold() not in {f.casefold() for f in found}:
+            found.append(word)
+    return found
+
+
+def merge_learned(learned: list[str], new: list[str], limit: int = MAX_LEARNED_WORDS) -> list[str]:
+    """Most recent first, without duplicates, capped."""
+    result: list[str] = []
+    for word in list(new) + list(learned):
+        if word.casefold() not in {r.casefold() for r in result}:
+            result.append(word)
+    return result[:limit]
+
+
+def is_custom_model(model: str) -> bool:
+    return model not in MODEL_SIZES
 
 
 def downloaded_models(models_dir: Path) -> list[str]:

@@ -9,6 +9,7 @@ from core.transcription.model import Transcript
 
 class TranscriptController(QObject):
     changed = Signal()
+    corrected = Signal(str, str)  # old text, new text of a hand correction
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -29,8 +30,19 @@ class TranscriptController(QObject):
 
     def edit_segment_text(self, segment_id: int, text: str) -> bool:
         t = self._transcript
-        return t is not None and self.set_transcript(t.with_segment_text(segment_id, text))
+        seg = t.segment(segment_id) if t is not None else None
+        if seg is None or not self.set_transcript(t.with_segment_text(segment_id, text)):
+            return False
+        self.corrected.emit(seg.text, text)
+        return True
 
     def edit_word_text(self, segment_id: int, index: int, text: str) -> bool:
         t = self._transcript
-        return t is not None and self.set_transcript(t.with_word_text(segment_id, index, text))
+        seg = t.segment(segment_id) if t is not None else None
+        if seg is None or not 0 <= index < len(seg.words):
+            return False
+        old = seg.words[index].text
+        if not self.set_transcript(t.with_word_text(segment_id, index, text)):
+            return False
+        self.corrected.emit(old, text)
+        return True

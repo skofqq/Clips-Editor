@@ -133,6 +133,23 @@ class Transcript:
         updated = replace(segment, words=tuple(words), text=" ".join(w.text for w in words), edited=True)
         return self._replace_segment(updated)
 
+    def with_range_replaced(self, start_us: int, end_us: int, new_segments) -> "Transcript":
+        """Replace every segment overlapping ``start_us``–``end_us`` by ``new_segments``.
+
+        Segment ids are renumbered in time order.
+        """
+        kept = [s for s in self.segments if s.end_us <= start_us or s.start_us >= end_us]
+        merged = sorted(kept + list(new_segments), key=lambda s: (s.start_us, s.end_us))
+        segments = tuple(replace(s, id=i) for i, s in enumerate(merged, start=1))
+        return replace(self, segments=segments)
+
+    def covering_range(self, start_us: int, end_us: int) -> tuple[int, int]:
+        """``start_us``–``end_us`` widened to whole segments it touches."""
+        touched = [s for s in self.segments if s.end_us > start_us and s.start_us < end_us]
+        if not touched:
+            return start_us, end_us
+        return min(start_us, touched[0].start_us), max(end_us, touched[-1].end_us)
+
     def _replace_segment(self, updated: Segment) -> "Transcript":
         segments = tuple(updated if s.id == updated.id else s for s in self.segments)
         return replace(self, segments=segments)

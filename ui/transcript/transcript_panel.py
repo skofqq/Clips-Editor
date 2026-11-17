@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
@@ -21,7 +23,14 @@ from PySide6.QtWidgets import (
 )
 
 from core.timeline.timebase import format_timecode
-from core.transcription.engine import AUTO, DEFAULT_MODEL, MODEL_SIZES, TranscribeOptions, parse_vocabulary
+from core.transcription.engine import (
+    AUTO,
+    DEFAULT_MODEL,
+    MODEL_SIZES,
+    VAD_LEVELS,
+    TranscribeOptions,
+    parse_vocabulary,
+)
 from core.transcription.model import LANGUAGES, Transcript
 from ui.transcript.transcript_controller import TranscriptController
 
@@ -39,6 +48,8 @@ MODEL_HINTS = {
     "large-v3": "most accurate, slow on CPU (3 GB)",
     "large-v3-turbo": "near large-v3 accuracy, faster (1.6 GB)",
 }
+CUSTOM_MODEL = "__custom__"
+VAD_OFF = "off"
 APPROX_COLOR = QColor("#85878c")
 
 
@@ -48,6 +59,8 @@ class TranscriptPanel(QWidget):
     seek_requested = Signal(int)  # microseconds
     word_selected = Signal(int, int)  # start_us, end_us
     clear_requested = Signal()
+    retranscribe_requested = Signal(object)  # TranscribeOptions, for the selected range
+    learned_cleared = Signal()
 
     def __init__(self, controller: TranscriptController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -57,6 +70,8 @@ class TranscriptPanel(QWidget):
         self._busy = False
         self._has_audio = False
         self._current_segment: int | None = None
+        self._learned: list[str] = []
+        self._range_available = False
 
         self.language_combo = QComboBox(self)
         self.language_combo.addItem("Auto-detect", AUTO)
@@ -65,7 +80,14 @@ class TranscriptPanel(QWidget):
         self.model_combo = QComboBox(self)
         for size in MODEL_SIZES:
             self.model_combo.addItem(size, size)
+        self.model_combo.addItem("Custom model…", CUSTOM_MODEL)
         self.model_combo.setCurrentIndex(self.model_combo.findData(DEFAULT_MODEL))
+        self.custom_model_edit = QLineEdit(self)
+        self.custom_model_edit.setPlaceholderText("Folder of a CTranslate2 Whisper model, or a Hugging Face id")
+        self.custom_model_edit.setToolTip(
+            "For example a Whisper model fine-tuned on Russian, converted for faster-whisper.\n"
+            "A Hugging Face id is downloaded on first use."
+        )
         self.device_combo = QComboBox(self)
         self.device_combo.addItem("Auto (GPU if available)", AUTO)
         self.device_combo.addItem("GPU (CUDA)", "cuda")
@@ -91,10 +113,33 @@ class TranscriptPanel(QWidget):
             "instead of being 'corrected' into ordinary words. Add your own words above."
         )
 
+        self.clean_check = QCheckBox("Clean up audio (cut rumble and hiss, lift quiet speech)", self)
+        self.clean_check.setChecked(True)
+        self.vad_combo = QComboBox(self)
+        self.vad_combo.addItem("Speech detection: normal", "normal")
+        self.vad_combo.addItem("Speech detection: sensitive (quiet speech)", "sensitive")
+        self.vad_combo.addItem("Speech detection: off (whole audio)", VAD_OFF)
+        self.vad_combo.setToolTip(
+            "Skips parts without speech. 'Sensitive' keeps quiet or short phrases;\n"
+            "'off' sends everything to the model (slower, more risk of invented text in silence)."
+        )
+        self.accurate_check = QCheckBox("Accurate (slower)", self)
+        self.accurate_check.setToolTip("Searches more alternatives for every phrase.")
+        self.learned_label = QLabel(self)
+        self.learned_label.setObjectName("muted")
+        self.learned_label.setWordWrap(True)
+        self.learned_clear = QPushButton("Forget", self)
+        self.learned_clear.setToolTip("Forget the words learned from your corrections")
+
         self.transcribe_button = QPushButton("Transcribe", self)
         self.transcribe_button.setObjectName("primary")
         self.cancel_button = QPushButton("Cancel", self)
         self.clear_button = QPushButton("Clear", self)
+        self.retranscribe_button = QPushButton("Re-transcribe selection", self)
+        self.retranscribe_button.setToolTip(
+            "Recognise only the selected range (or the phrase under the playhead) again\n"
+            "with the chosen model and the accurate search. Select a range on the timeline first."
+        )
         self.progress = QProgressBar(self)
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
@@ -135,10 +180,21 @@ class TranscriptPanel(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
         layout.addLayout(options)
+        layout.addWidget(self.custom_model_edit)
         layout.addWidget(self.vocabulary_edit)
+        learned = QHBoxLayout()
+        learned.addWidget(self.learned_label, 1)
+        learned.addWidget(self.learned_clear)
+        layout.addLayout(learned)
         layout.addWidget(self.uncensored_check)
         layout.addWidget(self.slang_check)
+        layout.addWidget(self.clean_check)
+        quality = QHBoxLayout()
+        quality.addWidget(self.vad_combo, 1)
+        quality.addWidget(self.accurate_check)
+        layout.addLayout(quality)
         layout.addLayout(buttons)
+        layout.addWidget(self.retranscribe_button)
         layout.addWidget(self.progress)
         layout.addWidget(self.status_label)
         layout.addWidget(self.info_label)
@@ -148,31 +204,87 @@ class TranscriptPanel(QWidget):
         self.transcribe_button.clicked.connect(lambda: self.transcribe_requested.emit(self.options()))
         self.cancel_button.clicked.connect(self.cancel_requested)
         self.clear_button.clicked.connect(self.clear_requested)
+        self.retranscribe_button.clicked.connect(
+            lambda: self.retranscribe_requested.emit(replace(self.options(), accurate=True))
+        )
+        self.learned_clear.clicked.connect(self.learned_cleared)
         self.model_combo.currentIndexChanged.connect(self._update_model_tip)
+        self.model_combo.currentIndexChanged.connect(self._update_custom_model)
+        self.custom_model_edit.textChanged.connect(lambda: self._update_buttons())
         self.tree.itemClicked.connect(self._on_item_clicked)
         self.tree.itemChanged.connect(self._on_item_changed)
         self.search.textChanged.connect(self._apply_filter)
         controller.changed.connect(self.rebuild)
 
         self._update_model_tip()
+        self._update_custom_model()
+        self.set_learned([])
         self.set_busy(False)
         self.rebuild()
 
     # ------------------------------------------------------------ options
+    def model_name(self) -> str:
+        data = self.model_combo.currentData()
+        return self.custom_model_edit.text().strip() if data == CUSTOM_MODEL else data
+
     def options(self) -> TranscribeOptions:
+        vocabulary = parse_vocabulary(self.vocabulary_edit.text())
+        known = {v.casefold() for v in vocabulary}
+        # The user's own list first: if the prompt is too long, learned words go first.
+        vocabulary += tuple(w for w in self._learned if w.casefold() not in known)
+        vad = self.vad_combo.currentData()
         return TranscribeOptions(
-            model=self.model_combo.currentData(),
+            model=self.model_name(),
             language=self.language_combo.currentData(),
             device=self.device_combo.currentData(),
-            vocabulary=parse_vocabulary(self.vocabulary_edit.text()),
+            vocabulary=vocabulary,
             uncensored=self.uncensored_check.isChecked(),
             slang=self.slang_check.isChecked(),
+            clean_audio=self.clean_check.isChecked(),
+            vad=vad != VAD_OFF,
+            vad_threshold=VAD_LEVELS.get(vad, VAD_LEVELS["normal"]),
+            accurate=self.accurate_check.isChecked(),
         )
+
+    def set_quality_preferences(self, clean: bool, vad: str, accurate: bool, custom_model: str) -> None:
+        self.clean_check.setChecked(clean)
+        index = self.vad_combo.findData(vad)
+        self.vad_combo.setCurrentIndex(max(0, index))
+        self.accurate_check.setChecked(accurate)
+        self.custom_model_edit.setText(custom_model)
+
+    def quality_preferences(self) -> dict:
+        return {
+            "clean": self.clean_check.isChecked(),
+            "vad": self.vad_combo.currentData(),
+            "accurate": self.accurate_check.isChecked(),
+            "custom_model": self.custom_model_edit.text().strip(),
+        }
+
+    def set_learned(self, words: list[str]) -> None:
+        self._learned = list(words)
+        if words:
+            shown = ", ".join(words[:8]) + ("…" if len(words) > 8 else "")
+            self.learned_label.setText(f"Learned from your corrections ({len(words)}): {shown}")
+        else:
+            self.learned_label.setText("Words you correct in the transcript are remembered for next time.")
+        self.learned_clear.setVisible(bool(words))
+
+    def set_range_available(self, available: bool) -> None:
+        self._range_available = available
+        self._update_buttons()
+
+    def _update_custom_model(self) -> None:
+        self.custom_model_edit.setVisible(self.model_combo.currentData() == CUSTOM_MODEL)
+        self._update_buttons()
 
     def set_preferences(
         self, model: str, language: str, vocabulary: str, uncensored: bool, slang: bool = True
     ) -> None:
         index = self.model_combo.findData(model)
+        if index < 0 and ("/" in model or "\\" in model):
+            index = self.model_combo.findData(CUSTOM_MODEL)
+            self.custom_model_edit.setText(model)
         if index >= 0:
             self.model_combo.setCurrentIndex(index)
         index = self.language_combo.findData(language)
@@ -185,11 +297,16 @@ class TranscriptPanel(QWidget):
     def set_downloaded_models(self, names: list[str]) -> None:
         for i in range(self.model_combo.count()):
             size = self.model_combo.itemData(i)
+            if size == CUSTOM_MODEL:
+                continue
             self.model_combo.setItemText(i, f"{size}  ✓" if size in names else size)
         self._update_model_tip()
 
     def _update_model_tip(self) -> None:
         size = self.model_combo.currentData()
+        if size == CUSTOM_MODEL:
+            self.model_combo.setToolTip("Your own faster-whisper (CTranslate2) model")
+            return
         downloaded = "✓" in self.model_combo.currentText()
         note = "" if downloaded else " · downloads on first use"
         self.model_combo.setToolTip(f"{size}: {MODEL_HINTS.get(size, '')}{note}")
@@ -201,11 +318,17 @@ class TranscriptPanel(QWidget):
 
     def _update_buttons(self) -> None:
         busy = self._busy
-        self.transcribe_button.setEnabled(not busy and self._has_audio)
+        has_model = bool(self.model_name()) if hasattr(self, "custom_model_edit") else True
+        self.transcribe_button.setEnabled(not busy and self._has_audio and has_model)
+        if hasattr(self, "retranscribe_button"):
+            self.retranscribe_button.setEnabled(
+                not busy and has_model and self._range_available and self.controller.transcript is not None
+            )
         self.cancel_button.setVisible(busy)
         self.clear_button.setEnabled(not busy and self.controller.transcript is not None)
         for combo in (self.language_combo, self.model_combo, self.device_combo, self.vocabulary_edit,
-                      self.uncensored_check, self.slang_check):
+                      self.uncensored_check, self.slang_check, self.clean_check, self.vad_combo,
+                      self.accurate_check, self.custom_model_edit):
             combo.setEnabled(not busy)
         self.progress.setVisible(busy)
 

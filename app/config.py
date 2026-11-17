@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +47,11 @@ class AppConfig:
     transcribe_vocabulary: str = ""  # nicknames / slang, comma separated
     transcribe_uncensored: bool = True
     transcribe_slang: bool = True
+    transcribe_clean_audio: bool = True
+    transcribe_vad: str = "normal"  # normal | sensitive | off
+    transcribe_accurate: bool = False
+    transcribe_custom_model: str = ""  # folder or Hugging Face id
+    transcribe_learned: list[str] = field(default_factory=list)  # words from the user's corrections
     transcribe_model: str = ""
     transcribe_language: str = ""
     export_dir: str = ""  # last folder a video was exported to
@@ -98,14 +103,18 @@ class AppConfig:
         for key in (
             "ffmpeg_dir", "last_import_dir", "window_geometry", "window_state",
             "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
-            "youtube_active",
+            "youtube_active", "transcribe_vad", "transcribe_custom_model",
         ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
         if isinstance(raw.get("transcribe_uncensored"), bool):
             config.transcribe_uncensored = raw["transcribe_uncensored"]
-        if isinstance(raw.get("transcribe_slang"), bool):
-            config.transcribe_slang = raw["transcribe_slang"]
+        for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate"):
+            if isinstance(raw.get(key), bool):
+                setattr(config, key, raw[key])
+        learned = raw.get("transcribe_learned")
+        if isinstance(learned, list):
+            config.transcribe_learned = [w for w in learned if isinstance(w, str)][:100]
         for key in ("export_settings", "youtube_defaults"):
             if isinstance(raw.get(key), dict):
                 setattr(config, key, raw[key])

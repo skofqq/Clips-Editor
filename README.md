@@ -88,6 +88,24 @@ profanity is transcribed literally instead of being softened.
 Twitch words (катка, рофл, клатч, GG, KEKW…). Larger
 models (`large-v3`, `large-v3-turbo`) recognise Russian noticeably better.
 
+Recognition quality options in the Transcript panel:
+
+- **Clean up audio** (on by default): before recognition the audio is
+  filtered, compressed and normalised, so shouting is not clipped and quiet
+  speech is lifted. Only the copy sent to Whisper changes, not your export.
+- **Speech detection**: *Sensitive* catches quiet or overlapped speech that
+  *Normal* skips; *Off* sends all audio (slower, may invent text in music).
+  Long silences no longer produce invented phrases.
+- **Accurate (slower)**: a wider beam search, roughly 1.5–2× slower.
+- **Learned words**: every word you type when correcting the transcript or
+  a censor word is remembered and suggested to the model next time.
+  *Forget* clears the list.
+- **Re-transcribe selection**: select a range on the timeline (or put the
+  playhead on a phrase) and re-recognise just those phrases with accurate
+  settings, for example after adding a nickname. It can be undone.
+- **Custom model…**: a folder with a faster-whisper (CTranslate2) model or
+  a Hugging Face id such as `user/whisper-large-v3-ru-ct2`.
+
 For NVIDIA GPU acceleration install the CUDA libraries once (≈ 1 GB):
 
 double-click `install_gpu.bat` (or run `.venv\Scripts\pip install -r requirements-gpu.txt`).

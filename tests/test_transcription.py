@@ -488,3 +488,106 @@ def test_panel_vocabulary_options(qapp):
     assert not panel.options().slang
     panel.set_preferences("unknown-model", "xx", "", True)
     assert panel.options().model == "medium" and panel.options().uncensored
+
+
+# ------------------------------------------------------- recognition quality
+
+def test_decode_audio_cleanup_and_range(sample_clips, ffmpeg_paths):
+    ffmpeg = ffmpeg_paths.ffmpeg
+    plain = decode_audio(sample_clips["mp4"], ffmpeg)
+    clean = decode_audio(sample_clips["mp4"], ffmpeg, clean=True)
+    assert len(clean) == pytest.approx(len(plain), rel=0.05)
+    assert 0.0 < np.abs(clean).max() <= 0.95  # limiter keeps it under 0.9 (+ resampling slack)
+    part = decode_audio(sample_clips["mp4"], ffmpeg, start_us=500_000, end_us=1_500_000)
+    assert len(part) == pytest.approx(SAMPLE_RATE, rel=0.05)
+
+
+def test_engine_quality_options(fake_whisper, tmp_path, monkeypatch):
+    monkeypatch.setattr(engine_mod, "cuda_available", lambda: False)
+    engine = WhisperEngine(tmp_path)
+    audio = np.zeros(SAMPLE_RATE, dtype=np.float32)
+    engine.transcribe(audio, TranscribeOptions(language="ru"))
+    kwargs = FakeModel.last_kwargs
+    assert kwargs["vad_parameters"]["threshold"] == 0.5
+    assert kwargs["hallucination_silence_threshold"] == 2.0
+    normal_beam = kwargs["beam_size"]
+    engine.transcribe(audio, TranscribeOptions(language="ru", accurate=True, vad_threshold=0.3))
+    kwargs = FakeModel.last_kwargs
+    assert kwargs["beam_size"] > normal_beam and kwargs["vad_parameters"]["threshold"] == 0.3
+
+
+def test_transcribe_range_shifts_to_clip_time(sample_clips, ffmpeg_paths, fake_whisper, tmp_path, monkeypatch):
+    monkeypatch.setattr(engine_mod, "cuda_available", lambda: False)
+    segs = engine_mod.transcribe_range(
+        WhisperEngine(tmp_path), sample_clips["mp4"], ffmpeg_paths.ffmpeg,
+        TranscribeOptions(device="cpu"), 500_000, 1_500_000,
+    )
+    assert segs[0].start_us == pytest.approx(600_000, abs=20_000)
+    assert segs[0].words[0].start_us == segs[0].start_us
+    assert segs[-1].end_us == pytest.approx(1_500_000, abs=50_000)
+
+
+def test_transcript_range_replace_and_cover():
+    t = sample_transcript()  # segments at 2.12-3.9, 4.5-7.0, 7.23-8.8
+    assert t.covering_range(5 * S, 6 * S) == (4_500_000, 7_000_000)
+    assert t.covering_range(3 * S, 5 * S) == (2_120_000, 7_000_000)
+    assert t.covering_range(9 * S, 9_500_000) == (9 * S, 9_500_000)
+    new = Segment(99, 4_600_000, 6_900_000, "сейчас покажу интересный момент", WORD_TIMING, ())
+    updated = t.with_range_replaced(4_500_000, 7_000_000, [new])
+    assert [s.text for s in updated.segments][1] == "сейчас покажу интересный момент"
+    assert [s.id for s in updated.segments] == [1, 2, 3]
+    assert len(updated.segments) == 3 and updated.segments[0] == t.segments[0]
+
+
+def test_learned_words_from_corrections():
+    assert engine_mod.learned_words("привет сосавот", "привет sasavot") == ["sasavot"]
+    assert engine_mod.learned_words("a b", "ок 123 ok") == []  # too short / digits
+    assert engine_mod.learned_words("x", "Helin helin HELIN") == ["Helin"]
+    merged = engine_mod.merge_learned(["one", "two"], ["Two", "three"], limit=3)
+    assert merged == ["Two", "three", "one"]
+
+
+def test_panel_quality_and_custom_model(qapp):
+    from ui.transcript.transcript_panel import CUSTOM_MODEL
+
+    panel = TranscriptPanel(TranscriptController())
+    panel.set_quality_preferences(False, "sensitive", True, "")
+    o = panel.options()
+    assert not o.clean_audio and o.vad and o.vad_threshold == 0.3 and o.accurate
+    panel.set_quality_preferences(True, "off", False, "")
+    o = panel.options()
+    assert o.clean_audio and not o.vad and not o.accurate
+    assert panel.quality_preferences()["vad"] == "off"
+    panel.set_preferences("someone/whisper-ru-ct2", "ru", "sasavot", False)
+    assert panel.model_combo.currentData() == CUSTOM_MODEL
+    assert panel.options().model == "someone/whisper-ru-ct2"
+    panel.set_learned(["helin139", "Sasavot"])
+    assert panel.options().vocabulary == ("sasavot", "helin139")  # learned appended, no duplicates
+    assert "helin139" in panel.learned_label.text() and not panel.learned_clear.isHidden()
+
+
+def test_window_learns_and_retranscribes_range(window):
+    window.config.transcribe_learned = []
+    window.transcript_panel.transcribe_button.click()
+    assert _wait(lambda: window.transcript.transcript is not None)
+    before = window.transcript.transcript
+
+    window.transcript.edit_segment_text(1, "hello sasavot")
+    assert "sasavot" in window.config.transcribe_learned
+    assert "sasavot" in window.transcript_panel.options().vocabulary
+
+    window.timeline.set_range(1_100_000, 1_400_000)
+    window._update_retranscribe()
+    assert window.transcript_panel.retranscribe_button.isEnabled()
+    window.retranscribe_range(window.transcript_panel.options())
+    assert _wait(lambda: window._transcribe_task is None and "Re-transcribed" in
+                 window.transcript_panel.status_label.text())
+    after = window.transcript.transcript
+    assert after.segments[0].text == "hello sasavot"  # untouched outside the range
+    assert after.segments[-1].start_us > 1_000_000 and after != before
+    window.act_undo.trigger()
+    assert window.transcript.transcript.segments[0].text == "hello sasavot"
+    assert window.transcript.transcript.segments[-1].text == "second half"
+
+    window.forget_learned()
+    assert window.config.transcribe_learned == [] and window.transcript_panel.learned_clear.isHidden()
