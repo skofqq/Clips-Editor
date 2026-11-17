@@ -23,6 +23,29 @@ Regions (Silence or Beep), overall gain, Fade In / Fade Out, snapping,
 undo/redo. The preview plays the edit: cuts are skipped and mutes,
 gain and fades are audible. Sources are never modified.
 
+**Phase 4 — Speech transcription** (done): local faster-whisper with
+Silero VAD, Russian / English / auto-detect, word-level timestamps,
+Transcript panel (click to seek, double-click to correct, search), and a
+Speech track on the timeline. Words without reliable timing are marked
+`≈` and never presented as exact. Runs on the GPU when CUDA is available
+and falls back to the CPU otherwise.
+
+### Speech recognition
+
+Open the **Transcript** tab (next to Properties), pick the language and
+model, press **Transcribe**. The model is downloaded once into
+`%LOCALAPPDATA%\TwitchShortsStudio\models` (`small` ≈ 480 MB).
+Clicking a word on the Speech track selects it on the timeline, so `M`
+mutes exactly that word.
+
+For NVIDIA GPU acceleration install the CUDA libraries once (≈ 1 GB):
+
+```bat
+.venv\Scripts\pip install -r requirements-gpu.txt
+```
+
+Without them the app uses the CPU automatically.
+
 ### Editing on the timeline
 
 | Action | How |

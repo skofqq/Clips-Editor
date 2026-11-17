@@ -14,13 +14,15 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 from core.audio.waveform import Waveform
 from core.timeline.model import BEEP, Timeline
 from core.timeline.timebase import US, format_timecode
+from core.transcription.model import Transcript
 from ui.timeline.timeline_controller import MUTE, SEGMENT, TimelineController
 
 RULER_H = 22
 VIDEO_Y, VIDEO_H = 26, 30
 AUDIO_Y, AUDIO_H = 60, 72
 MUTE_Y, MUTE_H = 136, 24
-CONTENT_H = MUTE_Y + MUTE_H + 6
+SPEECH_Y, SPEECH_H = 164, 22
+CONTENT_H = SPEECH_Y + SPEECH_H + 6
 EDGE_GRAB = 6  # px within which an edge is grabbed
 SNAP_PX = 8
 DRAG_THRESHOLD = 3
@@ -37,17 +39,21 @@ C_MUTE = QColor("#ff4d6d")
 C_BEEP = QColor("#ffa23a")
 C_PLAYHEAD = QColor("#ffffff")
 C_TEXT = QColor("#a9abb0")
+C_SPEECH = QColor("#2e6b4f")
+C_WORD = QColor("#3fbf7f")
 
 
 class TimelineView(QWidget):
     seek_requested = Signal(int)  # microseconds
     view_changed = Signal()  # zoom or scroll changed
     gesture_finished = Signal()  # a drag ended (closes the undo step)
+    word_clicked = Signal(int, int)  # start_us, end_us of an exactly timed word
 
     def __init__(self, controller: TimelineController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.controller = controller
         self._waveform: Waveform | None = None
+        self._transcript: Transcript | None = None
         self._pps = 100.0
         self._scroll_us = 0
         self._fit_pending = True
@@ -81,6 +87,24 @@ class TimelineView(QWidget):
         self._waveform = waveform
         self._wave_cache = None
         self.update()
+
+    def set_transcript(self, transcript: Transcript | None) -> None:
+        self._transcript = transcript
+        self.update()
+
+    def speech_item_at(self, x: float):
+        """(start_us, end_us, exact) of the word, else segment, under ``x``."""
+        t = self._transcript
+        if t is None:
+            return None
+        us = self.x_to_us(x)
+        segment = t.segment_at(us)
+        if segment is None:
+            return None
+        word = next((w for w in segment.words if w.exact and w.start_us <= us < w.end_us), None)
+        if word is not None:
+            return word.start_us, word.end_us, True
+        return segment.start_us, segment.end_us, False
 
     def request_fit(self) -> None:
         """Fit the whole clip on the next layout (used when a clip is loaded)."""
@@ -163,6 +187,10 @@ class TimelineView(QWidget):
             targets.update((m.start_us, m.end_us))
         if self.controller.range:
             targets.update(self.controller.range)
+        if self._transcript is not None:
+            for word in self._transcript.words():
+                if word.exact:
+                    targets.update((word.start_us, word.end_us))
         targets -= set(exclude)
         if not targets:
             return us
@@ -177,6 +205,9 @@ class TimelineView(QWidget):
             return {"area": "none"}
         if y < RULER_H:
             return {"area": "ruler"}
+        if SPEECH_Y <= y <= SPEECH_Y + SPEECH_H:
+            item = self.speech_item_at(x)
+            return {"area": "speech", "item": item} if item else {"area": "speech_track"}
         if MUTE_Y <= y <= MUTE_Y + MUTE_H:
             # Edges first, so that a short region can still be resized.
             for m in t.mutes:
@@ -292,7 +323,15 @@ class TimelineView(QWidget):
         if not drag["moved"]:
             # A plain click: move the playhead and select what was clicked.
             area = hit["area"]
-            if area in ("segment", "gap", "mute_track"):
+            if area == "speech":
+                start, end, exact = hit["item"]
+                self.seek_requested.emit(start)
+                if exact:  # select the word so it can be muted with M
+                    self.controller.set_range(start, end)
+                    self.word_clicked.emit(start, end)
+                else:
+                    self.controller.set_range(None)
+            elif area in ("segment", "gap", "mute_track", "speech_track"):
                 self.controller.set_range(None)
                 self.seek_requested.emit(drag["start_us"])
                 if area == "segment":
@@ -427,6 +466,35 @@ class TimelineView(QWidget):
                 p.setPen(QColor("#101014"))
                 p.drawText(block, Qt.AlignmentFlag.AlignCenter, "BEEP" if m.mode == BEEP else "MUTE")
 
+        # Speech track: segments, and words when zoomed in far enough.
+        p.fillRect(QRectF(0, SPEECH_Y, min(w, max(0.0, x_end)), SPEECH_H), C_TRACK)
+        if self._transcript is not None:
+            show_words = self._pps >= 40
+            metrics = p.fontMetrics()
+            for seg in self._transcript.segments:
+                x0, x1 = self.us_to_x(seg.start_us), self.us_to_x(seg.end_us)
+                if x1 < 0 or x0 > w:
+                    continue
+                block = QRectF(x0, SPEECH_Y, max(2.0, x1 - x0), SPEECH_H)
+                p.fillRect(block, C_SPEECH)
+                exact_words = [wd for wd in seg.words if wd.exact]
+                if show_words and exact_words:
+                    for wd in exact_words:
+                        wx0, wx1 = self.us_to_x(wd.start_us), self.us_to_x(wd.end_us)
+                        rect = QRectF(wx0, SPEECH_Y + 3, max(1.0, wx1 - wx0 - 1), SPEECH_H - 6)
+                        p.fillRect(rect, C_WORD)
+                        if rect.width() > metrics.horizontalAdvance(wd.text) + 4:
+                            p.setPen(QColor("#0d1f16"))
+                            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, wd.text)
+                else:
+                    if not seg.has_word_timing:
+                        p.setPen(QPen(C_WORD, 1, Qt.PenStyle.DashLine))
+                        p.setBrush(Qt.BrushStyle.NoBrush)
+                        p.drawRect(block.adjusted(0.5, 0.5, -0.5, -0.5))
+                    p.setPen(QColor("#dfffee"))
+                    text = metrics.elidedText(seg.text, Qt.TextElideMode.ElideRight, int(block.width()) - 6)
+                    p.drawText(block.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignVCenter, text)
+
         # Dim everything that is cut away.
         p.setPen(Qt.PenStyle.NoPen)
         dim = QColor(0, 0, 0, 110)
@@ -434,23 +502,26 @@ class TimelineView(QWidget):
         for s in t.segments:
             x0 = self.us_to_x(s.start_us)
             if x0 > cursor:
-                p.fillRect(QRectF(cursor, VIDEO_Y, x0 - cursor, MUTE_Y + MUTE_H - VIDEO_Y), dim)
+                p.fillRect(QRectF(cursor, VIDEO_Y, x0 - cursor, SPEECH_Y + SPEECH_H - VIDEO_Y), dim)
             cursor = max(cursor, self.us_to_x(s.end_us))
         if x_end > cursor:
-            p.fillRect(QRectF(cursor, VIDEO_Y, x_end - cursor, MUTE_Y + MUTE_H - VIDEO_Y), dim)
+            p.fillRect(QRectF(cursor, VIDEO_Y, x_end - cursor, SPEECH_Y + SPEECH_H - VIDEO_Y), dim)
 
         # Track captions.
         p.setPen(QColor(255, 255, 255, 90))
         p.drawText(QPointF(6, AUDIO_Y + 13), "Audio")
         p.drawText(QPointF(6, MUTE_Y + 16), "Mute" if not t.mutes else "")
+        if self._transcript is None:
+            p.drawText(QPointF(6, SPEECH_Y + 15), "Speech")
 
         # Range selection.
         if c.range:
             x0, x1 = self.us_to_x(c.range[0]), self.us_to_x(c.range[1])
-            p.fillRect(QRectF(x0, RULER_H, x1 - x0, MUTE_Y + MUTE_H - RULER_H), QColor(255, 255, 255, 45))
+            bottom = SPEECH_Y + SPEECH_H
+            p.fillRect(QRectF(x0, RULER_H, x1 - x0, bottom - RULER_H), QColor(255, 255, 255, 45))
             p.setPen(QPen(QColor(255, 255, 255, 160), 1))
-            p.drawLine(QLineF(x0, RULER_H, x0, MUTE_Y + MUTE_H))
-            p.drawLine(QLineF(x1, RULER_H, x1, MUTE_Y + MUTE_H))
+            p.drawLine(QLineF(x0, RULER_H, x0, bottom))
+            p.drawLine(QLineF(x1, RULER_H, x1, bottom))
 
         # Playhead.
         x = self.us_to_x(c.playhead_us)

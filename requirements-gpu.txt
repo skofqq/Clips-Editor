@@ -1,0 +1,5 @@
+# Optional: NVIDIA GPU acceleration for speech recognition (about 1 GB).
+# Install with:  .venv\Scripts\pip install -r requirements-gpu.txt
+-r requirements.txt
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*

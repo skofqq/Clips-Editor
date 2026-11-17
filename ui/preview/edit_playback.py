@@ -17,6 +17,9 @@ from ui.timeline.timeline_controller import TimelineController
 
 TICK_MS = 15
 JUMP_TOLERANCE_US = 30_000  # do not re-seek for gaps shorter than this
+# Audio is buffered and position updates are coarse, so mutes are applied
+# slightly early: better to silence a few ms too much than let a word through.
+MUTE_LOOKAHEAD_US = 60_000
 
 
 def us_to_ms_ceil(us: int) -> int:
@@ -84,4 +87,7 @@ class EditPlayback(QObject):
                 self.player.setPosition(us_to_ms_ceil(target))
                 return
             pos_us = max(pos_us, target)
-        self.preview.set_audio_factor(min(1.0, t.volume_at(pos_us)))
+        factor = t.volume_at(pos_us)
+        if self._playing() and t.mute_at(pos_us + MUTE_LOOKAHEAD_US) is not None:
+            factor = 0.0
+        self.preview.set_audio_factor(min(1.0, factor))

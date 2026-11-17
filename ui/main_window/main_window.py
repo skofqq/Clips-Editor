@@ -34,8 +34,9 @@ from core.projects.project import (
     save_project,
 )
 from core.timeline.model import Timeline
+from core.transcription.engine import TranscriptionError, WhisperEngine, downloaded_models, transcribe_file
 from core.timeline.timebase import ms_to_us, seconds_to_us, us_to_ms
-from core.workers import Worker
+from core.workers import CancellableTask, Worker
 from ui.editor.composition_controller import CompositionController
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
@@ -44,10 +45,12 @@ from ui.panels.timeline_panel import TimelinePanel
 from ui.preview.edit_playback import EditPlayback
 from ui.preview.preview_panel import PreviewPanel
 from ui.timeline.timeline_controller import TimelineController
+from ui.transcript.transcript_controller import TranscriptController
+from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 3  # bump when the dock arrangement changes
+LAYOUT_VERSION = 4  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -77,7 +80,11 @@ class MainWindow(QMainWindow):
         self.presets = PresetStore(config.data_dir / "presets.json")
         self.timeline = TimelineController(self)
         self._loading_composition = False  # True while state is pushed in, not edited
-        self.history: History = History((self.composition.composition, None))
+        self.transcript = TranscriptController(self)
+        self.engine = WhisperEngine(config.data_dir / "models")
+        self._transcribe_task: CancellableTask | None = None
+        self._transcribe_path: Path | None = None
+        self.history: History = History(self._edit_state())
 
         self.preview = PreviewPanel(self.composition, self)
         self.setCentralWidget(self.preview)
@@ -87,6 +94,7 @@ class MainWindow(QMainWindow):
         self.composition_panel = CompositionPanel(self.composition, self.presets, self)
         self.timeline_panel = TimelinePanel(self.timeline, self)
         self.edit_playback = EditPlayback(self.preview, self.timeline, self)
+        self.transcript_panel = TranscriptPanel(self.transcript, self)
 
         composition_scroll = QScrollArea(self)
         composition_scroll.setWidgetResizable(True)
@@ -105,7 +113,12 @@ class MainWindow(QMainWindow):
         self.timeline_dock = self._add_dock(
             "Timeline", "dock_timeline", self.timeline_panel, Qt.DockWidgetArea.BottomDockWidgetArea
         )
-        self.resizeDocks([self.media_dock, self.properties_dock], [240, 340], Qt.Orientation.Horizontal)
+        self.transcript_dock = self._add_dock(
+            "Transcript", "dock_transcript", self.transcript_panel, Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.tabifyDockWidget(self.properties_dock, self.transcript_dock)
+        self.properties_dock.raise_()
+        self.resizeDocks([self.media_dock, self.properties_dock], [240, 360], Qt.Orientation.Horizontal)
         self.resizeDocks([self.timeline_dock], [250], Qt.Orientation.Vertical)
         self._default_state = self.saveState(LAYOUT_VERSION)
 
@@ -192,7 +205,7 @@ class MainWindow(QMainWindow):
         playback.addActions([self.act_play, self.act_prev, self.act_next])
 
         view = self.menuBar().addMenu("&View")
-        for dock in (self.media_dock, self.properties_dock, self.timeline_dock):
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.timeline_dock):
             view.addAction(dock.toggleViewAction())
         view.addSeparator()
         view.addAction(self.act_reset_layout)
@@ -232,6 +245,17 @@ class MainWindow(QMainWindow):
         self.timeline_panel.view.gesture_finished.connect(self.history.break_merge)
         self.composition.changed.connect(lambda: self._on_edit_changed("composition"))
         self.timeline.changed.connect(lambda: self._on_edit_changed(self.timeline.last_change_key))
+        self.transcript.changed.connect(lambda: self._on_edit_changed(self.transcript.last_change_key))
+        self.transcript.changed.connect(
+            lambda: self.timeline_panel.view.set_transcript(self.transcript.transcript)
+        )
+        self.transcript_panel.transcribe_requested.connect(self.start_transcription)
+        self.transcript_panel.cancel_requested.connect(self.cancel_transcription)
+        self.transcript_panel.clear_requested.connect(lambda: self.transcript.set_transcript(None))
+        self.transcript_panel.seek_requested.connect(lambda us: self.preview.seek(us_to_ms(us)))
+        self.transcript_panel.word_selected.connect(self.timeline.set_range)
+        self.timeline.playhead_changed.connect(self.transcript_panel.follow_playhead)
+        self.transcript_panel.set_downloaded_models(downloaded_models(self.engine.models_dir))
         self.timeline.selection_changed.connect(self._update_edit_actions)
         self._update_edit_actions()
         self.media_imported.connect(self._on_media_imported)
@@ -328,15 +352,19 @@ class MainWindow(QMainWindow):
                 timeline = Timeline.for_source(duration_us)
                 self.project.set_timeline(str(info.path), timeline)
             self.timeline.fps = (info.video.avg_fps or info.video.fps) if info.video else 0
+        transcript = self.project.transcript_for(str(info.path)) if info is not None else None
         self._loading_composition = True
         try:
             self.timeline.set_range(None)
             self.timeline.select(None)
             self.timeline.set_timeline(timeline)
             self.timeline.set_playhead(0)
+            self.transcript.set_transcript(transcript)
         finally:
             self._loading_composition = False
-        self.history.reset((self.composition.composition, timeline))
+        self.transcript_panel.set_has_audio(info is not None and info.has_audio)
+        self.transcript_panel.rebuild()
+        self.history.reset(self._edit_state())
         self._update_edit_actions()
         view = self.timeline_panel.view
         view.set_waveform(None)
@@ -358,35 +386,99 @@ class MainWindow(QMainWindow):
             self.timeline_panel.view.set_waveform(waveform)
 
     # -------------------------------------------------------- edit history
+    def _edit_state(self):
+        return (self.composition.composition, self.timeline.timeline, self.transcript.transcript)
+
     def _on_edit_changed(self, key: object) -> None:
         """A controller changed: store it in the project and the undo history."""
         if self._loading_composition:
             return
-        composition, timeline = self.composition.composition, self.timeline.timeline
-        if not self.history.record((composition, timeline), key=key):
+        state = self._edit_state()
+        if not self.history.record(state, key=key):
             return
-        self._store_edit(composition, timeline)
+        self._store_edit(*state)
         self._update_edit_actions()
 
-    def _store_edit(self, composition, timeline) -> None:
+    def _store_edit(self, composition, timeline, transcript) -> None:
         self.project.composition = composition
         media = self.preview.media
-        if media is not None and timeline is not None:
-            self.project.set_timeline(str(media.path), timeline)
+        if media is not None:
+            if timeline is not None:
+                self.project.set_timeline(str(media.path), timeline)
+            self.project.set_transcript(str(media.path), transcript)
         self._set_dirty(True)
 
     def _apply_history_state(self, state) -> None:
         if state is None:
             return
-        composition, timeline = state
+        composition, timeline, transcript = state
         self._loading_composition = True
         try:
             self.composition.set_composition(composition)
             self.timeline.set_timeline(timeline)
+            self.transcript.set_transcript(transcript)
         finally:
             self._loading_composition = False
-        self._store_edit(composition, timeline)
+        self._store_edit(composition, timeline, transcript)
         self._update_edit_actions()
+
+    # -------------------------------------------------------- transcription
+    def start_transcription(self, options) -> None:
+        media = self.preview.media
+        if media is None or not media.has_audio or self.ffmpeg is None:
+            return
+        if self._transcribe_task is not None:
+            return
+        task = CancellableTask(transcribe_file, self.engine, media.path, self.ffmpeg.ffmpeg, options)
+        task.signals.progress.connect(self.transcript_panel.set_progress)
+        task.signals.finished.connect(self._transcription_done)
+        task.signals.failed.connect(self._transcription_failed)
+        task.signals.cancelled.connect(self._transcription_cancelled)
+        self._transcribe_task = task
+        self._transcribe_path = media.path
+        self.transcript_panel.set_busy(True, "Starting…")
+        self.dock_raise(self.transcript_dock)
+        log.info("Transcribing %s with %s", media.path, options)
+        self.pool.start(task)
+
+    def dock_raise(self, dock: QDockWidget) -> None:
+        dock.show()
+        dock.raise_()
+
+    def cancel_transcription(self) -> None:
+        if self._transcribe_task is not None:
+            self._transcribe_task.cancel()
+            self.transcript_panel.set_progress(self.transcript_panel.progress.value() / 1000, "Cancelling…")
+
+    def _finish_transcription(self) -> Path | None:
+        path, self._transcribe_task, self._transcribe_path = self._transcribe_path, None, None
+        self.transcript_panel.set_downloaded_models(downloaded_models(self.engine.models_dir))
+        return path
+
+    def _transcription_done(self, transcript) -> None:
+        path = self._finish_transcription()
+        device = self.engine.device_used.upper() or "CPU"
+        self.transcript_panel.set_busy(False, f"Done on {device}: {len(transcript.segments)} segments.")
+        media = self.preview.media
+        if path is None:
+            return
+        if media is not None and media.path == path:
+            self.transcript.set_transcript(transcript)  # undoable like any edit
+        else:
+            # The user switched clips meanwhile: store it for that clip.
+            self.project.set_transcript(str(path), transcript)
+            self._set_dirty(True)
+
+    def _transcription_failed(self, error) -> None:
+        self._finish_transcription()
+        message = str(error) if isinstance(error, TranscriptionError) else f"Unexpected error: {error}"
+        log.error("Transcription failed: %s", message)
+        self.transcript_panel.set_busy(False, "Transcription failed.")
+        QMessageBox.warning(self, "Transcription failed", message)
+
+    def _transcription_cancelled(self) -> None:
+        self._finish_transcription()
+        self.transcript_panel.set_busy(False, "Cancelled.")
 
     def undo(self) -> None:
         self._apply_history_state(self.history.undo())
@@ -461,7 +553,7 @@ class MainWindow(QMainWindow):
             )
         finally:
             self._loading_composition = False
-        self.history.reset((self.composition.composition, self.timeline.timeline))
+        self.history.reset(self._edit_state())
         self._update_edit_actions()
 
     def save(self) -> bool:
@@ -511,7 +603,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- layout
     def reset_layout(self) -> None:
-        for dock in (self.media_dock, self.properties_dock, self.timeline_dock):
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.timeline_dock):
             dock.setFloating(False)
             dock.show()
         self.restoreState(self._default_state, LAYOUT_VERSION)
@@ -547,6 +639,8 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             event.ignore()
             return
+        if self._transcribe_task is not None:
+            self._transcribe_task.cancel()
         self.edit_playback.shutdown()
         self.preview.player.stop()
         self.config.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
@@ -560,7 +654,7 @@ class MainWindow(QMainWindow):
             self,
             f"About {APP_NAME}",
             f"<b>{APP_NAME}</b> {APP_VERSION}<br>"
-            "Vertical Shorts editor for Twitch clips.<br>Phase 3: timeline and audio editing.",
+            "Vertical Shorts editor for Twitch clips.<br>Phase 4: local speech transcription.",
         )
 
     def _show_ffmpeg_info(self) -> None:

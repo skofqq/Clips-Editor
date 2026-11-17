@@ -101,6 +101,20 @@ Timeline.source_to_output(us) / output_to_source(us)
 #   makes the preview skip cuts and follow mutes/gain/fades.
 # Project file: "timelines": one entry per media path.
 
+# core/transcription (implemented in Phase 4)
+Transcript(language, language_probability, model, segments: tuple[Segment])   # immutable
+Segment(id, start_us, end_us, text, words: tuple[Word], edited)
+Word(start_us, end_us, text, probability, timing: "word" | "segment")
+#   "segment" timing = no reliable word timestamp (model gave none, or the user
+#   changed the number of words). Censor (Phase 5) must treat it as approximate.
+WhisperEngine(models_dir).transcribe(audio_16k_float32, TranscribeOptions, progress, cancel)
+transcribe_file(engine, path, ffmpeg, options, progress, cancel)   # FFmpeg decode + engine
+#   faster-whisper with vad_filter (Silero VAD) and word_timestamps; CUDA float16
+#   when available, CPU int8 otherwise, CPU retry if CUDA fails at runtime.
+# core/workers.CancellableTask: QRunnable with progress + cancel for long jobs.
+# Undo history state is (Composition, Timeline, Transcript).
+# Project file: "transcripts": one entry per media path.
+
 # core/render (Phase 6)
 detect_encoders(ffmpeg) -> list[EncoderInfo]   # h264_nvenc, hevc_nvenc, h264_qsv, h264_amf, libx264, libx265
 build_filtergraph(project, media_info) -> str

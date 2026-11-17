@@ -14,6 +14,7 @@ from typing import Any
 
 from core.editor.composition import Composition
 from core.timeline.model import Timeline
+from core.transcription.model import Transcript
 
 PROJECT_EXTENSION = ".tssproj"
 SCHEMA_VERSION = 1
@@ -49,6 +50,7 @@ class Project:
     media: list[MediaRef] = field(default_factory=list)
     composition: Composition | None = None  # None until the first media sets a default
     timelines: dict[str, Timeline] = field(default_factory=dict)  # edits per media path
+    transcripts: dict[str, Transcript] = field(default_factory=dict)  # per media path
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -62,12 +64,24 @@ class Project:
     def remove_media(self, path: str) -> None:
         key = _norm(path)
         self.media = [m for m in self.media if _norm(m.path) != key]
-        for stored in [p for p in self.timelines if _norm(p) == key]:
-            del self.timelines[stored]
+        for store in (self.timelines, self.transcripts):
+            for stored in [p for p in store if _norm(p) == key]:
+                del store[stored]
 
     def timeline_for(self, path: str) -> Timeline | None:
         key = _norm(path)
         return next((t for p, t in self.timelines.items() if _norm(p) == key), None)
+
+    def transcript_for(self, path: str) -> Transcript | None:
+        key = _norm(path)
+        return next((t for p, t in self.transcripts.items() if _norm(p) == key), None)
+
+    def set_transcript(self, path: str, transcript: Transcript | None) -> None:
+        key = _norm(path)
+        for stored in [p for p in self.transcripts if _norm(p) == key]:
+            del self.transcripts[stored]
+        if transcript is not None:
+            self.transcripts[path] = transcript
 
     def set_timeline(self, path: str, timeline: Timeline) -> None:
         key = _norm(path)
@@ -90,6 +104,10 @@ class Project:
             data["timelines"] = [
                 {"media": path, **timeline.to_dict()} for path, timeline in self.timelines.items()
             ]
+        if self.transcripts:
+            data["transcripts"] = [
+                {"media": path, **transcript.to_dict()} for path, transcript in self.transcripts.items()
+            ]
         return data
 
     @classmethod
@@ -103,7 +121,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition", "timelines"}
+        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -117,11 +135,18 @@ class Project:
                 timelines[str(entry["media"])] = Timeline.from_dict(entry)
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise ProjectFormatError(f"Invalid timeline: {exc}") from exc
+        transcripts: dict[str, Transcript] = {}
+        for entry in data.get("transcripts") or []:
+            try:
+                transcripts[str(entry["media"])] = Transcript.from_dict(entry)
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ProjectFormatError(f"Invalid transcript: {exc}") from exc
         return cls(
             name=str(data.get("name") or "Untitled"),
             media=[MediaRef.from_dict(m) for m in data.get("media") or []],
             composition=composition,
             timelines=timelines,
+            transcripts=transcripts,
             extra=extra,
         )
 
