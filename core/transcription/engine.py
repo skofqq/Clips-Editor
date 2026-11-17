@@ -100,7 +100,11 @@ def parse_vocabulary(text: str) -> tuple[str, ...]:
 
 
 def build_prompt(
-    language: str, vocabulary: tuple[str, ...] = (), uncensored: bool = True, slang: bool = False
+    language: str,
+    vocabulary: tuple[str, ...] = (),
+    uncensored: bool = True,
+    slang: bool = False,
+    slang_words: int | None = None,
 ) -> str | None:
     """Context prompt for Whisper, or None when there is nothing to add."""
     table = _PRIMING if uncensored else _PLAIN
@@ -114,7 +118,9 @@ def build_prompt(
         languages = [language] if language in SLANG else ["ru", "en"]
         for lang in languages:
             label = "Сленг" if lang == "ru" else "Slang"
-            parts.append(f"{label}: {', '.join(SLANG[lang])}.")
+            words = SLANG[lang] if slang_words is None else SLANG[lang][:slang_words]
+            if words:
+                parts.append(f"{label}: {', '.join(words)}.")
     if vocabulary:
         names = ", ".join(vocabulary)
         if len(names) > MAX_VOCABULARY_CHARS:
@@ -122,6 +128,40 @@ def build_prompt(
         label = "Ники и имена" if language == "ru" else "Names"
         parts.append(f"{label}: {names}.")
     return " ".join(parts) if parts else None
+
+
+# Whisper's decoder holds 448 positions in total: prompt + the text of a
+# 30 s window. A long prompt overflows it ("No position encodings are
+# defined for positions >= 448"), so the prompt is kept well below half.
+PROMPT_TOKEN_BUDGET = 150
+
+
+def fit_prompt(options: "TranscribeOptions", count_tokens: Callable[[str], int]) -> str | None:
+    """The richest prompt that fits PROMPT_TOKEN_BUDGET.
+
+    Slang is shortened first, then dropped, then the nickname list is cut
+    from the end; the swear-word priming and the first names are kept.
+    """
+    def build(vocabulary, slang_words=None, slang=options.slang):
+        return build_prompt(options.language, vocabulary, options.uncensored, slang, slang_words)
+
+    vocabulary = tuple(options.vocabulary)
+    if options.slang:
+        longest = max(len(words) for words in SLANG.values())
+        for limit in range(longest, 0, -5):
+            prompt = build(vocabulary, limit)
+            if prompt is None or count_tokens(prompt) <= PROMPT_TOKEN_BUDGET:
+                return prompt
+    while True:
+        prompt = build(vocabulary, slang=False)
+        if prompt is None or count_tokens(prompt) <= PROMPT_TOKEN_BUDGET or not vocabulary:
+            return prompt
+        vocabulary = vocabulary[:-1]
+
+
+def _estimate_tokens(text: str) -> int:
+    """Pessimistic token count when the real tokenizer is not available."""
+    return len(text.encode("utf-8")) // 2 + 1
 
 
 # ------------------------------------------------------------------ helpers
@@ -285,10 +325,23 @@ class WhisperEngine:
                 self._key = None
         raise TranscriptionError("Could not load the speech model.\n" + "\n".join(errors))
 
+    def _token_counter(self) -> Callable[[str], int]:
+        tokenizer = getattr(self._model, "hf_tokenizer", None)
+        if tokenizer is None:
+            return _estimate_tokens
+
+        def count(text: str) -> int:
+            try:
+                return len(tokenizer.encode(" " + text, add_special_tokens=False).ids)
+            except Exception:  # noqa: BLE001 - fall back to the estimate
+                return _estimate_tokens(text)
+
+        return count
+
     def _run(self, audio: np.ndarray, options: TranscribeOptions, progress: Progress, cancel):
         duration_s = len(audio) / SAMPLE_RATE
         language = None if options.language == AUTO else options.language
-        prompt = build_prompt(options.language, options.vocabulary, options.uncensored, options.slang)
+        prompt = fit_prompt(options, self._token_counter())
         segments_iter, info = self._model.transcribe(
             audio,
             language=language,
@@ -298,9 +351,9 @@ class WhisperEngine:
             vad_filter=options.vad,
             vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
-            # initial_prompt only conditions the first 30 s window; hotwords are
-            # added to every window, so the context holds for the whole clip.
-            initial_prompt=prompt,
+            # hotwords are added to every 30 s window, so the context holds for
+            # the whole clip. Passing the same text as initial_prompt too would
+            # double it in the first window and overflow the decoder.
             hotwords=prompt,
         )
         raw = []

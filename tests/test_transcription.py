@@ -449,6 +449,23 @@ def test_vocabulary_and_uncensored_prompt():
     assert len(long) < 400 and long.endswith(".")
 
 
+def test_prompt_fits_decoder_budget():
+    from core.transcription.engine import PROMPT_TOKEN_BUDGET, fit_prompt
+
+    def count(text):  # pessimistic: ~1 token per 2 bytes, like Cyrillic
+        return len(text.encode("utf-8")) // 2 + 1
+
+    names = tuple(f"streamer_nick{i:02d}" for i in range(40))
+    for language in ("ru", "en", "auto"):
+        options = TranscribeOptions(language=language, vocabulary=names, uncensored=True, slang=True)
+        prompt = fit_prompt(options, count)
+        assert count(prompt) <= PROMPT_TOKEN_BUDGET, language
+        assert "streamer_nick00" in prompt  # first names are kept
+    short = fit_prompt(TranscribeOptions(language="en", slang=True), count)
+    assert "clutch" in short  # slang kept when there is room
+    assert fit_prompt(TranscribeOptions(language="auto", uncensored=False, slang=False), count) is None
+
+
 def test_engine_passes_prompt_as_hotwords(fake_whisper, tmp_path, monkeypatch):
     monkeypatch.setattr(engine_mod, "cuda_available", lambda: False)
     WhisperEngine(tmp_path).transcribe(
@@ -456,7 +473,7 @@ def test_engine_passes_prompt_as_hotwords(fake_whisper, tmp_path, monkeypatch):
         TranscribeOptions(language="ru", vocabulary=("sasavot",), uncensored=True, slang=True),
     )
     kwargs = FakeModel.last_kwargs
-    assert "sasavot" in kwargs["hotwords"] and kwargs["initial_prompt"] == kwargs["hotwords"]
+    assert "sasavot" in kwargs["hotwords"] and kwargs.get("initial_prompt") is None
     assert "катка" in kwargs["hotwords"]
 
 
