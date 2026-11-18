@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -33,6 +34,8 @@ from core.timeline.model import BEEP, SILENCE
 from core.timeline.timebase import format_timecode
 from ui.theme import palette
 from ui.censor.censor_controller import CensorController
+from ui.widgets.card import Card
+from ui.widgets.empty_state import EmptyState
 
 COL_TIME, COL_WORD, COL_MATCH, COL_STATUS = range(4)
 ROLE_ID = Qt.ItemDataRole.UserRole + 1
@@ -152,17 +155,28 @@ class CensorPanel(QWidget):
         apply.addWidget(self.apply_button, 1)
         apply.addWidget(self.remove_button)
 
+        find_card = Card("Find swear words", parent=self)
+        find_card.body.addLayout(cats)
+        find_card.body.addLayout(settings)
+        find_card.body.addLayout(top)
+
+        self.review_card = Card("Review the selected word", parent=self)
+        self.review_card.body.addWidget(self.hint_label)
+        self.review_card.body.addLayout(edit)
+        self.review_card.body.addLayout(bulk)
+
+        self.empty = EmptyState("shield", "Nothing to review yet", parent=self)
+        self.list_stack = QStackedWidget(self)
+        self.list_stack.addWidget(self.empty)
+        self.list_stack.addWidget(self.table)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
-        layout.addLayout(cats)
-        layout.addLayout(settings)
-        layout.addLayout(top)
+        layout.addWidget(find_card)
         layout.addWidget(self.summary_label)
-        layout.addWidget(self.table, 1)
-        layout.addWidget(self.hint_label)
-        layout.addLayout(edit)
-        layout.addLayout(bulk)
+        layout.addWidget(self.list_stack, 1)
+        layout.addWidget(self.review_card)
         layout.addLayout(apply)
 
         self.set_settings(CensorSettings())
@@ -266,6 +280,7 @@ class CensorPanel(QWidget):
     # ------------------------------------------------------------ state
     def set_has_transcript(self, has: bool) -> None:
         self._has_transcript = has
+        self._update_summary()
         self._update_buttons()
 
     def set_applied(self, applied: bool) -> None:
@@ -318,17 +333,32 @@ class CensorPanel(QWidget):
         self._update_summary()
         self._update_buttons()
 
+    def _update_empty_state(self) -> None:
+        state = self.controller.state
+        has_items = state is not None and bool(state.suggestions)
+        self.list_stack.setCurrentWidget(self.table if has_items else self.empty)
+        self.review_card.setVisible(has_items)
+        if has_items:
+            return
+        if not self._has_transcript:
+            self.empty.set_text("Transcribe the clip first",
+                                "The censor looks for swear words in the transcript (Transcript tab).")
+        elif state is None:
+            self.empty.set_text("Nothing to review yet",
+                                "Press “Find swear words”. You review every result before anything is muted.")
+        else:
+            self.empty.set_text("Clean clip", "No swear words found with the chosen categories.")
+
     def _update_summary(self) -> None:
+        self._update_empty_state()
         state = self.controller.state
         if state is None:
-            self.summary_label.setText(
-                "Transcribe the clip first, then press “Find swear words”."
-                if not self._has_transcript
-                else "Press “Find swear words”. You review every result before anything is muted."
-            )
+            self.summary_label.setText("")
+            self.summary_label.setVisible(False)
             return
+        self.summary_label.setVisible(True)
         if not state.suggestions:
-            self.summary_label.setText("No swear words found.")
+            self.summary_label.setVisible(False)
             return
         text = (
             f"{len(state.suggestions)} found · {state.count(PENDING)} to review · "

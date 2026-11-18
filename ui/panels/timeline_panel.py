@@ -103,7 +103,7 @@ class TimelinePanel(QWidget):
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         for widget in (
-            _separator(self), _label("Mute", self), self.mode_combo,
+            _separator(self), _label("Mode", self), self.mode_combo,
             _separator(self), _label("Gain", self), self.gain_spin,
             _label("Fade in", self), self.fade_in_spin,
             _label("out", self), self.fade_out_spin,
@@ -172,6 +172,8 @@ class TimelinePanel(QWidget):
                 continue
             button = QToolButton(self)
             button.setDefaultAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setIconSize(QSize(18, 18))
             self._action_slot.addWidget(button)
 
     # ------------------------------------------------------------- scroll

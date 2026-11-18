@@ -79,6 +79,14 @@ on the right **Upload** and **Export**. Panels on the right (Properties,
 Transcript, Censor, Metadata) are tabs at the top; drag a tab out to
 float it, **View → Reset Layout** puts everything back.
 
+Long forms (Composition, Export, Upload, Transcript, Censor) are split
+into cards with a title each. Recognition settings fold away once a
+transcript exists (click **Recognition settings** to open them again).
+Empty panels say what to do next. The media list shows a thumbnail, the
+length and the resolution of every video; right-click a video to remove
+it from the project (the file stays on disk). Thumbnails are cached in
+`%LOCALAPPDATA%\TwitchShortsStudio\cache\thumbnails`.
+
 The look follows Microsoft's Fluent Design (Windows 11 dark): WinUI
 neutrals, 4 px controls and 8 px menus, text boxes with an accent
 underline when focused, pivot tabs, Fluent check boxes and sliders. The

@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QStackedWidget,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -34,6 +36,8 @@ from core.transcription.engine import (
 from core.transcription.model import LANGUAGES, Transcript
 from ui.theme import palette
 from ui.transcript.transcript_controller import TranscriptController
+from ui.widgets.card import Card
+from ui.widgets.empty_state import EmptyState
 
 ROLE_KIND = Qt.ItemDataRole.UserRole + 1  # "segment" | "word"
 ROLE_SEGMENT = Qt.ItemDataRole.UserRole + 2
@@ -177,30 +181,59 @@ class TranscriptPanel(QWidget):
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.clear_button)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
-        layout.addLayout(options)
-        layout.addWidget(self.custom_model_edit)
-        layout.addWidget(self.vocabulary_edit)
+        # Recognition settings live in a card that folds away once there is
+        # a transcript, so the text gets the room.
+        self.settings_card = Card(parent=self)
+        self.settings_toggle = QToolButton(self.settings_card)
+        self.settings_toggle.setObjectName("cardToggle")
+        self.settings_toggle.setText("Recognition settings")
+        self.settings_toggle.setCheckable(True)
+        self.settings_toggle.setChecked(True)
+        self.settings_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.settings_toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.settings_box = QWidget(self.settings_card)
+        box = QVBoxLayout(self.settings_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        box.addLayout(options)
+        box.addWidget(self.custom_model_edit)
+        box.addWidget(self.vocabulary_edit)
         learned = QHBoxLayout()
         learned.addWidget(self.learned_label, 1)
         learned.addWidget(self.learned_clear)
-        layout.addLayout(learned)
-        layout.addWidget(self.uncensored_check)
-        layout.addWidget(self.slang_check)
-        layout.addWidget(self.clean_check)
+        box.addLayout(learned)
+        box.addWidget(self.uncensored_check)
+        box.addWidget(self.slang_check)
+        box.addWidget(self.clean_check)
         quality = QHBoxLayout()
         quality.addWidget(self.vad_combo, 1)
         quality.addWidget(self.accurate_check)
-        layout.addLayout(quality)
+        box.addLayout(quality)
+        self.settings_card.body.addWidget(self.settings_toggle)
+        self.settings_card.body.addWidget(self.settings_box)
+        self._settings_auto = True  # fold automatically until the user decides
+
+        self.empty = EmptyState(
+            "speech", "No transcript yet",
+            "Press Transcribe to turn the speech into text. The words appear on the timeline "
+            "and can be corrected here.", parent=self,
+        )
+        self.list_stack = QStackedWidget(self)
+        self.list_stack.addWidget(self.empty)
+        self.list_stack.addWidget(self.tree)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+        layout.addWidget(self.settings_card)
         layout.addLayout(buttons)
         layout.addWidget(self.retranscribe_button)
         layout.addWidget(self.progress)
         layout.addWidget(self.status_label)
         layout.addWidget(self.info_label)
         layout.addWidget(self.search)
-        layout.addWidget(self.tree, 1)
+        layout.addWidget(self.list_stack, 1)
+        self.settings_toggle.clicked.connect(self._on_settings_clicked)
 
         self.transcribe_button.clicked.connect(lambda: self.transcribe_requested.emit(self.options()))
         self.cancel_button.clicked.connect(self.cancel_requested)
@@ -333,6 +366,15 @@ class TranscriptPanel(QWidget):
             combo.setEnabled(not busy)
         self.progress.setVisible(busy)
 
+    def _show_settings(self, shown: bool) -> None:
+        self.settings_box.setVisible(shown)
+        self.settings_toggle.setChecked(shown)
+        self.settings_toggle.setArrowType(Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow)
+
+    def _on_settings_clicked(self, checked: bool) -> None:
+        self._settings_auto = False
+        self._show_settings(checked)
+
     def set_busy(self, busy: bool, message: str = "") -> None:
         self._busy = busy
         self._update_buttons()
@@ -360,12 +402,20 @@ class TranscriptPanel(QWidget):
         try:
             self.tree.clear()
             self._current_segment = None
+            self.list_stack.setCurrentWidget(self.tree if t is not None else self.empty)
+            self.search.setVisible(t is not None)
+            if self._settings_auto:
+                self._show_settings(t is None)
             if t is None:
-                self.info_label.setText(
-                    "No transcript yet. Choose the language and model, then press Transcribe."
-                    if self._has_audio else "This clip has no audio track."
+                self.info_label.setText("" if self._has_audio else "This clip has no audio track.")
+                self.info_label.setVisible(not self._has_audio)
+                self.empty.set_text(
+                    "No transcript yet" if self._has_audio else "No audio",
+                    "Press Transcribe to turn the speech into text. The words appear on the timeline "
+                    "and can be corrected here." if self._has_audio else "This clip has no audio track.",
                 )
                 return
+            self.info_label.setVisible(True)
             self.info_label.setText(self._summary(t))
             for seg in t.segments:
                 item = QTreeWidgetItem([format_timecode(seg.start_us), seg.text])

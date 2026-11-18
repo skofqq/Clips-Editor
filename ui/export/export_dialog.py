@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -54,6 +53,7 @@ from core.render.settings import (
 from core.timeline.model import Timeline
 from core.timeline.timebase import format_timecode
 from core.workers import CancellableTask
+from ui.widgets.card import Card
 
 log = logging.getLogger(__name__)
 
@@ -160,33 +160,36 @@ class ExportDialog(QDialog):
         self.upload_button = QPushButton("Upload to YouTube…", self)
 
         # ------------------------------------------------------ layout
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.addRow("Preset", self.preset_combo)
+        video_card = Card("Video", parent=self, label_width=96)
+        video_card.add_row("Preset", self.preset_combo)
         size = QHBoxLayout()
         size.addWidget(self.resolution_combo, 3)
         size.addWidget(self.width_spin, 1)
         size.addWidget(QLabel("×", self))
         size.addWidget(self.height_spin, 1)
-        form.addRow("Resolution", size)
-        form.addRow("Frame rate", self.fps_combo)
-        form.addRow("Video codec", self.codec_combo)
-        form.addRow("Encoder", self.encoder_combo)
+        video_card.add_row("Resolution", size)
+        video_card.add_row("Frame rate", self.fps_combo)
+        video_card.add_row("Codec", self.codec_combo)
+        video_card.add_row("Encoder", self.encoder_combo)
         rate = QHBoxLayout()
         rate.addWidget(self.rate_combo, 2)
         rate.addWidget(self.quality_spin, 1)
         rate.addWidget(self.bitrate_spin, 1)
-        form.addRow("Quality", rate)
-        form.addRow("Container", self.container_combo)
+        video_card.add_row("Quality", rate)
+
+        audio_card = Card("Audio", parent=self, label_width=96)
         audio = QHBoxLayout()
         audio.addWidget(self.audio_combo, 1)
         audio.addWidget(self.audio_bitrate_combo, 1)
-        form.addRow("Audio (48 kHz)", audio)
-        form.addRow("Beep tone", self.beep_spin)
+        audio_card.add_row("Track (48 kHz)", audio)
+        audio_card.add_row("Beep tone", self.beep_spin)
+
+        file_card = Card("File", parent=self, label_width=96)
+        file_card.add_row("Container", self.container_combo)
         out = QHBoxLayout()
         out.addWidget(self.output_edit, 1)
         out.addWidget(self.browse_button)
-        form.addRow("Save to", out)
+        file_card.add_row("Save to", out)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.open_button)
@@ -197,7 +200,9 @@ class ExportDialog(QDialog):
         buttons.addWidget(self.close_button)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.setSpacing(10)
+        for card in (video_card, audio_card, file_card):
+            layout.addWidget(card)
         layout.addWidget(self.summary_label)
         layout.addWidget(self.progress)
         layout.addWidget(self.status_label)

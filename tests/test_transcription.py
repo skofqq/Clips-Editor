@@ -295,10 +295,16 @@ def test_panel_lists_seeks_and_edits(qapp):
     panel = TranscriptPanel(c)
     panel.set_has_audio(True)
     assert panel.transcribe_button.isEnabled()
-    assert "No transcript" in panel.info_label.text()
+    assert "No transcript" in panel.empty.title_label.text()
+    assert panel.list_stack.currentWidget() is panel.empty
+    assert not panel.settings_box.isHidden()  # settings open while there is nothing to read
 
     c.set_transcript(sample_transcript())
     assert panel.tree.topLevelItemCount() == 3
+    assert panel.list_stack.currentWidget() is panel.tree
+    assert panel.settings_box.isHidden()  # folded away to give the text room
+    panel.settings_toggle.click()
+    assert not panel.settings_box.isHidden()
     assert "Russian (97%)" in panel.info_label.text()
     approx = panel.tree.topLevelItem(1)
     assert approx.text(0).endswith("≈")

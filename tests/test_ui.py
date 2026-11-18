@@ -191,3 +191,73 @@ def test_jump_slider_click_anywhere(qapp):
         slider.close()
     finally:
         qapp.setStyleSheet("")
+
+
+def test_tabbed_docks_have_no_duplicate_title(qapp, data_dir):
+    from app.config import AppConfig
+    from ui.main_window.main_window import MainWindow
+
+    w = MainWindow(config=AppConfig.load(data_dir), ffmpeg=None)
+    w.show()
+    qapp.processEvents()
+    # Properties, Transcript, Censor and Metadata share one tab group: the tab names them.
+    for dock in (w.properties_dock, w.transcript_dock, w.censor_dock, w.metadata_dock):
+        assert dock.titleBarWidget() is not None and dock.titleBarWidget().height() == 0
+    assert w.media_dock.titleBarWidget() is None  # a lone dock keeps its title
+    w.censor_dock.setFloating(True)
+    qapp.processEvents()
+    assert w.censor_dock.titleBarWidget() is None  # floating: needs its title bar to be moved
+    w.reset_layout()
+    assert w.censor_dock.titleBarWidget() is not None
+    # Undo / redo only in the command bar, not again above the timeline.
+    from PySide6.QtWidgets import QToolButton
+
+    actions = {b.defaultAction() for b in w.timeline_panel.findChildren(QToolButton)}
+    assert w.act_undo not in actions and w.act_split in actions
+    assert not w.act_split.icon().isNull()
+    w._dirty = False
+    w.close()
+
+
+def test_media_panel_empty_state_and_thumbnail(qapp, sample_clips, ffmpeg_paths, tmp_path):
+    from PySide6.QtGui import QImage
+
+    from core.media.probe import probe_media
+    from core.media.thumbnail import make_thumbnail, thumbnail_path
+    from ui.panels.media_panel import MediaPanel
+
+    panel = MediaPanel()
+    assert panel.stack.currentWidget() is panel.empty
+    requested = []
+    panel.import_requested.connect(lambda: requested.append(1))
+    panel.empty.button.click()
+    assert requested == [1]
+
+    clip = next(iter(sample_clips.values()))
+    info = probe_media(clip, ffmpeg_paths.ffprobe)
+    panel.add_media(info)
+    assert panel.stack.currentIndex() == 1 and panel.count_label.text() == "1 video"
+    assert ":" in MediaPanel.details(info)
+
+    out = make_thumbnail(ffmpeg_paths.ffmpeg, clip, info.duration_s, tmp_path)
+    assert out == thumbnail_path(clip, tmp_path) and out.is_file()
+    assert make_thumbnail(ffmpeg_paths.ffmpeg, clip, info.duration_s, tmp_path) == out  # cached
+    panel.set_thumbnail(clip, QImage(str(out)))
+    assert panel.thumbnail(clip) is not None and not panel.thumbnail(clip).isNull()
+    panel.resize(260, 300)
+    panel.grab()  # the delegate paints the thumbnail
+    assert make_thumbnail(ffmpeg_paths.ffmpeg, tmp_path / "missing.mp4", 1.0, tmp_path) is None
+
+    panel.remove_media(clip)
+    assert panel.stack.currentWidget() is panel.empty
+
+
+def test_cards_in_long_forms(qapp, tmp_path):
+    from core.editor.presets import PresetStore
+    from ui.editor.composition_controller import CompositionController
+    from ui.panels.composition_panel import CompositionPanel
+    from ui.widgets.card import Card
+
+    panel = CompositionPanel(CompositionController(), PresetStore(tmp_path / "presets.json"))
+    titles = [c.title_label.text() for c in panel.findChildren(Card)]
+    assert titles == ["Preset", "Region", "Placement in output", "Layout"]

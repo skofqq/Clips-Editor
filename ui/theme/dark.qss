@@ -366,3 +366,22 @@ QDialog { background: #202020; }
 QMessageBox { background: #2b2b2b; }
 QMessageBox QLabel { color: #ffffff; }
 QDialogButtonBox QPushButton { min-width: 90px; }
+
+/* ---- cards and empty states ---- */
+QFrame#card {
+    background: #252525;
+    border: 1px solid #1d1d1d;
+    border-radius: 8px;
+}
+QFrame#card QLabel { background: transparent; }
+QFrame#card QPushButton:!checked:!disabled { border-color: #3d3d3d; border-top-color: #444444; }
+QFrame#card QPushButton#primary:!disabled { border-color: @ACCENT_HOVER@; }
+QLabel#cardTitle { color: #ffffff; font-weight: 600; font-size: 14px; padding-bottom: 2px; }
+QLabel#emptyTitle { color: #ffffff; font-weight: 600; font-size: 15px; }
+QListWidget#mediaList { background: transparent; border: none; }
+QListWidget#mediaList::item { border: none; background: transparent; }
+QToolButton#cardToggle {
+    background: transparent; border: none; color: #ffffff; font-weight: 600; padding: 2px 0;
+}
+QToolButton#cardToggle:hover { color: @ACCENT_TEXT@; }
+QToolButton#cardToggle:checked { background: transparent; color: #ffffff; }

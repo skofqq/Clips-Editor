@@ -36,6 +36,7 @@ from core.history import History
 from core.media.errors import MediaError
 from core.media.ffmpeg_locator import FFmpegPaths, tool_version
 from core.media.probe import SUPPORTED_EXTENSIONS, MediaInfo, probe_media
+from core.media.thumbnail import make_thumbnail
 from core.projects.project import (
     PROJECT_EXTENSION,
     MediaRef,
@@ -179,6 +180,7 @@ class MainWindow(QMainWindow):
         self._create_toolbar()
         self._connect()
         self._restore_layout()
+        self._update_dock_titles()
         self.timeline_panel.view.restore_view_state(self.config.timeline_view)
         self._update_title()
 
@@ -250,7 +252,28 @@ class MainWindow(QMainWindow):
             | QDockWidget.DockWidgetFeature.DockWidgetClosable
         )
         self.addDockWidget(area, dock)
+        dock.dockLocationChanged.connect(lambda _area: self._update_dock_titles())
+        dock.topLevelChanged.connect(lambda _floating: self._update_dock_titles())
         return dock
+
+    def _docks(self) -> list[QDockWidget]:
+        return self.findChildren(QDockWidget)
+
+    def _update_dock_titles(self) -> None:
+        """Hide a dock's own title bar while it sits in a tab group: the tab
+        already names it, so the title would only repeat the same word."""
+        for dock in self._docks():
+            tabbed = not dock.isFloating() and bool(self.tabifiedDockWidgets(dock))
+            has_blank = dock.titleBarWidget() is not None
+            if tabbed and not has_blank:
+                blank = QWidget(dock)
+                blank.setObjectName("dockTitleHidden")
+                blank.setFixedHeight(0)
+                dock.setTitleBarWidget(blank)
+            elif not tabbed and has_blank:
+                old = dock.titleBarWidget()
+                dock.setTitleBarWidget(None)
+                old.deleteLater()
 
     def _create_actions(self) -> None:
         self.act_import = QAction("&Import Video…", self, shortcut=QKeySequence("Ctrl+I"))
@@ -326,10 +349,12 @@ class MainWindow(QMainWindow):
         edit.addActions([self.act_split, self.act_delete, self.act_trim, self.act_restore])
         edit.addSeparator()
         edit.addActions([self.act_mute, self.act_merge_mutes])
-        self.timeline_panel.add_actions([
-            self.act_undo, self.act_redo, None, self.act_split, self.act_delete,
-            self.act_trim, None, self.act_mute,
-        ])
+        for action, glyph, short in ((self.act_split, "split", "Split"), (self.act_delete, "remove", "Delete"),
+                                     (self.act_trim, "trim", "Trim"), (self.act_mute, "volume_off", "Mute")):
+            action.setIcon(icon(glyph))
+            action.setIconText(short)
+        # Undo / redo live in the main command bar only.
+        self.timeline_panel.add_actions([self.act_split, self.act_delete, self.act_trim, None, self.act_mute])
 
         playback = self.menuBar().addMenu("&Playback")
         playback.addActions([self.act_play, self.act_prev, self.act_next])
@@ -491,6 +516,25 @@ class MainWindow(QMainWindow):
             message = str(exc) if isinstance(exc, MediaError) else f"Unexpected error: {exc}"
             self.import_failed.emit(str(path), message)
 
+    def _make_thumbnail(self, info: MediaInfo) -> None:
+        if self.ffmpeg is None or info.video is None:
+            return
+        worker = Worker(make_thumbnail, self.ffmpeg.ffmpeg, info.path, info.duration_s, self.config.cache_dir)
+
+        def done(path, w=worker, media=info.path) -> None:
+            self._pending.discard(w)
+            if path is not None:
+                from PySide6.QtGui import QImage
+
+                image = QImage(str(path))
+                if not image.isNull():
+                    self.media_panel.set_thumbnail(media, image)
+
+        worker.signals.finished.connect(done)
+        worker.signals.failed.connect(lambda _exc, w=worker: self._pending.discard(w))
+        self._pending.add(worker)
+        self.pool.start(worker)
+
     def _on_media_imported(self, info: MediaInfo) -> None:
         log.info("Imported %s (%.2fs)", info.path, info.duration_s)
         added = self.project.add_media(
@@ -499,6 +543,7 @@ class MainWindow(QMainWindow):
         if added:
             self._set_dirty(True)
         self.media_panel.add_media(info)
+        self._make_thumbnail(info)
         self.config.add_recent(str(info.path))
         self._rebuild_recent_menu()
         warnings = []
@@ -1097,6 +1142,7 @@ class MainWindow(QMainWindow):
             dock.setFloating(False)
             dock.show()
         self.restoreState(self._default_state, LAYOUT_VERSION)
+        self._update_dock_titles()
 
     def _restore_layout(self) -> None:
         if self.config.window_geometry:

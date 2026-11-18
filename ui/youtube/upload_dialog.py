@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateTimeEdit,
     QDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -44,6 +43,7 @@ from core.youtube.metadata import (
 )
 from core.youtube.service import YouTubeService
 from ui.theme import palette
+from ui.widgets.card import Card
 
 log = logging.getLogger(__name__)
 
@@ -145,32 +145,33 @@ class UploadDialog(QDialog):
         self.close_button = QPushButton("Close", self)
 
         # ------------------------------------------------------ layout
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.addRow("File", self.file_label)
+        where = Card("Where", parent=self, label_width=90)
+        details = Card("Details", parent=self, label_width=90)
+        publish = Card("Publishing", parent=self, label_width=90)
+        where.add_row("File", self.file_label)
         channel = QHBoxLayout()
         channel.addWidget(self.channel_combo, 1)
         channel.addWidget(self.manage_button)
-        form.addRow("Channel", channel)
+        where.add_row("Channel", channel)
         title = QHBoxLayout()
         title.addWidget(self.title_edit, 1)
         title.addWidget(self.title_count)
-        form.addRow("Title", title)
+        details.add_row("Title", title)
         description = QVBoxLayout()
         description.addWidget(self.description_edit, 1)
         description.addWidget(self.description_count, 0, Qt.AlignmentFlag.AlignRight)
-        form.addRow("Description", description)
-        form.addRow("Tags", self.tags_edit)
-        form.addRow("Category", self.category_combo)
+        details.add_row("Description", description)
+        details.add_row("Tags", self.tags_edit)
+        details.add_row("Category", self.category_combo)
         visibility = QHBoxLayout()
         visibility.addWidget(self.privacy_combo, 1)
         visibility.addWidget(self.schedule_check)
         visibility.addWidget(self.schedule_edit, 1)
-        form.addRow("Visibility", visibility)
+        publish.add_row("Visibility", visibility)
         extra = QHBoxLayout()
         extra.addWidget(self.language_combo, 1)
         extra.addWidget(self.kids_check)
-        form.addRow("Language", extra)
+        publish.add_row("Language", extra)
         buttons = QHBoxLayout()
         buttons.addWidget(self.copy_button)
         buttons.addStretch(1)
@@ -178,7 +179,9 @@ class UploadDialog(QDialog):
         buttons.addWidget(self.upload_button)
         buttons.addWidget(self.close_button)
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.setSpacing(10)
+        for card in (where, details, publish):
+            layout.addWidget(card)
         layout.addWidget(self.note_label)
         layout.addWidget(self.problems_label)
         layout.addWidget(self.progress)

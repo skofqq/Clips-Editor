@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFormLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -31,12 +30,20 @@ from core.editor.composition import (
 from core.editor.geometry import Rect
 from core.editor.presets import PresetStore
 from ui.editor.composition_controller import MIN_CROP_PX, CompositionController
+from ui.widgets.card import Card
 
 
-def _title(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setObjectName("sectionTitle")
-    return label
+def _pair(first: str, first_field: QWidget, second: str, second_field: QWidget) -> QHBoxLayout:
+    """Two short labelled fields on one row (X and Y, width and height)."""
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    for text, field in ((first, first_field), (second, second_field)):
+        label = QLabel(text)
+        label.setObjectName("muted")
+        label.setFixedWidth(14)
+        row.addWidget(label)
+        row.addWidget(field, 1)
+    return row
 
 
 class CompositionPanel(QWidget):
@@ -109,34 +116,35 @@ class CompositionPanel(QWidget):
         self.output_label = QLabel(self)
         self.output_label.setObjectName("muted")
 
-        form = QFormLayout()
-        form.setVerticalSpacing(6)
-        form.addRow(_title("Preset"))
-        form.addRow(preset_row)
-        form.addRow(_title("Region"))
-        form.addRow(region_row)
-        form.addRow(self.enabled_check)
-        form.addRow(_title("Crop in source (px)"))
-        form.addRow("X", self.crop_x)
-        form.addRow("Y", self.crop_y)
-        form.addRow("Width", self.crop_w)
-        form.addRow("Height", self.crop_h)
-        form.addRow(self.match_button)
-        form.addRow(_title("Placement in output"))
-        form.addRow("Mode", self.fit_combo)
-        form.addRow("Scale", self.scale_spin)
-        form.addRow("Offset X", self.offset_x)
-        form.addRow("Offset Y", self.offset_y)
-        form.addRow(self.reset_placement_button)
-        form.addRow(_title("Layout"))
-        form.addRow("Top height", self.divider_spin)
-        form.addRow(self.swap_button)
-        form.addRow(self.reset_button)
-        form.addRow("Output", self.output_label)
+        preset_card = Card("Preset", "Save the crop and layout of a streamer to reuse it on the next clip.", self)
+        preset_card.add_row(preset_row)
+
+        region_card = Card("Region", "Pick a region, then drag it in the Original view or type exact values.", self)
+        region_card.add_row(region_row)
+        region_card.add_row(self.enabled_check)
+        region_card.add_row(_pair("X", self.crop_x, "Y", self.crop_y))
+        region_card.add_row(_pair("W", self.crop_w, "H", self.crop_h))
+        region_card.add_row(self.match_button)
+
+        placement_card = Card("Placement in output", parent=self)
+        placement_card.add_row("Mode", self.fit_combo)
+        placement_card.add_row("Scale", self.scale_spin)
+        placement_card.add_row(_pair("X", self.offset_x, "Y", self.offset_y))
+        placement_card.add_row(self.reset_placement_button)
+
+        layout_card = Card("Layout", parent=self)
+        layout_card.add_row("Top height", self.divider_spin)
+        swap_row = QHBoxLayout()
+        swap_row.addWidget(self.swap_button)
+        swap_row.addWidget(self.reset_button)
+        layout_card.add_row(swap_row)
+        layout_card.add_row("Output", self.output_label)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.addLayout(form)
+        layout.setSpacing(8)
+        for card in (preset_card, region_card, placement_card, layout_card):
+            layout.addWidget(card)
         layout.addStretch(1)
 
         # ---- wiring
