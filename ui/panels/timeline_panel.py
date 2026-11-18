@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import math
+
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,11 +20,24 @@ from PySide6.QtWidgets import (
 )
 
 from core.timeline.model import BEEP, MAX_GAIN_DB, MIN_GAIN_DB, SILENCE
-from core.timeline.timebase import US, format_timecode
+from core.timeline.timebase import US, format_timecode, us_to_frame
+from ui.theme import icon
 from ui.timeline.timeline_controller import MUTE, TimelineController
-from ui.timeline.timeline_view import TimelineView
+from ui.timeline.timeline_view import MAX_PPS, MIN_PPS, TimelineView
+from ui.timeline.track_header import HEADER_W, TrackHeader
+from ui.widgets.jump_slider import JumpSlider
 
 _SCROLL_UNIT_US = 10_000  # scroll bar resolution: 10 ms
+_ZOOM_STEPS = 1000  # zoom slider resolution (logarithmic)
+
+
+def pps_to_slider(pps: float) -> int:
+    pps = max(MIN_PPS, min(MAX_PPS, pps))
+    return round(_ZOOM_STEPS * math.log(pps / MIN_PPS) / math.log(MAX_PPS / MIN_PPS))
+
+
+def slider_to_pps(value: int) -> float:
+    return MIN_PPS * (MAX_PPS / MIN_PPS) ** (value / _ZOOM_STEPS)
 
 
 def _separator(parent: QWidget) -> QFrame:
@@ -45,6 +60,7 @@ class TimelinePanel(QWidget):
         self._updating = False
 
         self.view = TimelineView(controller, self)
+        self.header = TrackHeader(self.view, self)
         self.scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
 
         self.toolbar = QHBoxLayout()
@@ -69,9 +85,17 @@ class TimelinePanel(QWidget):
         self.fade_in_spin = self._fade_spin("Fade In length")
         self.fade_out_spin = self._fade_spin("Fade Out length")
 
-        self.zoom_out_button = self._tool("−", "Zoom out (Ctrl+wheel)")
-        self.zoom_in_button = self._tool("+", "Zoom in (Ctrl+wheel)")
-        self.zoom_fit_button = self._tool("Fit", "Show the whole clip")
+        self.zoom_out_button = self._tool("zoom_out", "Zoom out  (−, Ctrl+wheel)")
+        self.zoom_in_button = self._tool("zoom_in", "Zoom in  (+, Ctrl+wheel)")
+        self.zoom_fit_button = self._tool("zoom_fit", "Show the whole clip  (0)")
+        self.zoom_selection_button = self._tool("zoom_selection", "Zoom to the selection  (Z)")
+        self.zoom_slider = JumpSlider(Qt.Orientation.Horizontal, self)
+        self.zoom_slider.setObjectName("zoomSlider")
+        self.zoom_slider.setRange(0, _ZOOM_STEPS)
+        self.zoom_slider.setFixedWidth(120)
+        self.zoom_slider.setSingleStep(40)
+        self.zoom_slider.setPageStep(120)
+        self.zoom_slider.setToolTip("Timeline zoom. At the far right every frame is visible.")
         self.info_label = QLabel(self)
         self.info_label.setObjectName("timecode")
         # Let the window shrink: the info text gives way before the buttons do.
@@ -86,19 +110,30 @@ class TimelinePanel(QWidget):
         ):
             self.toolbar.addWidget(widget)
         self.toolbar.addWidget(self.info_label, 1)
-        for widget in (_separator(self), self.zoom_out_button, self.zoom_in_button, self.zoom_fit_button):
+        for widget in (_separator(self), self.zoom_out_button, self.zoom_slider, self.zoom_in_button,
+                       self.zoom_fit_button, self.zoom_selection_button):
             self.toolbar.addWidget(widget)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addLayout(self.toolbar)
-        layout.addWidget(self.view, 1)
-        layout.addWidget(self.scrollbar)
+        tracks = QHBoxLayout()
+        tracks.setContentsMargins(0, 0, 0, 0)
+        tracks.setSpacing(0)
+        tracks.addWidget(self.header)
+        tracks.addWidget(self.view, 1)
+        layout.addLayout(tracks, 1)
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(HEADER_W, 0, 0, 0)
+        bottom.addWidget(self.scrollbar)
+        layout.addLayout(bottom)
 
         self.zoom_in_button.clicked.connect(self.view.zoom_in)
         self.zoom_out_button.clicked.connect(self.view.zoom_out)
         self.zoom_fit_button.clicked.connect(self.view.zoom_fit)
+        self.zoom_selection_button.clicked.connect(self.view.zoom_selection)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_slider)
         self.scrollbar.valueChanged.connect(self._on_scrollbar)
         self.view.view_changed.connect(self._sync_scrollbar)
         self.mode_combo.activated.connect(lambda _i: controller.set_mute_mode(self.mode_combo.currentData()))
@@ -111,10 +146,12 @@ class TimelinePanel(QWidget):
         self.refresh()
 
     # ------------------------------------------------------------ helpers
-    def _tool(self, text: str, tip: str) -> QToolButton:
+    def _tool(self, glyph: str, tip: str) -> QToolButton:
         button = QToolButton(self)
-        button.setText(text)
+        button.setIcon(icon(glyph))
+        button.setIconSize(QSize(18, 18))
         button.setToolTip(tip)
+        button.setAccessibleName(tip.split("  (")[0])
         return button
 
     def _fade_spin(self, tip: str) -> QDoubleSpinBox:
@@ -138,7 +175,19 @@ class TimelinePanel(QWidget):
             self._action_slot.addWidget(button)
 
     # ------------------------------------------------------------- scroll
+    def _on_zoom_slider(self, value: int) -> None:
+        if self._updating:
+            return
+        view = self.view
+        anchor = view.us_to_x(self.controller.playhead_us)
+        view.set_zoom(slider_to_pps(value), anchor if 0 <= anchor <= view.width() else None)
+
     def _sync_scrollbar(self) -> None:
+        self._updating, was = True, self._updating
+        try:
+            self.zoom_slider.setValue(pps_to_slider(self.view.pixels_per_second))
+        finally:
+            self._updating = was
         t = self.controller.timeline
         self.scrollbar.blockSignals(True)
         if t is None:
@@ -162,8 +211,9 @@ class TimelinePanel(QWidget):
         try:
             enabled = t is not None
             for widget in (self.gain_spin, self.fade_in_spin, self.fade_out_spin, self.mode_combo,
-                           self.zoom_in_button, self.zoom_out_button, self.zoom_fit_button):
+                           self.zoom_in_button, self.zoom_out_button, self.zoom_fit_button, self.zoom_slider):
                 widget.setEnabled(enabled)
+            self.zoom_selection_button.setEnabled(self.view.selection_bounds() is not None)
             if t is not None:
                 self.gain_spin.setValue(t.gain_db)
                 self.fade_in_spin.setValue(t.fade_in_us / US)
@@ -179,7 +229,11 @@ class TimelinePanel(QWidget):
         if t is None:
             self.info_label.setText("")
             return
-        parts = [format_timecode(self.controller.playhead_us), f"Output {format_timecode(t.output_us)}"]
+        playhead = format_timecode(self.controller.playhead_us)
+        fps = self.controller.fps
+        if fps:
+            playhead += f"  frame {us_to_frame(self.controller.playhead_us, fps)}"
+        parts = [playhead, f"Output {format_timecode(t.output_us)}"]
         if self.controller.range:
             start, end = self.controller.range
             parts.append(f"Selection {format_timecode(end - start)}")

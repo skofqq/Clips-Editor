@@ -310,3 +310,78 @@ def test_playback_skips_cut_and_mutes(window):
     window.preview.seek(400)
     window.edit_playback.tick()
     assert window.preview._audio_factor == 1.0
+
+
+# ------------------------------------------------------------ v0.8.4 zoom
+def test_zoom_slider_and_zoom_to_selection(view, controller):
+    from ui.panels.timeline_panel import pps_to_slider, slider_to_pps
+
+    panel = view._panel
+    assert slider_to_pps(pps_to_slider(250.0)) == pytest.approx(250.0, rel=0.01)
+    assert panel.zoom_slider.value() == pps_to_slider(100.0)
+    panel.zoom_slider.setValue(pps_to_slider(800.0))
+    assert view.pixels_per_second == pytest.approx(800.0, rel=0.01)
+    view.zoom_fit()
+    assert panel.zoom_slider.value() == pps_to_slider(view.pixels_per_second)
+
+    assert not panel.zoom_selection_button.isEnabled()
+    controller.set_range(4 * S, 5 * S)
+    assert panel.zoom_selection_button.isEnabled()
+    assert view.zoom_selection()
+    assert view.us_to_x(4 * S) == pytest.approx(24, abs=2)
+    assert view.us_to_x(5 * S) == pytest.approx(view.width() - 24, abs=2)
+
+
+def test_frame_snapping_and_ticks(view, controller):
+    controller.fps = Fraction(30)
+    view.set_zoom(3000.0)  # 100 px per frame
+    assert view.frame_px() == pytest.approx(100.0)
+    view.set_scroll_us(2 * S)
+    x0 = view.us_to_x(2 * S + 10_000)  # 10 ms past a frame boundary
+    drag(view, QPointF(x0, AUD), QPointF(x0 + 160, AUD))
+    start, end = controller.range
+    assert start == 2 * S
+    assert end == round(end * 30 / S) * S // 30 or abs(end * 30 / S - round(end * 30 / S)) < 1e-3
+    view.grab()  # paints the frame ticks without errors
+
+
+def test_track_resize_and_wave_gain(view, controller):
+    from ui.timeline.timeline_view import HEIGHT_LIMITS, TrackLayout
+
+    tracks = view.tracks
+    assert (tracks.video_y, tracks.audio_y, tracks.mute_y, tracks.speech_y) == (VIDEO_Y, AUDIO_Y, MUTE_Y, 164)
+    edge = tracks.audio_y + tracks.audio_h + 1
+    assert view.hit_test(QPointF(300, edge))["area"] == "track_resize"
+    drag_y = QPointF(300, edge)
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, drag_y.toPoint())
+    QTest.mouseMove(view, QPoint(300, edge + 60))
+    QTest.mouseRelease(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, edge + 60))
+    assert view.tracks.audio_h == 72 + 60
+    assert view.tracks.mute_y == MUTE_Y + 60
+    assert controller.range is None  # resizing does not select anything
+    view.resize_track("audio", 10_000)
+    assert view.tracks.audio_h == HEIGHT_LIMITS["audio"][1]
+
+    view.set_wave_gain(3.0)
+    state = view.view_state()
+    view.restore_view_state({})
+    assert view.tracks == TrackLayout() and view.wave_gain == 1.0
+    view.restore_view_state(state)
+    assert view.tracks.audio_h == HEIGHT_LIMITS["audio"][1] and view.wave_gain == 3.0
+    view.restore_view_state({"tracks": {"audio": "junk"}, "wave_gain": "x"})  # tolerated
+    view.set_wave_gain(99)
+    assert view.wave_gain == 12.0
+
+
+def test_track_header_follows_view(view, controller):
+    panel = view._panel
+    header = panel.header
+    assert header.row_at(AUD) == "audio"
+    assert header.row_at(MUT) == "mute"
+    view.resize_track("video", 60)
+    assert header.row_at(VIDEO_Y + 50) == "video"
+    header.grab()
+    view.set_wave_gain(4.0)
+    QTest.mouseDClick(header, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                      QPoint(40, view.tracks.audio_y + 10))
+    assert view.wave_gain == 1.0

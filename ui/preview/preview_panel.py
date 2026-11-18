@@ -228,6 +228,18 @@ class PreviewPanel(QWidget):
         self.player.setPosition(ms)
         self._update_time(ms)
 
+    def step_ms(self, ms: int) -> None:
+        """Pause and move by ``ms`` (Shift+arrows move by a second)."""
+        if self._media is None:
+            return
+        self.player.pause()
+        self.seek(self.player.position() + int(ms))
+
+    def seek_end(self) -> None:
+        if self._media is not None:
+            self.player.pause()
+            self.seek(max(0, self._duration_ms - self._frame_ms))
+
     def step_frames(self, count: int) -> None:
         if self._media is None:
             return

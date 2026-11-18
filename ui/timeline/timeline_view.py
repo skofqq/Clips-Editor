@@ -7,6 +7,8 @@ the transcript always line up with the original recording.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
+
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QLinearGradient, QMouseEvent, QPainter, QPen, QPolygonF, QWheelEvent
 from PySide6.QtWidgets import QSizePolicy, QWidget
@@ -15,21 +17,96 @@ from core.audio.waveform import Waveform
 from core.censor.review import ACCEPTED, PENDING, CensorState
 from core.timeline.model import BEEP, Timeline
 from ui.theme import palette
-from core.timeline.timebase import US, format_timecode
+from core.timeline.timebase import US, format_timecode, frame_to_us, us_to_frame
 from core.transcription.model import Transcript
 from ui.timeline.timeline_controller import MUTE, SEGMENT, TimelineController
 
 RULER_H = 22
+TRACK_GAP = 4
+# Default track layout (the video, audio and speech tracks can be resized).
 VIDEO_Y, VIDEO_H = 26, 30
 AUDIO_Y, AUDIO_H = 60, 72
 MUTE_Y, MUTE_H = 136, 24
 SPEECH_Y, SPEECH_H = 164, 22
 CONTENT_H = SPEECH_Y + SPEECH_H + 6
+HEIGHT_LIMITS = {"video": (20, 90), "audio": (36, 280), "speech": (22, 64)}
 EDGE_GRAB = 6  # px within which an edge is grabbed
 SNAP_PX = 8
 DRAG_THRESHOLD = 3
-MIN_PPS, MAX_PPS = 2.0, 2000.0  # pixels per second
-_TICK_STEPS = (0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
+MIN_PPS, MAX_PPS = 2.0, 4000.0  # pixels per second
+MIN_WAVE_GAIN, MAX_WAVE_GAIN = 1.0, 12.0
+FRAME_TICK_PX = 6  # frame ticks appear once a frame is this wide
+_TICK_STEPS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
+
+
+@dataclass(frozen=True)
+class TrackLayout:
+    """Vertical layout of the tracks; every y is derived from the heights."""
+
+    video_h: int = VIDEO_H
+    audio_h: int = AUDIO_H
+    speech_h: int = SPEECH_H
+
+    @property
+    def video_y(self) -> int:
+        return RULER_H + TRACK_GAP
+
+    @property
+    def audio_y(self) -> int:
+        return self.video_y + self.video_h + TRACK_GAP
+
+    @property
+    def mute_y(self) -> int:
+        return self.audio_y + self.audio_h + TRACK_GAP
+
+    @property
+    def mute_h(self) -> int:
+        return MUTE_H
+
+    @property
+    def speech_y(self) -> int:
+        return self.mute_y + MUTE_H + TRACK_GAP
+
+    @property
+    def bottom(self) -> int:
+        return self.speech_y + self.speech_h
+
+    @property
+    def content_h(self) -> int:
+        return self.bottom + 6
+
+    def rows(self) -> list[tuple[str, int, int]]:
+        """(name, y, height) of each track, top to bottom."""
+        return [
+            ("video", self.video_y, self.video_h),
+            ("audio", self.audio_y, self.audio_h),
+            ("mute", self.mute_y, MUTE_H),
+            ("speech", self.speech_y, self.speech_h),
+        ]
+
+    def handle_at(self, y: float) -> str | None:
+        """Name of the resizable track whose lower edge is at ``y``."""
+        for name, top, height in self.rows():
+            if name in HEIGHT_LIMITS and top + height - 2 <= y <= top + height + TRACK_GAP + 1:
+                return name
+        return None
+
+    def resized(self, name: str, height: int) -> "TrackLayout":
+        low, high = HEIGHT_LIMITS[name]
+        return replace(self, **{f"{name}_h": max(low, min(high, int(height)))})
+
+    def to_dict(self) -> dict:
+        return {"video": self.video_h, "audio": self.audio_h, "speech": self.speech_h}
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "TrackLayout":
+        layout = cls()
+        for name in HEIGHT_LIMITS:
+            try:
+                layout = layout.resized(name, int((data or {})[name]))
+            except (KeyError, TypeError, ValueError):
+                pass
+        return layout
 
 _ACCENT = palette.accent()
 C_BG = QColor(palette.BASE_ALT)
@@ -54,6 +131,7 @@ class TimelineView(QWidget):
     view_changed = Signal()  # zoom or scroll changed
     gesture_finished = Signal()  # a drag ended (closes the undo step)
     word_clicked = Signal(int, int)  # start_us, end_us of an exactly timed word
+    tracks_changed = Signal()  # a track height or the waveform gain changed
 
     def __init__(self, controller: TimelineController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -67,7 +145,9 @@ class TimelineView(QWidget):
         self._fit_pending = True
         self._drag: dict | None = None
         self._wave_cache: tuple | None = None
-        self.setMinimumHeight(CONTENT_H)
+        self._tracks = TrackLayout()
+        self._wave_gain = 1.0
+        self.setMinimumHeight(self._tracks.content_h)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -90,6 +170,49 @@ class TimelineView(QWidget):
 
     def visible_us(self) -> int:
         return int(self.width() / self._pps * US)
+
+    # ------------------------------------------------------ tracks / wave
+    @property
+    def tracks(self) -> TrackLayout:
+        return self._tracks
+
+    def set_tracks(self, tracks: TrackLayout) -> None:
+        if tracks == self._tracks:
+            return
+        self._tracks = tracks
+        self.setMinimumHeight(tracks.content_h)
+        self.updateGeometry()
+        self.tracks_changed.emit()
+        self.update()
+
+    def resize_track(self, name: str, height: int) -> None:
+        self.set_tracks(self._tracks.resized(name, height))
+
+    @property
+    def wave_gain(self) -> float:
+        return self._wave_gain
+
+    def set_wave_gain(self, gain: float) -> None:
+        """Vertical zoom of the waveform (display only, the sound is unchanged)."""
+        gain = round(max(MIN_WAVE_GAIN, min(MAX_WAVE_GAIN, float(gain))), 2)
+        if gain != self._wave_gain:
+            self._wave_gain = gain
+            self.tracks_changed.emit()
+            self.update()
+
+    def step_wave_gain(self, steps: float) -> None:
+        self.set_wave_gain(self._wave_gain * (1.25 ** steps))
+
+    def view_state(self) -> dict:
+        return {"tracks": self._tracks.to_dict(), "wave_gain": self._wave_gain}
+
+    def restore_view_state(self, data: dict | None) -> None:
+        data = data or {}
+        self.set_tracks(TrackLayout.from_dict(data.get("tracks")))
+        try:
+            self.set_wave_gain(float(data.get("wave_gain", 1.0)))
+        except (TypeError, ValueError):
+            pass
 
     def set_waveform(self, waveform: Waveform | None) -> None:
         self._waveform = waveform
@@ -155,11 +278,57 @@ class TimelineView(QWidget):
         self.view_changed.emit()
         self.update()
 
+    def _zoom_anchor(self) -> float | None:
+        """Zoom around the mouse when it is over the timeline, else the playhead."""
+        pos = self.mapFromGlobal(self.cursor().pos())
+        if self.underMouse() and 0 <= pos.x() <= self.width():
+            return float(pos.x())
+        if self._playhead_visible():
+            return self.us_to_x(self.controller.playhead_us)
+        return None
+
     def zoom_in(self) -> None:
-        self.set_zoom(self._pps * 1.5, self.us_to_x(self.controller.playhead_us) if self._playhead_visible() else None)
+        self.set_zoom(self._pps * 1.5, self._zoom_anchor())
 
     def zoom_out(self) -> None:
-        self.set_zoom(self._pps / 1.5)
+        self.set_zoom(self._pps / 1.5, self._zoom_anchor())
+
+    def zoom_to_range(self, start_us: int, end_us: int) -> None:
+        """Fill the view with ``start_us``–``end_us`` (with a small margin)."""
+        start_us, end_us = sorted((int(start_us), int(end_us)))
+        length = max(1, end_us - start_us)
+        margin_px = 24
+        pps = (self.width() - 2 * margin_px) / (length / US)
+        self.set_zoom(max(MIN_PPS, min(MAX_PPS, pps)))
+        center = (start_us + end_us) / 2
+        self.set_scroll_us(int(center - self.width() / 2 * US / self._pps))
+
+    def selection_bounds(self) -> tuple[int, int] | None:
+        """The selected range, else the selected mute region or segment."""
+        c, t = self.controller, self.timeline
+        if t is None:
+            return None
+        if c.range:
+            return c.range
+        if c.selected and c.selected[0] == MUTE:
+            region = t.mute(c.selected[1])
+            return (region.start_us, region.end_us) if region else None
+        if c.selected and c.selected[0] == SEGMENT and 0 <= c.selected[1] < len(t.segments):
+            seg = t.segments[c.selected[1]]
+            return seg.start_us, seg.end_us
+        return None
+
+    def zoom_selection(self) -> bool:
+        bounds = self.selection_bounds()
+        if bounds is None:
+            return False
+        self.zoom_to_range(*bounds)
+        return True
+
+    def frame_px(self) -> float:
+        """Width of one video frame at the current zoom (0 when fps is unknown)."""
+        fps = self.controller.fps
+        return self._pps / float(fps) if fps else 0.0
 
     def zoom_fit(self) -> None:
         t = self.timeline
@@ -217,12 +386,16 @@ class TimelineView(QWidget):
         x, y = pos.x(), pos.y()
         if t is None:
             return {"area": "none"}
+        tr = self._tracks
         if y < RULER_H:
             return {"area": "ruler"}
-        if SPEECH_Y <= y <= SPEECH_Y + SPEECH_H:
+        handle = tr.handle_at(y)
+        if handle is not None:
+            return {"area": "track_resize", "track": handle}
+        if tr.speech_y <= y <= tr.bottom:
             item = self.speech_item_at(x)
             return {"area": "speech", "item": item} if item else {"area": "speech_track"}
-        if MUTE_Y <= y <= MUTE_Y + MUTE_H:
+        if tr.mute_y <= y <= tr.mute_y + MUTE_H:
             # Edges first, so that a short region can still be resized.
             for m in t.mutes:
                 x0, x1 = self.us_to_x(m.start_us), self.us_to_x(m.end_us)
@@ -235,7 +408,7 @@ class TimelineView(QWidget):
                 if self.us_to_x(m.start_us) <= x <= self.us_to_x(m.end_us):
                     return {"area": "mute", "id": m.id}
             return {"area": "mute_track"}
-        if VIDEO_Y <= y <= AUDIO_Y + AUDIO_H:
+        if tr.video_y <= y <= tr.audio_y + tr.audio_h:
             for index, s in enumerate(t.segments):
                 x0, x1 = self.us_to_x(s.start_us), self.us_to_x(s.end_us)
                 # At a split point two edges coincide: the side of the
@@ -265,7 +438,10 @@ class TimelineView(QWidget):
         area = hit["area"]
         self._drag = {"hit": hit, "start_x": pos.x(), "start_us": us, "moved": False}
         if area == "ruler":
-            self.seek_requested.emit(us)
+            self.seek_requested.emit(self.controller.frame_snap(us))
+        elif area == "track_resize":
+            self._drag["start_y"] = pos.y()
+            self._drag["start_h"] = getattr(self._tracks, f"{hit['track']}_h")
         elif area == "mute":
             self.controller.select(MUTE, hit["id"])
             self._drag["offset_us"] = us - t.mute(hit["id"]).start_us
@@ -278,7 +454,9 @@ class TimelineView(QWidget):
         pos = event.position()
         if self._drag is None:
             area = self.hit_test(pos)["area"]
-            if area in ("mute_edge", "segment_edge"):
+            if area == "track_resize":
+                self.setCursor(Qt.CursorShape.SizeVerCursor)
+            elif area in ("mute_edge", "segment_edge"):
                 self.setCursor(Qt.CursorShape.SizeHorCursor)
             elif area == "mute":
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -289,6 +467,10 @@ class TimelineView(QWidget):
         if t is None:
             return
         drag = self._drag
+        if drag["hit"]["area"] == "track_resize":
+            self.resize_track(drag["hit"]["track"], drag["start_h"] + pos.y() - drag["start_y"])
+            drag["moved"] = True
+            return
         if not drag["moved"] and abs(pos.x() - drag["start_x"]) < DRAG_THRESHOLD:
             return
         drag["moved"] = True
@@ -299,7 +481,7 @@ class TimelineView(QWidget):
         c = self.controller
 
         if area == "ruler":
-            self.seek_requested.emit(us)
+            self.seek_requested.emit(c.frame_snap(us))
         elif area == "segment_edge":
             index, edge = hit["index"], hit["edge"]
             seg = t.segments[index]
@@ -312,6 +494,7 @@ class TimelineView(QWidget):
             if region is None:
                 return
             us = self._snap(us, exclude={region.start_us, region.end_us}, enabled=snap)
+            us = c.frame_snap(us) if snap else us
             kwargs = {"start_us": us} if hit["edge"] == "start" else {"end_us": us}
             c.set_timeline(t.update_mute(hit["id"], **kwargs), key=("mute_edge", hit["id"], hit["edge"]))
         elif area == "mute":
@@ -324,16 +507,23 @@ class TimelineView(QWidget):
             if snapped_start == start:  # try snapping the right edge instead
                 snapped_end = self._snap(start + region.length_us, exclude=own, enabled=snap)
                 snapped_start = snapped_end - region.length_us
+            if snap:
+                snapped_start = c.frame_snap(snapped_start)
             c.set_timeline(t.move_mute(hit["id"], snapped_start), key=("mute_move", hit["id"]))
         else:  # segment body, gap or mute track: select a time range
             start = drag["start_us"]
-            c.set_range(start, self._snap(us, exclude={start}, enabled=snap))
+            end = self._snap(us, exclude={start}, enabled=snap)
+            if snap:
+                start, end = c.frame_snap(start), c.frame_snap(end)
+            c.set_range(start, end)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         drag, self._drag = self._drag, None
         if drag is None or event.button() != Qt.MouseButton.LeftButton:
             return
         hit = drag["hit"]
+        if hit["area"] == "track_resize":
+            return
         if not drag["moved"]:
             # A plain click: move the playhead and select what was clicked.
             area = hit["area"]
@@ -356,8 +546,13 @@ class TimelineView(QWidget):
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
         delta = event.angleDelta()
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        mods = event.modifiers()
+        if mods & Qt.KeyboardModifier.ControlModifier:
             self.set_zoom(self._pps * (1.2 ** (delta.y() / 120)), event.position().x())
+        elif mods & Qt.KeyboardModifier.AltModifier:
+            # Alt+wheel: waveform height (Windows reports it as a horizontal wheel).
+            step = delta.y() or delta.x()
+            self.step_wave_gain(step / 120)
         else:
             step = delta.x() if delta.x() else delta.y()
             self.set_scroll_us(self._scroll_us - int(step / 120 * 80 * US / self._pps))
@@ -383,6 +578,9 @@ class TimelineView(QWidget):
             return
         c = self.controller
         x_end = self.us_to_x(t.duration_us)
+        tr = self._tracks
+        video_y, video_h, audio_y, audio_h = tr.video_y, tr.video_h, tr.audio_y, tr.audio_h
+        mute_y, mute_h, speech_y, speech_h = tr.mute_y, MUTE_H, tr.speech_y, tr.speech_h
 
         # Ruler band and rounded track backgrounds.
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -390,9 +588,20 @@ class TimelineView(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(C_TRACK)
         track_w = min(w + 8.0, max(0.0, x_end))
-        for y, height in ((VIDEO_Y, VIDEO_H), (AUDIO_Y, AUDIO_H), (MUTE_Y, MUTE_H)):
+        for y, height in ((video_y, video_h), (audio_y, audio_h), (mute_y, mute_h)):
             p.drawRoundedRect(QRectF(0, y, track_w, height), 6, 6)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        # Frame ticks once a single frame is wide enough to aim at.
+        frame_px = self.frame_px()
+        if frame_px >= FRAME_TICK_PX:
+            fps = c.fps
+            first_frame = us_to_frame(self._scroll_us, fps)
+            last_frame = us_to_frame(min(t.duration_us, self.x_to_us(w)), fps) + 1
+            p.setPen(QColor(palette.TEXT_TERTIARY))
+            for frame in range(first_frame, last_frame + 1):
+                fx = self.us_to_x(frame_to_us(frame, fps))
+                p.drawLine(QLineF(fx, RULER_H - 4, fx, RULER_H))
 
         # Ruler.
         seconds_per_tick = next((s for s in _TICK_STEPS if s * self._pps >= 70), _TICK_STEPS[-1])
@@ -417,7 +626,7 @@ class TimelineView(QWidget):
             x0, x1 = self.us_to_x(s.start_us), self.us_to_x(s.end_us)
             if x1 < 0 or x0 > w:
                 continue
-            rect = QRectF(x0, VIDEO_Y, x1 - x0, VIDEO_H)
+            rect = QRectF(x0, video_y, x1 - x0, video_h)
             selected = c.selected == (SEGMENT, index)
             gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
             base = C_SEGMENT_SEL if selected else C_SEGMENT
@@ -437,16 +646,16 @@ class TimelineView(QWidget):
                 )
 
         # Waveform: bright inside kept segments, dim where cut.
-        mid = AUDIO_Y + AUDIO_H / 2
+        mid = audio_y + audio_h / 2
         if self._waveform is not None and len(self._waveform.peaks):
             cols = self._wave_columns(w)
-            half = AUDIO_H / 2 - 2
+            half = audio_h / 2 - 2
             kept: list[QLineF] = []
             cut: list[QLineF] = []
             bounds = [(self.us_to_x(s.start_us), self.us_to_x(s.end_us)) for s in t.segments]
             bi = 0
             for x in range(w):
-                amp = float(cols[x]) * half
+                amp = min(1.0, float(cols[x]) * self._wave_gain) * half
                 if amp < 0.5:
                     amp = 0.5
                 while bi < len(bounds) and bounds[bi][1] <= x:
@@ -459,7 +668,7 @@ class TimelineView(QWidget):
             p.drawLines(kept)
         else:
             p.setPen(QColor(palette.TEXT_TERTIARY))
-            p.drawText(QRectF(8, AUDIO_Y, w, AUDIO_H), Qt.AlignmentFlag.AlignVCenter, "No waveform")
+            p.drawText(QRectF(8, audio_y, w, audio_h), Qt.AlignmentFlag.AlignVCenter, "No waveform")
 
         # Fades (drawn over the audio track in output order).
         p.setPen(Qt.PenStyle.NoPen)
@@ -467,11 +676,11 @@ class TimelineView(QWidget):
         if t.fade_in_us > 0:
             x0 = self.us_to_x(t.start_us)
             x1 = self.us_to_x(t.output_to_source(t.fade_in_us))
-            p.drawPolygon(QPolygonF([QPointF(x0, AUDIO_Y), QPointF(x1, AUDIO_Y), QPointF(x0, AUDIO_Y + AUDIO_H)]))
+            p.drawPolygon(QPolygonF([QPointF(x0, audio_y), QPointF(x1, audio_y), QPointF(x0, audio_y + audio_h)]))
         if t.fade_out_us > 0:
             x1 = self.us_to_x(t.end_us)
             x0 = self.us_to_x(t.output_to_source(t.output_us - t.fade_out_us))
-            p.drawPolygon(QPolygonF([QPointF(x0, AUDIO_Y), QPointF(x1, AUDIO_Y), QPointF(x1, AUDIO_Y + AUDIO_H)]))
+            p.drawPolygon(QPolygonF([QPointF(x0, audio_y), QPointF(x1, audio_y), QPointF(x1, audio_y + audio_h)]))
 
         # Mute regions: tint on the audio track, blocks on the mute track.
         for m in t.mutes:
@@ -481,8 +690,8 @@ class TimelineView(QWidget):
             color = C_BEEP if m.mode == BEEP else C_MUTE
             tint = QColor(color)
             tint.setAlpha(70)
-            p.fillRect(QRectF(x0, AUDIO_Y, x1 - x0, AUDIO_H), tint)
-            block = QRectF(x0, MUTE_Y, max(2.0, x1 - x0), MUTE_H)
+            p.fillRect(QRectF(x0, audio_y, x1 - x0, audio_h), tint)
+            block = QRectF(x0, mute_y, max(2.0, x1 - x0), mute_h)
             p.fillRect(block, color)
             if c.selected == (MUTE, m.id):
                 p.setPen(QPen(QColor("#ffffff"), 2))
@@ -507,10 +716,10 @@ class TimelineView(QWidget):
                     pen.setWidth(3)
                 p.setPen(pen)
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRect(QRectF(x0, MUTE_Y + 1, max(3.0, x1 - x0), MUTE_H - 2))
+                p.drawRect(QRectF(x0, mute_y + 1, max(3.0, x1 - x0), mute_h - 2))
 
         # Speech track: segments, and words when zoomed in far enough.
-        p.fillRect(QRectF(0, SPEECH_Y, min(w, max(0.0, x_end)), SPEECH_H), C_TRACK)
+        p.fillRect(QRectF(0, speech_y, min(w, max(0.0, x_end)), speech_h), C_TRACK)
         if self._transcript is not None:
             show_words = self._pps >= 40
             metrics = p.fontMetrics()
@@ -518,13 +727,13 @@ class TimelineView(QWidget):
                 x0, x1 = self.us_to_x(seg.start_us), self.us_to_x(seg.end_us)
                 if x1 < 0 or x0 > w:
                     continue
-                block = QRectF(x0, SPEECH_Y, max(2.0, x1 - x0), SPEECH_H)
+                block = QRectF(x0, speech_y, max(2.0, x1 - x0), speech_h)
                 p.fillRect(block, C_SPEECH)
                 exact_words = [wd for wd in seg.words if wd.exact]
                 if show_words and exact_words:
                     for wd in exact_words:
                         wx0, wx1 = self.us_to_x(wd.start_us), self.us_to_x(wd.end_us)
-                        rect = QRectF(wx0, SPEECH_Y + 3, max(1.0, wx1 - wx0 - 1), SPEECH_H - 6)
+                        rect = QRectF(wx0, speech_y + 3, max(1.0, wx1 - wx0 - 1), speech_h - 6)
                         p.fillRect(rect, C_WORD)
                         if rect.width() > metrics.horizontalAdvance(wd.text) + 4:
                             p.setPen(QColor("#0d1f16"))
@@ -545,22 +754,15 @@ class TimelineView(QWidget):
         for s in t.segments:
             x0 = self.us_to_x(s.start_us)
             if x0 > cursor:
-                p.fillRect(QRectF(cursor, VIDEO_Y, x0 - cursor, SPEECH_Y + SPEECH_H - VIDEO_Y), dim)
+                p.fillRect(QRectF(cursor, video_y, x0 - cursor, speech_y + speech_h - video_y), dim)
             cursor = max(cursor, self.us_to_x(s.end_us))
         if x_end > cursor:
-            p.fillRect(QRectF(cursor, VIDEO_Y, x_end - cursor, SPEECH_Y + SPEECH_H - VIDEO_Y), dim)
-
-        # Track captions.
-        p.setPen(QColor(255, 255, 255, 110))
-        p.drawText(QPointF(6, AUDIO_Y + 13), "Audio")
-        p.drawText(QPointF(6, MUTE_Y + 16), "Mute" if not t.mutes else "")
-        if self._transcript is None:
-            p.drawText(QPointF(6, SPEECH_Y + 15), "Speech")
+            p.fillRect(QRectF(cursor, video_y, x_end - cursor, speech_y + speech_h - video_y), dim)
 
         # Range selection.
         if c.range:
             x0, x1 = self.us_to_x(c.range[0]), self.us_to_x(c.range[1])
-            bottom = SPEECH_Y + SPEECH_H
+            bottom = speech_y + speech_h
             p.fillRect(QRectF(x0, RULER_H, x1 - x0, bottom - RULER_H), QColor(255, 255, 255, 45))
             p.setPen(QPen(QColor(255, 255, 255, 160), 1))
             p.drawLine(QLineF(x0, RULER_H, x0, bottom))

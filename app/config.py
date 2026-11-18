@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.8.3"
+APP_VERSION = "0.8.4"
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class AppConfig:
     recent_files: list[str] = field(default_factory=list)
     window_geometry: str = ""  # base64 of QMainWindow.saveGeometry()
     window_state: str = ""  # base64 of QMainWindow.saveState()
+    timeline_view: dict = field(default_factory=dict)  # track heights and waveform zoom
     transcribe_vocabulary: str = ""  # nicknames / slang, comma separated
     transcribe_uncensored: bool = True
     transcribe_slang: bool = True

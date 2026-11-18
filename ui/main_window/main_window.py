@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
         self._create_toolbar()
         self._connect()
         self._restore_layout()
+        self.timeline_panel.view.restore_view_state(self.config.timeline_view)
         self._update_title()
 
         if self.ffmpeg is not None:
@@ -268,6 +269,16 @@ class MainWindow(QMainWindow):
         self.act_play = QAction("Play / Pause", self, shortcut=QKeySequence(Qt.Key.Key_Space))
         self.act_prev = QAction("Previous Frame", self, shortcut=QKeySequence(Qt.Key.Key_Left))
         self.act_next = QAction("Next Frame", self, shortcut=QKeySequence(Qt.Key.Key_Right))
+        self.act_back_second = QAction("Back 1 Second", self, shortcut=QKeySequence("Shift+Left"))
+        self.act_forward_second = QAction("Forward 1 Second", self, shortcut=QKeySequence("Shift+Right"))
+        self.act_go_start = QAction("Go to Start", self, shortcut=QKeySequence(Qt.Key.Key_Home))
+        self.act_go_end = QAction("Go to End", self, shortcut=QKeySequence(Qt.Key.Key_End))
+        self.act_zoom_in = QAction("Zoom In", self)
+        self.act_zoom_in.setShortcuts([QKeySequence("+"), QKeySequence("="), QKeySequence("Ctrl+=")])
+        self.act_zoom_out = QAction("Zoom Out", self)
+        self.act_zoom_out.setShortcuts([QKeySequence("-"), QKeySequence("Ctrl+-")])
+        self.act_zoom_fit = QAction("Fit Whole Clip", self, shortcut=QKeySequence("0"))
+        self.act_zoom_selection = QAction("Zoom to Selection", self, shortcut=QKeySequence(Qt.Key.Key_Z))
         self.act_reset_layout = QAction("Reset Layout", self)
         self.act_about = QAction("About", self)
         self.act_ffmpeg_info = QAction("FFmpeg Info", self)
@@ -289,7 +300,12 @@ class MainWindow(QMainWindow):
             self.act_undo, self.act_redo, self.act_split, self.act_delete, self.act_trim,
             self.act_restore, self.act_mute, self.act_merge_mutes,
         )
-        for action in (self.act_play, self.act_prev, self.act_next, *self._edit_actions):
+        self._navigation_actions = (
+            self.act_play, self.act_prev, self.act_next, self.act_back_second, self.act_forward_second,
+            self.act_go_start, self.act_go_end, self.act_zoom_in, self.act_zoom_out, self.act_zoom_fit,
+            self.act_zoom_selection,
+        )
+        for action in (*self._navigation_actions, *self._edit_actions):
             action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             self.addAction(action)
 
@@ -317,11 +333,16 @@ class MainWindow(QMainWindow):
 
         playback = self.menuBar().addMenu("&Playback")
         playback.addActions([self.act_play, self.act_prev, self.act_next])
+        playback.addSeparator()
+        playback.addActions([self.act_back_second, self.act_forward_second, self.act_go_start, self.act_go_end])
 
         view = self.menuBar().addMenu("&View")
         for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.censor_dock,
                      self.metadata_dock, self.timeline_dock):
             view.addAction(dock.toggleViewAction())
+        view.addSeparator()
+        zoom = view.addMenu("Timeline Zoom")
+        zoom.addActions([self.act_zoom_in, self.act_zoom_out, self.act_zoom_fit, self.act_zoom_selection])
         view.addSeparator()
         view.addAction(self.act_reset_layout)
 
@@ -350,6 +371,15 @@ class MainWindow(QMainWindow):
         self.act_play.triggered.connect(self.preview.toggle_play)
         self.act_prev.triggered.connect(lambda: self.preview.step_frames(-1))
         self.act_next.triggered.connect(lambda: self.preview.step_frames(1))
+        self.act_back_second.triggered.connect(lambda: self.preview.step_ms(-1000))
+        self.act_forward_second.triggered.connect(lambda: self.preview.step_ms(1000))
+        self.act_go_start.triggered.connect(lambda: self.preview.seek(0))
+        self.act_go_end.triggered.connect(self.preview.seek_end)
+        timeline_view = self.timeline_panel.view
+        self.act_zoom_in.triggered.connect(timeline_view.zoom_in)
+        self.act_zoom_out.triggered.connect(timeline_view.zoom_out)
+        self.act_zoom_fit.triggered.connect(timeline_view.zoom_fit)
+        self.act_zoom_selection.triggered.connect(timeline_view.zoom_selection)
         self.act_reset_layout.triggered.connect(self.reset_layout)
         self.act_about.triggered.connect(self._show_about)
         self.act_ffmpeg_info.triggered.connect(self._show_ffmpeg_info)
@@ -1105,6 +1135,7 @@ class MainWindow(QMainWindow):
         self.preview.player.stop()
         self.config.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         self.config.window_state = bytes(self.saveState(LAYOUT_VERSION).toBase64()).decode()
+        self.config.timeline_view = self.timeline_panel.view.view_state()
         self.pool.waitForDone(3000)
         self.metadata_library.close()
         event.accept()

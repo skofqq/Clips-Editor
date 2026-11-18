@@ -195,11 +195,17 @@ Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
 | Keep only the selected range | `T` |
 | Mute the selected range | `M`, then pick Silence or Beep |
 | Move / resize a Mute Region | drag it or its edges on the Mute track |
-| Zoom / scroll | `Ctrl`+wheel / wheel |
+| Zoom / scroll | `Ctrl`+wheel (around the mouse) / wheel, or the zoom slider |
+| Zoom in / out / whole clip | `+` / `−` / `0` |
+| Zoom to the selection | `Z` (range, mute region or selected segment) |
+| Taller or shorter tracks | drag the lower edge of Video, Audio or Speech (in the track names or on the timeline) |
+| Taller waveform | `Alt`+wheel, or the wheel over **Audio** in the track names; double-click resets |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 
-Edges snap to the playhead and to other edges; hold `Alt` to turn
-snapping off. Beep regions sound silent in the preview; the tone is
+Edges snap to the playhead, to other edges and to video frames; hold
+`Alt` to turn snapping off. Zoomed in far enough, the ruler shows a tick
+for every frame and the toolbar shows the frame number of the playhead.
+Track heights and the waveform zoom are remembered between sessions. Beep regions sound silent in the preview; the tone is
 added on export (Phase 6), as is gain above 0 dB.
 
 ### Editing the composition
@@ -241,6 +247,9 @@ Settings and logs live in `%LOCALAPPDATA%\TwitchShortsStudio`.
 | Ctrl+I | Import video |
 | Space | Play / pause |
 | ← / → | Previous / next frame |
+| Shift+← / Shift+→ | One second back / forward |
+| Home / End | Start / end of the clip |
+| + / − / 0 / Z | Timeline: zoom in / out / whole clip / selection |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+E | Export video |
 | Ctrl+U | Upload a rendered video to YouTube |
