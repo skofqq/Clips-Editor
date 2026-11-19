@@ -120,6 +120,10 @@ class TranscriptPanel(QWidget):
 
         self.clean_check = QCheckBox("Clean up audio (cut rumble and hiss, lift quiet speech)", self)
         self.clean_check.setChecked(True)
+        self.separate_check = QCheckBox("Separate the voice from game audio and music (slower)", self)
+        self.separate_check.setToolTip(
+            "Runs a voice separation model (MDX-Net, about 65 MB, downloaded once) before recognition.\n"
+            "Helps when loud game sounds or music cover the speech. Runs on the CPU: about half the clip's length.")
         self.vad_combo = QComboBox(self)
         self.vad_combo.addItem("Speech detection: normal", "normal")
         self.vad_combo.addItem("Speech detection: sensitive (quiet speech)", "sensitive")
@@ -205,6 +209,7 @@ class TranscriptPanel(QWidget):
         box.addWidget(self.uncensored_check)
         box.addWidget(self.slang_check)
         box.addWidget(self.clean_check)
+        box.addWidget(self.separate_check)
         quality = QHBoxLayout()
         quality.addWidget(self.vad_combo, 1)
         quality.addWidget(self.accurate_check)
@@ -275,13 +280,16 @@ class TranscriptPanel(QWidget):
             uncensored=self.uncensored_check.isChecked(),
             slang=self.slang_check.isChecked(),
             clean_audio=self.clean_check.isChecked(),
+            separate_voice=self.separate_check.isChecked(),
             vad=vad != VAD_OFF,
             vad_threshold=VAD_LEVELS.get(vad, VAD_LEVELS["normal"]),
             accurate=self.accurate_check.isChecked(),
         )
 
-    def set_quality_preferences(self, clean: bool, vad: str, accurate: bool, custom_model: str) -> None:
+    def set_quality_preferences(self, clean: bool, vad: str, accurate: bool, custom_model: str,
+                                separate: bool = False) -> None:
         self.clean_check.setChecked(clean)
+        self.separate_check.setChecked(separate)
         index = self.vad_combo.findData(vad)
         self.vad_combo.setCurrentIndex(max(0, index))
         self.accurate_check.setChecked(accurate)
@@ -290,6 +298,7 @@ class TranscriptPanel(QWidget):
     def quality_preferences(self) -> dict:
         return {
             "clean": self.clean_check.isChecked(),
+            "separate": self.separate_check.isChecked(),
             "vad": self.vad_combo.currentData(),
             "accurate": self.accurate_check.isChecked(),
             "custom_model": self.custom_model_edit.text().strip(),
@@ -362,7 +371,7 @@ class TranscriptPanel(QWidget):
         self.clear_button.setEnabled(not busy and self.controller.transcript is not None)
         for combo in (self.language_combo, self.model_combo, self.device_combo, self.vocabulary_edit,
                       self.uncensored_check, self.slang_check, self.clean_check, self.vad_combo,
-                      self.accurate_check, self.custom_model_edit):
+                      self.accurate_check, self.separate_check, self.custom_model_edit):
             combo.setEnabled(not busy)
         self.progress.setVisible(busy)
 

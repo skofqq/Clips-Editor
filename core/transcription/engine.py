@@ -60,6 +60,7 @@ class TranscribeOptions:
     clean_audio: bool = True  # band-pass + loudness levelling before recognition
     vad_threshold: float = 0.5  # Silero speech probability; lower catches quieter speech
     accurate: bool = False  # wider beam search: slower, a little more accurate
+    separate_voice: bool = False  # isolate the voice from game audio / music first (slower)
 
 
 VAD_LEVELS = {"normal": 0.5, "sensitive": 0.3}
@@ -257,18 +258,21 @@ def decode_audio(
     clean: bool = False,
     start_us: int | None = None,
     end_us: int | None = None,
+    rate: int = SAMPLE_RATE,
+    channels: int = 1,
 ) -> np.ndarray:
-    """Decode an audio track (or a part of it) to 16 kHz mono float32 samples."""
+    """Decode an audio track (or a part of it) to float32 samples (16 kHz mono
+    by default; interleaved when ``channels`` > 1)."""
     cmd = [str(ffmpeg), "-v", "error", "-nostdin"]
     if start_us is not None:
         cmd += ["-ss", f"{start_us / 1e6:.6f}"]
     cmd += ["-i", str(path)]
     if end_us is not None:
         cmd += ["-t", f"{(end_us - (start_us or 0)) / 1e6:.6f}"]
-    cmd += ["-map", f"0:a:{audio_stream}", "-vn", "-ac", "1"]
+    cmd += ["-map", f"0:a:{audio_stream}", "-vn", "-ac", str(channels)]
     if clean:
         cmd += ["-af", AUDIO_CLEANUP]
-    cmd += ["-ar", str(SAMPLE_RATE), "-f", "f32le", "-"]
+    cmd += ["-ar", str(rate), "-f", "f32le", "-"]
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **no_window_kwargs())
     except OSError as exc:
@@ -290,6 +294,40 @@ def decode_audio(
         raise TranscriptionError(f"Could not read audio from {Path(path).name}: {message}")
     raw = b"".join(chunks)
     return np.frombuffer(raw[: len(raw) - len(raw) % 4], dtype="<f4").copy()
+
+
+def to_recognition_audio(samples: np.ndarray, rate: int, ffmpeg: Path, clean: bool) -> np.ndarray:
+    """(channels, n) float32 at ``rate`` → 16 kHz mono, cleaned like decode_audio."""
+    channels = samples.shape[0] if samples.ndim == 2 else 1
+    data = np.ascontiguousarray(samples.T if samples.ndim == 2 else samples, dtype="<f4").tobytes()
+    cmd = [str(ffmpeg), "-v", "error", "-nostdin", "-f", "f32le", "-ar", str(rate), "-ac", str(channels),
+           "-i", "-", "-ac", "1"]
+    if clean:
+        cmd += ["-af", AUDIO_CLEANUP]
+    cmd += ["-ar", str(SAMPLE_RATE), "-f", "f32le", "-"]
+    try:
+        done = subprocess.run(cmd, input=data, capture_output=True, **no_window_kwargs())
+    except OSError as exc:
+        raise TranscriptionError(f"Could not start FFmpeg: {exc}") from exc
+    if done.returncode != 0:
+        lines = done.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise TranscriptionError(f"Could not convert the separated voice: {lines[-1] if lines else 'unknown error'}")
+    raw = done.stdout
+    return np.frombuffer(raw[: len(raw) - len(raw) % 4], dtype="<f4").copy()
+
+
+def _recognition_input(engine: "WhisperEngine", path: Path, ffmpeg: Path, options: "TranscribeOptions",
+                       progress: Progress, cancel, audio_stream: int,
+                       start_us: int | None = None, end_us: int | None = None) -> np.ndarray:
+    if not options.separate_voice:
+        return decode_audio(path, ffmpeg, audio_stream, cancel, options.clean_audio, start_us, end_us)
+    from core.audio.separation import SAMPLE_RATE as SEP_RATE
+
+    stereo = decode_audio(path, ffmpeg, audio_stream, cancel, False, start_us, end_us, rate=SEP_RATE, channels=2)
+    if stereo.size == 0:
+        return stereo
+    vocals = engine.separate_voice(stereo.reshape(-1, 2).T, progress, cancel)
+    return to_recognition_audio(vocals, SEP_RATE, ffmpeg, options.clean_audio)
 
 
 def convert_segments(raw_segments, offset_us: int = 0) -> tuple[Segment, ...]:
@@ -329,6 +367,23 @@ class WhisperEngine:
         self.device_used = ""
         self.notice = ""  # why the GPU was not used, if it was requested/available
         self._lock = threading.Lock()
+        self._separator = None
+
+    def separate_voice(self, stereo: np.ndarray, progress: Progress = lambda f, m: None,
+                       cancel: threading.Event | None = None) -> np.ndarray:
+        """Keep only the voice of (2, n) 44.1 kHz audio; downloads the model once."""
+        from core.audio import separation
+
+        try:
+            if self._separator is None:
+                path = separation.download_model(self.models_dir, progress=progress, cancel=cancel)
+                progress(0.0, "Loading the voice separation model…")
+                self._separator = separation.VocalSeparator(path)
+            return self._separator.separate(stereo, progress, cancel)
+        except separation.SeparationCancelled as exc:
+            raise TranscriptionCancelled() from exc
+        except separation.SeparationError as exc:
+            raise TranscriptionError(str(exc)) from exc
 
     def _load(self, model: str, candidates: list[tuple[str, str]], progress: Progress) -> None:
         try:
@@ -457,7 +512,7 @@ def transcribe_file(
     audio_stream: int = 0,
 ) -> Transcript:
     progress(0.0, "Decoding audio…")
-    audio = decode_audio(path, ffmpeg, audio_stream, cancel, clean=options.clean_audio)
+    audio = _recognition_input(engine, path, ffmpeg, options, progress, cancel, audio_stream)
     if audio.size == 0:
         raise TranscriptionError("The audio track is empty.")
     return engine.transcribe(audio, options, progress, cancel)
@@ -476,7 +531,7 @@ def transcribe_range(
 ) -> tuple[Segment, ...]:
     """Recognise only ``start_us``–``end_us``; segments come back in clip time."""
     progress(0.0, "Decoding audio…")
-    audio = decode_audio(path, ffmpeg, audio_stream, cancel, options.clean_audio, start_us, end_us)
+    audio = _recognition_input(engine, path, ffmpeg, options, progress, cancel, audio_stream, start_us, end_us)
     if audio.size == 0:
         raise TranscriptionError("No audio in the selected range.")
     part = engine.transcribe(audio, options, progress, cancel)

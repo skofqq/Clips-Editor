@@ -151,6 +151,11 @@ Recognition quality options in the Transcript panel:
 - **Clean up audio** (on by default): before recognition the audio is
   filtered, compressed and normalised, so shouting is not clipped and quiet
   speech is lifted. Only the copy sent to Whisper changes, not your export.
+- **Separate the voice from game audio and music** (off by default): runs
+  an MDX-Net vocal separation model (UVR "Kim Vocal 2", ≈ 65 MB, downloaded
+  once into `models\separation`) and recognises only the voice. Helps when
+  explosions, gunfire or music cover the speech. Runs on the CPU, about half
+  the clip's length.
 - **Speech detection**: *Sensitive* catches quiet or overlapped speech that
   *Normal* skips; *Off* sends all audio (slower, may invent text in music).
   Long silences no longer produce invented phrases.
