@@ -33,6 +33,7 @@ class Word:
     text: str
     probability: float = 1.0
     timing: str = WORD_TIMING
+    speaker: int = -1  # 0, 1, … after "Find speakers"; -1 = unknown
 
     @property
     def exact(self) -> bool:
@@ -74,8 +75,10 @@ def rewrite_words(segment: Segment, text: str) -> tuple[Word, ...]:
     tokens = _tokens(text)
     if segment.words and len(tokens) == len(segment.words):
         return tuple(replace(w, text=t) for w, t in zip(segment.words, tokens))
+    speakers = [w.speaker for w in segment.words if w.speaker >= 0]
+    speaker = max(set(speakers), key=speakers.count) if speakers else -1
     return tuple(
-        Word(segment.start_us, segment.end_us, t, 0.0, SEGMENT_TIMING) for t in tokens
+        Word(segment.start_us, segment.end_us, t, 0.0, SEGMENT_TIMING, speaker) for t in tokens
     )
 
 
@@ -106,6 +109,18 @@ class Transcript:
         if segment is None:
             return None
         return next((w for w in segment.words if w.exact and w.start_us <= us < w.end_us), None)
+
+    @property
+    def speaker_count(self) -> int:
+        return len({w.speaker for w in self.words() if w.speaker >= 0})
+
+    def with_speakers(self, speakers: list[int]) -> "Transcript":
+        """Set every word's speaker, in the order of :meth:`words`."""
+        it = iter(speakers)
+        segments = tuple(
+            replace(s, words=tuple(replace(w, speaker=int(next(it, -1))) for w in s.words)) for s in self.segments
+        )
+        return replace(self, segments=segments)
 
     @property
     def exact_word_ratio(self) -> float:
@@ -169,7 +184,9 @@ class Transcript:
                     "text": s.text,
                     "edited": s.edited,
                     "words": [
-                        [w.start_us, w.end_us, w.text, round(w.probability, 4), w.timing] for w in s.words
+                        [w.start_us, w.end_us, w.text, round(w.probability, 4), w.timing]
+                        + ([w.speaker] if w.speaker >= 0 else [])
+                        for w in s.words
                     ],
                 }
                 for s in self.segments
@@ -189,10 +206,11 @@ class Transcript:
             seen.add(seg_id)
             words = []
             for raw in item.get("words") or []:
-                w_start, w_end, w_text, prob, timing = raw
+                w_start, w_end, w_text, prob, timing = raw[:5]
+                speaker = int(raw[5]) if len(raw) > 5 and isinstance(raw[5], int) else -1
                 if timing not in (WORD_TIMING, SEGMENT_TIMING) or int(w_end) < int(w_start):
                     raise ValueError("Invalid transcript word.")
-                words.append(Word(int(w_start), int(w_end), str(w_text), float(prob), timing))
+                words.append(Word(int(w_start), int(w_end), str(w_text), float(prob), timing, max(-1, speaker)))
             segments.append(
                 Segment(seg_id, start, end, str(item.get("text", "")), tuple(words), bool(item.get("edited")))
             )

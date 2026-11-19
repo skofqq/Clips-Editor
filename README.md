@@ -171,6 +171,12 @@ Recognition quality options in the Transcript panel:
 - **Learned words**: every word you type when correcting the transcript or
   a censor word is remembered and suggested to the model next time.
   *Forget* clears the list.
+- **Find speakers**: after transcribing, works out who says each word
+  (WeSpeaker CAM++ voice model, ≈ 28 MB, downloaded once into
+  `models\speakers`). Choose *Detect how many* or the exact number of
+  speakers; the exact number is more reliable. Words on the Speech track,
+  phrases in the transcript (S1, S2…) and the subtitles get a colour per
+  speaker, and a new subtitle starts when the voice changes. Undo reverts it.
 - **Re-transcribe selection**: select a range on the timeline (or put the
   playhead on a phrase) and re-recognise just those phrases with accurate
   settings, for example after adding a nickname. It can be undone.

@@ -743,7 +743,7 @@ class TimelineView(QWidget):
                     for wd in exact_words:
                         wx0, wx1 = self.us_to_x(wd.start_us), self.us_to_x(wd.end_us)
                         rect = QRectF(wx0, speech_y + 3, max(1.0, wx1 - wx0 - 1), speech_h - 6)
-                        p.fillRect(rect, C_WORD)
+                        p.fillRect(rect, C_WORD if wd.speaker < 0 else QColor(palette.speaker_color(wd.speaker)))
                         if rect.width() > metrics.horizontalAdvance(wd.text) + 4:
                             p.setPen(C_WORD_TEXT)
                             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, wd.text)

@@ -13,7 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen
 
-from core.subtitles.model import POSITION_DIVIDER, Caption, SubtitleStyle, wrap_lines
+from core.subtitles.model import POSITION_DIVIDER, Caption, SubtitleStyle, speaker_text_color, wrap_lines
 
 REFERENCE_H = 1920  # style sizes are given for a 1080×1920 canvas
 
@@ -109,7 +109,9 @@ def draw_caption(painter: QPainter, canvas: QRectF, caption: Caption | None, sty
             painter.strokePath(path, pen)
     painter.setPen(Qt.PenStyle.NoPen)
     for i, path in placed:
-        painter.setBrush(highlight if i == current else text_color)
+        speaker = caption.words[i].speaker
+        own = text_color if speaker <= 0 or not style.speaker_colors else _color(speaker_text_color(style, speaker))
+        painter.setBrush(highlight if i == current else own)
         painter.drawPath(path)
     painter.restore()
 

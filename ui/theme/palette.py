@@ -234,3 +234,14 @@ def accent() -> Accent:
 def tokens() -> dict[str, str]:
     """Placeholders used in the stylesheet."""
     return accent().tokens()
+
+
+# One colour per speaker (Find speakers). Mid tones that keep dark word text
+# readable in the dark theme and white text in the light theme.
+_SPEAKERS_DARK = ("#6ccb5f", "#4cc2ff", "#ffb86b", "#ff8fc8", "#c7a6ff", "#f2e35b")
+_SPEAKERS_LIGHT = ("#0f7b0f", "#005fb8", "#b35900", "#bf0077", "#6b46c1", "#8a7400")
+
+
+def speaker_color(index: int) -> str:
+    colors = _SPEAKERS_LIGHT if is_light() else _SPEAKERS_DARK
+    return colors[index % len(colors)]

@@ -45,6 +45,7 @@ class SubtitleStyle:
     min_duration_ms: int = 400
     mask: str = MASK_FIRST
     karaoke: bool = True
+    speaker_colors: bool = True  # after "Find speakers": the 2nd, 3rd… speaker get their own colour
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -87,6 +88,16 @@ class SubtitleStyle:
             mask=self.mask if self.mask in (MASK_NONE, MASK_FIRST, MASK_ALL) else MASK_FIRST,
             position=position,
         )
+
+
+# Text colour of the 2nd, 3rd… speaker; the first speaker uses the style's colour.
+SPEAKER_TEXT_COLORS = ("#7fd4ff", "#ffb86b", "#b4f07a", "#ff8fc8", "#c7a6ff")
+
+
+def speaker_text_color(style: "SubtitleStyle", speaker: int) -> str:
+    if not style.speaker_colors or speaker <= 0:
+        return style.color
+    return SPEAKER_TEXT_COLORS[(speaker - 1) % len(SPEAKER_TEXT_COLORS)]
 
 
 PRESETS: dict[str, SubtitleStyle] = {
@@ -153,6 +164,7 @@ class CaptionWord:
     end_us: int
     source_us: int  # source start, the key for edits
     masked: bool = False
+    speaker: int = -1
 
 
 @dataclass(frozen=True)
@@ -218,7 +230,7 @@ def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle
             end = timeline.source_to_output(w.end_us)
             if end <= start:
                 end = start + 1
-            result.append(CaptionWord(text, start, end, w.start_us, masked))
+            result.append(CaptionWord(text, start, end, w.start_us, masked, w.speaker))
     result.sort(key=lambda w: w.start_us)
     return result
 
@@ -243,7 +255,8 @@ def build_captions(
             full = len(current) >= style.max_words or length > style.max_chars * style.max_lines
             pause = word.start_us - current[-1].end_us >= gap
             sentence = bool(_SENTENCE_END.search(current[-1].text))
-            if forced or (not joined and (full or pause or sentence)):
+            other_voice = word.speaker != current[-1].speaker
+            if forced or (not joined and (full or pause or sentence or other_voice)):
                 groups.append(current)
                 current = []
         current.append(word)

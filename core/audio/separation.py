@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -64,34 +63,16 @@ def is_downloaded(models_dir: Path, model: MdxModel = VOCAL_MODEL) -> bool:
 
 def download_model(models_dir: Path, model: MdxModel = VOCAL_MODEL, progress: Progress | None = None,
                    cancel: threading.Event | None = None) -> Path:
-    target = model_path(models_dir, model)
+    from core.audio.download import DownloadCancelled, DownloadError, fetch
+
     if is_downloaded(models_dir, model):
-        return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    part = target.with_suffix(".part")
-    progress = progress or (lambda f, m: None)
+        return model_path(models_dir, model)
     try:
-        with urllib.request.urlopen(model.url, timeout=60) as response, open(part, "wb") as out:
-            total = int(response.headers.get("Content-Length") or model.size_mb * 1_048_576)
-            done = 0
-            while True:
-                if cancel is not None and cancel.is_set():
-                    raise SeparationCancelled()
-                block = response.read(1 << 20)
-                if not block:
-                    break
-                out.write(block)
-                done += len(block)
-                progress(min(0.99, done / total),
-                         f"Downloading the voice model… {done / 1_048_576:.0f} / {total / 1_048_576:.0f} MB")
-    except SeparationCancelled:
-        part.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        part.unlink(missing_ok=True)
+        return fetch(model.url, model_path(models_dir, model), model.size_mb, "the voice model", progress, cancel)
+    except DownloadCancelled as exc:
+        raise SeparationCancelled() from exc
+    except DownloadError as exc:
         raise SeparationError(f"Could not download the voice separation model: {exc}") from exc
-    part.replace(target)
-    return target
 
 
 # ------------------------------------------------------------------ STFT

@@ -493,6 +493,7 @@ class MainWindow(QMainWindow):
         self.transcript.corrected.connect(self.learn_correction)
         self.transcript_panel.learned_cleared.connect(self.forget_learned)
         self.transcript_panel.retranscribe_requested.connect(self.retranscribe_range)
+        self.transcript_panel.speakers_requested.connect(self.find_speakers)
         self.timeline.selection_changed.connect(self._update_retranscribe)
         self.timeline.playhead_changed.connect(lambda us: self._update_retranscribe())
         self.transcript.changed.connect(self._update_retranscribe)
@@ -1003,6 +1004,37 @@ class MainWindow(QMainWindow):
         self.transcript_panel.set_busy(True, "Re-transcribing the selection…")
         log.info("Re-transcribing %s %d-%d us with %s", media.path, start, end, options)
         self.pool.start(task)
+
+    def find_speakers(self, count: int | None = None) -> None:
+        from core.transcription.diarization import find_speakers_in_file
+
+        media, t = self.preview.media, self.transcript.transcript
+        if media is None or t is None or self.ffmpeg is None or self._transcribe_task is not None:
+            return
+        task = CancellableTask(find_speakers_in_file, self.engine.models_dir, media.path, self.ffmpeg.ffmpeg, t,
+                               count)
+        task.signals.progress.connect(self.transcript_panel.set_progress)
+        task.signals.finished.connect(lambda labels, p=media.path, old=t: self._speakers_done(p, old, labels))
+        task.signals.failed.connect(self._transcription_failed)
+        task.signals.cancelled.connect(self._transcription_cancelled)
+        self._transcribe_task = task
+        self._transcribe_path = media.path
+        self.transcript_panel.set_busy(True, "Finding speakers…")
+        self.dock_raise(self.transcript_dock)
+        log.info("Finding speakers in %s (count %s)", media.path, count)
+        self.pool.start(task)
+
+    def _speakers_done(self, path, old, labels) -> None:
+        self._finish_transcription()
+        media, t = self.preview.media, self.transcript.transcript
+        if media is None or media.path != path or t is not old:
+            self.transcript_panel.set_busy(False, "The transcript changed meanwhile; run Find speakers again.")
+            return
+        updated = t.with_speakers(labels)
+        self.transcript.set_transcript(updated)  # undoable
+        n = updated.speaker_count
+        self.transcript_panel.set_busy(False, f"Found {n} speaker{'s' if n != 1 else ''}." if n else
+                                       "No speech to analyse.")
 
     def _range_done(self, path, start_us: int, end_us: int, segments) -> None:
         self._finish_transcription()

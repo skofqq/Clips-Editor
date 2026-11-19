@@ -68,6 +68,7 @@ class TranscriptPanel(QWidget):
     clear_requested = Signal()
     retranscribe_requested = Signal(object)  # TranscribeOptions, for the selected range
     learned_cleared = Signal()
+    speakers_requested = Signal(object)  # number of speakers, or None to detect
 
     def __init__(self, controller: TranscriptController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -155,6 +156,14 @@ class TranscriptPanel(QWidget):
             "Recognise only the selected range (or the phrase under the playhead) again\n"
             "with the chosen model and the accurate search. Select a range on the timeline first."
         )
+        self.speakers_button = QPushButton("Find speakers", self)
+        self.speakers_button.setToolTip(
+            "Works out who says each word (speaker model ~28 MB, downloaded once).\n"
+            "Words, the Speech track and the subtitles get a colour per speaker.")
+        self.speakers_combo = QComboBox(self)
+        self.speakers_combo.addItem("Detect how many", None)
+        for count in range(2, 6):
+            self.speakers_combo.addItem(f"{count} speakers", count)
         self.progress = QProgressBar(self)
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
@@ -240,6 +249,10 @@ class TranscriptPanel(QWidget):
         layout.addWidget(self.settings_card)
         layout.addLayout(buttons)
         layout.addWidget(self.retranscribe_button)
+        speakers_row = QHBoxLayout()
+        speakers_row.addWidget(self.speakers_button, 1)
+        speakers_row.addWidget(self.speakers_combo, 1)
+        layout.addLayout(speakers_row)
         layout.addWidget(self.progress)
         layout.addWidget(self.status_label)
         layout.addWidget(self.info_label)
@@ -254,6 +267,8 @@ class TranscriptPanel(QWidget):
             lambda: self.retranscribe_requested.emit(replace(self.options(), accurate=True))
         )
         self.learned_clear.clicked.connect(self.learned_cleared)
+        self.speakers_button.clicked.connect(
+            lambda: self.speakers_requested.emit(self.speakers_combo.currentData()))
         self.model_combo.currentIndexChanged.connect(self._update_model_tip)
         self.model_combo.currentIndexChanged.connect(self._update_custom_model)
         self.custom_model_edit.textChanged.connect(lambda: self._update_buttons())
@@ -379,6 +394,10 @@ class TranscriptPanel(QWidget):
             )
         self.cancel_button.setVisible(busy)
         self.clear_button.setEnabled(not busy and self.controller.transcript is not None)
+        if hasattr(self, "speakers_button"):
+            ready = not busy and self._has_audio and self.controller.transcript is not None
+            self.speakers_button.setEnabled(ready)
+            self.speakers_combo.setEnabled(not busy)
         for combo in (self.language_combo, self.model_combo, self.device_combo, self.vocabulary_edit,
                       self.uncensored_check, self.slang_check, self.clean_check, self.vad_combo,
                       self.accurate_check, self.separate_check, self.refine_check, self.custom_model_edit):
@@ -451,6 +470,12 @@ class TranscriptPanel(QWidget):
                     font = item.font(COL_TEXT)
                     font.setItalic(True)
                     item.setFont(COL_TEXT, font)
+                speakers = [w.speaker for w in seg.words if w.speaker >= 0]
+                if speakers:
+                    main = max(set(speakers), key=speakers.count)
+                    item.setText(COL_TIME, f"S{main + 1}  " + item.text(COL_TIME))
+                    item.setForeground(COL_TIME, QColor(palette.speaker_color(main)))
+                    tips.append(f"Speaker {main + 1}" + (" (several speakers)" if len(set(speakers)) > 1 else ""))
                 item.setToolTip(COL_TEXT, "\n".join(tips))
                 for index, word in enumerate(seg.words):
                     child = QTreeWidgetItem([format_timecode(word.start_us), word.text])
