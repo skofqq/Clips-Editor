@@ -132,8 +132,11 @@ def _states(caption: Caption, style: SubtitleStyle) -> list[tuple[int, int, int 
 
 def render_overlay(captions: list[Caption], style: SubtitleStyle, width: int, height: int,
                    folder: Path, divider: float | None = None, duration_us: int | None = None,
-                   cancel=None) -> Path | None:
-    """Write caption images and ``captions.ffconcat``; None if there is nothing to show."""
+                   cancel=None, divider_at=None) -> Path | None:
+    """Write caption images and ``captions.ffconcat``; None if there is nothing to show.
+
+    ``divider_at(output_us)`` gives the divider when it changes over time (parts
+    with their own layout); otherwise ``divider`` is used throughout."""
     if not captions:
         return None
     folder = Path(folder)
@@ -158,7 +161,7 @@ def render_overlay(captions: list[Caption], style: SubtitleStyle, width: int, he
             painter = QPainter(image)
             moment = caption.words[word].start_us if word is not None else None
             draw_caption(painter, canvas, caption, style if word is not None else _no_karaoke(style),
-                         moment, divider)
+                         moment, divider_at(start) if divider_at is not None else divider)
             painter.end()
             n += 1
             path = folder / f"cap{n:05d}.png"

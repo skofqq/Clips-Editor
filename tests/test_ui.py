@@ -259,7 +259,7 @@ def test_cards_in_long_forms(qapp, tmp_path):
     from ui.widgets.card import Card
 
     panel = CompositionPanel(CompositionController(), PresetStore(tmp_path / "presets.json"))
-    titles = [c.title_label.text() for c in panel.findChildren(Card)]
+    titles = [c.title_label.text() for c in panel.findChildren(Card) if not c.isHidden()]  # "Part" shows after Split
     assert titles == ["Preset", "Region", "Placement in output", "Layout"]
 
 

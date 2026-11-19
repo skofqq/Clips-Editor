@@ -239,6 +239,18 @@ def partial_path(output: Path) -> Path:
 
 # ------------------------------------------------------------------ render
 
+def layout_divider_at(composition: Composition, timeline: Timeline):
+    """Output time → the webcam/gameplay divider of the part shown then."""
+    if not timeline.has_layouts:
+        return None
+
+    def at(out_us: int) -> float:
+        segment = timeline.segments[timeline.layout_index_at(timeline.output_to_source(out_us))]
+        return (segment.layout or composition).divider
+
+    return at
+
+
 def render(
     source: MediaInfo,
     composition: Composition,
@@ -284,6 +296,7 @@ def render(
             overlay = render_overlay(
                 captions, subtitle_style, composition.output_w, composition.output_h, workdir / "subs",
                 divider=composition.divider, duration_us=timeline.output_us, cancel=cancel,
+                divider_at=layout_divider_at(composition, timeline),
             )
             if overlay is None and cancel is not None and cancel.is_set():
                 raise RenderCancelled("Render cancelled")

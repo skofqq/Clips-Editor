@@ -282,6 +282,14 @@ added on export (Phase 6), as is gain above 0 dB.
 
 Exact values, Fit/Fill, swap and presets are in **Properties → Composition**.
 
+**The streamer moved the webcam mid-clip?** Put the playhead where it moved,
+press **Split** (`S`), then, with the playhead in the second part, move the
+boxes: only that part changes. The editor always shows the layout of the
+part under the playhead; parts with their own layout carry a small badge on
+the Video track, and the preview, export and burnt-in subtitles switch
+exactly at the cut. Split again for every further move. **Use this layout
+for all parts** (Composition tab) makes the shown layout the common one.
+
 ## Run on Windows
 
 1. Install Python 3.12+ (with "Add to PATH").

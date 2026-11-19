@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self.presets = PresetStore(config.data_dir / "presets.json")
         self.timeline = TimelineController(self)
         self._loading_composition = False  # True while state is pushed in, not edited
+        self._main_layout = self.composition.composition  # the project's layout (parts without their own use it)
         self.transcript = TranscriptController(self)
         self.engine = WhisperEngine(config.data_dir / "models")
         self._transcribe_task: CancellableTask | None = None
@@ -462,7 +463,10 @@ class MainWindow(QMainWindow):
         self.preview.position_changed.connect(lambda ms: self.timeline.set_playhead(ms_to_us(ms)))
         self.timeline_panel.view.seek_requested.connect(lambda us: self.preview.seek(us_to_ms(us)))
         self.timeline_panel.view.gesture_finished.connect(self.history.break_merge)
-        self.composition.changed.connect(lambda: self._on_edit_changed("composition"))
+        self.composition.changed.connect(self._on_layout_changed)
+        self.timeline.playhead_changed.connect(lambda _us: self._refresh_layout())
+        self.timeline.changed.connect(self._refresh_layout)
+        self.composition_panel.apply_all_requested.connect(self.apply_layout_to_all_parts)
         self.timeline.changed.connect(lambda: self._on_edit_changed(self.timeline.last_change_key))
         self.transcript.changed.connect(lambda: self._on_edit_changed(self.transcript.last_change_key))
         self.transcript.changed.connect(
@@ -624,6 +628,7 @@ class MainWindow(QMainWindow):
                     # First video of the project: start from a sensible default.
                     self.project.composition = default_composition(*info.video.display_size)
                     self.composition.set_composition(self.project.composition)
+                    self._main_layout = self.project.composition
             finally:
                 self._loading_composition = False
             self._show_timeline(info)
@@ -680,9 +685,69 @@ class MainWindow(QMainWindow):
             self.timeline_panel.view.set_waveform(waveform)
 
     # -------------------------------------------------------- edit history
+    # ------------------------------------------------------ layout per part
+    @property
+    def main_layout(self):
+        """The project's layout; parts of the clip without their own use it."""
+        return self._main_layout
+
+    def _layout_part(self):
+        """(timeline, index) of the part under the playhead, or (None, None)."""
+        t = self.timeline.timeline
+        if t is None:
+            return None, None
+        return t, t.layout_index_at(self.timeline.playhead_us)
+
+    def _refresh_layout(self) -> None:
+        """Show the layout of the part under the playhead in the editor and preview."""
+        t, index = self._layout_part()
+        main = self.main_layout
+        effective = main
+        if t is not None and t.segments[index].layout is not None:
+            effective = t.segments[index].layout
+        if effective != self.composition.composition:
+            previous, self._loading_composition = self._loading_composition, True
+            try:
+                self.composition.set_composition(effective)
+            finally:
+                self._loading_composition = previous
+        if t is not None:
+            self.composition_panel.set_part_info(index, len(t.segments), t.segments[index].layout is not None,
+                                                 t.has_layouts)
+        else:
+            self.composition_panel.set_part_info(0, 1, False, False)
+
+    def _on_layout_changed(self) -> None:
+        """The user edited the layout: store it for the part under the playhead
+        when the clip has several parts, else as the project's layout."""
+        if self._loading_composition:
+            return
+        comp = self.composition.composition
+        t, index = self._layout_part()
+        if t is not None and (len(t.segments) > 1 or t.segments[index].layout is not None):
+            current = t.segments[index].layout or self.main_layout
+            if comp != current:
+                self._loading_composition = True
+                try:
+                    self.timeline.set_timeline(t.with_segment_layout(index, comp))
+                finally:
+                    self._loading_composition = False
+                self._refresh_layout()
+        else:
+            self._main_layout = comp
+        self._on_edit_changed("composition")
+
+    def apply_layout_to_all_parts(self) -> None:
+        t = self.timeline.timeline
+        if t is None:
+            return
+        self._main_layout = self.composition.composition
+        self._commit(timeline=t.without_layouts())
+        self._refresh_layout()
+
     def _edit_state(self):
         return (
-            self.composition.composition,
+            self.main_layout,
             self.timeline.timeline,
             self.transcript.transcript,
             self.censor.state,
@@ -714,10 +779,11 @@ class MainWindow(QMainWindow):
         composition, timeline, transcript, censor = state
         self._loading_composition = True
         try:
-            self.composition.set_composition(composition)
+            self._main_layout = composition
             self.timeline.set_timeline(timeline)
             self.transcript.set_transcript(transcript)
             self.censor.set_state(censor)
+            self._refresh_layout()
         finally:
             self._loading_composition = False
         self._store_edit(composition, timeline, transcript, censor)
@@ -853,7 +919,7 @@ class MainWindow(QMainWindow):
 
     def export_video(self) -> None:
         media, timeline = self.preview.media, self.timeline.timeline
-        composition = self.composition.composition
+        composition = self.main_layout
         if media is None or media.video is None or timeline is None or self.ffmpeg is None:
             return
         if self.preview.is_playing:
@@ -1201,9 +1267,9 @@ class MainWindow(QMainWindow):
         """Push the project's composition into the editor without marking it dirty."""
         self._loading_composition = True
         try:
-            self.composition.set_composition(
-                self.project.composition or default_composition(*self.composition.source_size)
-            )
+            self._main_layout = self.project.composition or default_composition(*self.composition.source_size)
+            self.composition.set_composition(self._main_layout)
+            self._refresh_layout()
         finally:
             self._loading_composition = False
         self.history.reset(self._edit_state())

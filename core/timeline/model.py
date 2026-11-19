@@ -8,6 +8,8 @@ Everything is expressed in **source time** (integer microseconds):
   they stay attached to the same words when the clip is trimmed, and
   transcription / censor results (Phases 4-5) map onto them directly.
 * ``gain_db`` and the fades apply to the whole output.
+* a segment may carry its own Stacked ``layout`` (a Composition) for when
+  the streamer moved the webcam mid-clip; None means the project's layout.
 
 The model is immutable: every operation returns a new :class:`Timeline`,
 which makes undo/redo a matter of keeping old values.
@@ -35,6 +37,7 @@ def _clamp(value: int, low: int, high: int) -> int:
 class Segment:
     start_us: int
     end_us: int
+    layout: Any = None  # Composition for this part, or None = the project's layout
 
     @property
     def length_us(self) -> int:
@@ -173,7 +176,7 @@ class Timeline:
         segment = self.segments[index]
         if us - segment.start_us < MIN_SEGMENT_US or segment.end_us - us < MIN_SEGMENT_US:
             return self
-        parts = (Segment(segment.start_us, us), Segment(us, segment.end_us))
+        parts = (replace(segment, end_us=us), replace(segment, start_us=us))
         return replace(self, segments=self.segments[:index] + parts + self.segments[index + 1:])
 
     def trim_segment(self, index: int, start_us: int | None = None, end_us: int | None = None) -> "Timeline":
@@ -188,7 +191,7 @@ class Timeline:
             start = _clamp(start_us, low, end - MIN_SEGMENT_US)
         if end_us is not None:
             end = _clamp(end_us, start + MIN_SEGMENT_US, high)
-        updated = Segment(start, end)
+        updated = replace(segment, start_us=start, end_us=end)
         if updated == segment:
             return self
         return replace(self, segments=self.segments[:index] + (updated,) + self.segments[index + 1:])
@@ -207,9 +210,9 @@ class Timeline:
                 kept.append(segment)
                 continue
             if start_us - segment.start_us >= MIN_SEGMENT_US:
-                kept.append(Segment(segment.start_us, start_us))
+                kept.append(replace(segment, end_us=start_us))
             if segment.end_us - end_us >= MIN_SEGMENT_US:
-                kept.append(Segment(end_us, segment.end_us))
+                kept.append(replace(segment, start_us=end_us))
         if not kept or tuple(kept) == self.segments:
             return self
         return replace(self, segments=tuple(kept))
@@ -222,6 +225,34 @@ class Timeline:
 
     def restore_all(self) -> "Timeline":
         return replace(self, segments=(Segment(0, self.duration_us),))
+
+    # ------------------------------------------------------------- layouts
+    def layout_index_at(self, us: int) -> int:
+        """The part whose layout applies at source time ``us``: the part under
+        it, else the next one, else the last."""
+        index = self.segment_index_at(us)
+        if index is not None:
+            return index
+        for i, segment in enumerate(self.segments):
+            if us < segment.start_us:
+                return i
+        return len(self.segments) - 1
+
+    def with_segment_layout(self, index: int, layout) -> "Timeline":
+        if not 0 <= index < len(self.segments) or self.segments[index].layout == layout:
+            return self
+        segments = list(self.segments)
+        segments[index] = replace(segments[index], layout=layout)
+        return replace(self, segments=tuple(segments))
+
+    def without_layouts(self) -> "Timeline":
+        if not self.has_layouts:
+            return self
+        return replace(self, segments=tuple(replace(s, layout=None) for s in self.segments))
+
+    @property
+    def has_layouts(self) -> bool:
+        return any(s.layout is not None for s in self.segments)
 
     # -------------------------------------------------------------- mutes
     def add_mute(self, start_us: int, end_us: int, mode: str = SILENCE) -> "Timeline":
@@ -296,7 +327,9 @@ class Timeline:
     def to_dict(self) -> dict[str, Any]:
         return {
             "duration_us": self.duration_us,
-            "segments": [[s.start_us, s.end_us] for s in self.segments],
+            "segments": [
+                [s.start_us, s.end_us] + ([s.layout.to_dict()] if s.layout is not None else []) for s in self.segments
+            ],
             "mutes": [
                 {"id": m.id, "start_us": m.start_us, "end_us": m.end_us, "mode": m.mode}
                 for m in self.mutes
@@ -319,7 +352,12 @@ class Timeline:
             start, end = int(item[0]), int(item[1])
             if start < previous_end or end - start < 1 or end > duration:
                 raise ValueError("Timeline segments are out of order or out of range.")
-            segments.append(Segment(start, end))
+            layout = None
+            if len(item) > 2 and isinstance(item[2], dict):
+                from core.editor.composition import Composition
+
+                layout = Composition.from_dict(item[2])
+            segments.append(Segment(start, end, layout))
             previous_end = end
         if not segments:
             raise ValueError("Timeline has no segments.")

@@ -14,7 +14,7 @@ see is what you get:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from core.editor.composition import Composition
@@ -72,6 +72,36 @@ def _mute_expression(timeline: Timeline, channels: int, beep_hz: int) -> str | N
     return "|".join(f"val({ch})*{keep}{tone}" for ch in range(channels))
 
 
+def _place(lines: list[str], source: str, composition: Composition, src_w: int, src_h: int, fps: Fraction,
+           tag: str, out_label: str) -> None:
+    """Crop, scale and place the Stacked Layout regions of ``source`` on a black canvas."""
+    canvas_w, canvas_h = composition.output_w, composition.output_h
+    placements = composition.layout(src_w, src_h)
+    lines.append(f"color=c=black:s={canvas_w}x{canvas_h}:r={_fps_str(fps)},format=yuv420p[{tag}bg]")
+    if not placements:
+        # No region enabled: show the whole frame, letterboxed.
+        lines.append(
+            f"[{source}]scale={canvas_w}:{canvas_h}:force_original_aspect_ratio=decrease,setsar=1[{tag}full]"
+        )
+        lines.append(f"[{tag}bg][{tag}full]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1[{out_label}]")
+        return
+    k = len(placements)
+    lines.append(f"[{source}]split={k}" + "".join(f"[{tag}vp{i}]" for i in range(k)) if k > 1
+                 else f"[{source}]null[{tag}vp0]")
+    current = f"{tag}bg"
+    for i, p in enumerate(placements):
+        x = max(0, min(src_w - 2, int(round(p.src.x))))
+        y = max(0, min(src_h - 2, int(round(p.src.y))))
+        w = max(2, min(src_w - x, int(round(p.src.w))))
+        h = max(2, min(src_h - y, int(round(p.src.h))))
+        dw, dh = _even(p.dst.w), _even(p.dst.h)
+        dx, dy = int(round(p.dst.x)), int(round(p.dst.y))
+        lines.append(f"[{tag}vp{i}]crop={w}:{h}:{x}:{y},scale={dw}:{dh}:flags=lanczos,setsar=1[{tag}region{i}]")
+        out = out_label if i == k - 1 else f"{tag}layer{i}"
+        lines.append(f"[{current}][{tag}region{i}]overlay=x={dx}:y={dy}:shortest=1[{out}]")
+        current = out
+
+
 def build_graph(
     composition: Composition,
     timeline: Timeline,
@@ -99,34 +129,24 @@ def build_graph(
         lines.append(f"{head},split={n}" + "".join(f"[vsrc{i}]" for i in range(n)))
     for i, seg in enumerate(segments):
         lines.append(f"[vsrc{i}]trim=start={_t(seg.start_us)}:end={_t(seg.end_us)},setpts=PTS-STARTPTS[vseg{i}]")
-    if n == 1:
-        lines.append(f"[vseg0]fps={_fps_str(fps)}[vcut]")
+    if not timeline.has_layouts:
+        if n == 1:
+            lines.append(f"[vseg0]fps={_fps_str(fps)}[vcut]")
+        else:
+            lines.append("".join(f"[vseg{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0,fps={_fps_str(fps)}[vcut]")
+        _place(lines, "vcut", composition, src_w, src_h, fps, "", "canvas")
     else:
-        lines.append("".join(f"[vseg{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0,fps={_fps_str(fps)}[vcut]")
-
-    placements = composition.layout(src_w, src_h)
-    lines.append(f"color=c=black:s={canvas_w}x{canvas_h}:r={_fps_str(fps)},format=yuv420p[bg]")
-    if not placements:
-        # No region enabled: show the whole frame, letterboxed.
-        lines.append(
-            f"[vcut]scale={canvas_w}:{canvas_h}:force_original_aspect_ratio=decrease,setsar=1[full]"
-        )
-        lines.append("[bg][full]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1[canvas]")
-    else:
-        k = len(placements)
-        lines.append("[vcut]split=" + str(k) + "".join(f"[vp{i}]" for i in range(k)) if k > 1 else "[vcut]null[vp0]")
-        current = "bg"
-        for i, p in enumerate(placements):
-            x = max(0, min(src_w - 2, int(round(p.src.x))))
-            y = max(0, min(src_h - 2, int(round(p.src.y))))
-            w = max(2, min(src_w - x, int(round(p.src.w))))
-            h = max(2, min(src_h - y, int(round(p.src.h))))
-            dw, dh = _even(p.dst.w), _even(p.dst.h)
-            dx, dy = int(round(p.dst.x)), int(round(p.dst.y))
-            lines.append(f"[vp{i}]crop={w}:{h}:{x}:{y},scale={dw}:{dh}:flags=lanczos,setsar=1[region{i}]")
-            out = "canvas" if i == k - 1 else f"layer{i}"
-            lines.append(f"[{current}][region{i}]overlay=x={dx}:y={dy}:shortest=1[{out}]")
-            current = out
+        # Parts with their own layout (the webcam moved mid-clip): lay out every
+        # part on its own canvas, then join the canvases.
+        for i, seg in enumerate(segments):
+            layout = seg.layout if seg.layout is not None else composition
+            layout = replace(layout, output_w=canvas_w, output_h=canvas_h)
+            lines.append(f"[vseg{i}]fps={_fps_str(fps)}[vfps{i}]")
+            _place(lines, f"vfps{i}", layout, src_w, src_h, fps, f"p{i}_", f"canvas{i}")
+        if n == 1:
+            lines.append("[canvas0]null[canvas]")
+        else:
+            lines.append("".join(f"[canvas{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[canvas]")
     if overlay_input is not None:
         lines.append(f"[{overlay_input}:v]format=rgba,setpts=PTS-STARTPTS[subs]")
         lines.append("[canvas][subs]overlay=x=0:y=0:eof_action=pass:repeatlast=0:format=auto[canvas_s]")

@@ -653,6 +653,20 @@ class TimelineView(QWidget):
                     Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                     format_timecode(s.length_us),
                 )
+            if s.layout is not None:
+                # This part has its own Stacked layout: a small accent badge.
+                badge = QRectF(rect.right() - 22, rect.top() + 4, 16, min(16.0, rect.height() - 8))
+                if rect.width() > 40:
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(QColor(_ACCENT.fill))
+                    p.drawRoundedRect(badge, 3, 3)
+                    p.setPen(QPen(QColor(_ACCENT.on_fill), 1.2))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    inner = badge.adjusted(4, 3, -4, -3)
+                    p.drawRect(inner)
+                    p.drawLine(QPointF(inner.left(), inner.center().y()), QPointF(inner.right(), inner.center().y()))
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         # Waveform: bright inside kept segments, dim where cut.
         mid = audio_y + audio_h / 2

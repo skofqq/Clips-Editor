@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -47,6 +47,8 @@ def _pair(first: str, first_field: QWidget, second: str, second_field: QWidget) 
 
 
 class CompositionPanel(QWidget):
+    apply_all_requested = Signal()  # use the shown layout for every part of the clip
+
     def __init__(
         self, controller: CompositionController, presets: PresetStore, parent: QWidget | None = None
     ) -> None:
@@ -140,10 +142,22 @@ class CompositionPanel(QWidget):
         layout_card.add_row(swap_row)
         layout_card.add_row("Output", self.output_label)
 
+        # ---- parts: after Split every part can have its own layout
+        self.part_label = QLabel(self)
+        self.part_label.setWordWrap(True)
+        self.part_label.setObjectName("muted")
+        self.apply_all_button = QPushButton("Use this layout for all parts", self)
+        self.apply_all_button.setToolTip("Every part of the clip gets the layout shown now")
+        self.apply_all_button.clicked.connect(self.apply_all_requested)
+        self.part_card = Card("Part", parent=self)
+        self.part_card.add_row(self.part_label)
+        self.part_card.add_row(self.apply_all_button)
+        self.part_card.setVisible(False)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-        for card in (preset_card, region_card, placement_card, layout_card):
+        for card in (self.part_card, preset_card, region_card, placement_card, layout_card):
             layout.addWidget(card)
         layout.addStretch(1)
 
@@ -297,3 +311,14 @@ class CompositionPanel(QWidget):
         name = self.preset_combo.currentText()
         if name and self.presets.delete(name):
             self._reload_presets()
+
+    def set_part_info(self, index: int, count: int, own: bool, any_own: bool) -> None:
+        """Which part of the clip the editor shows (index from 0)."""
+        self.part_card.setVisible(count > 1 or any_own)
+        if count > 1:
+            text = (f"Editing the layout of part {index + 1} of {count} (under the playhead). "
+                    + ("It has its own layout." if own else "It uses the common layout until you change it."))
+        else:
+            text = "This part has its own layout."
+        self.part_label.setText(text)
+        self.apply_all_button.setEnabled(any_own)
