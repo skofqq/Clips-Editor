@@ -11,6 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import QThreadPool, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -83,6 +84,8 @@ class ExportDialog(QDialog):
         encoders: list[EncoderInfo] | None = None,
         parent: QWidget | None = None,
         upload=None,  # callable(path) opening the YouTube upload dialog
+        captions: list | None = None,  # subtitles (output time) to burn in
+        subtitle_style=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Export Video")
@@ -94,6 +97,8 @@ class ExportDialog(QDialog):
         self.encoders = encoders
         self.result_path: Path | None = None
         self.upload = upload
+        self.captions = list(captions or [])
+        self.subtitle_style = subtitle_style
         self._task: CancellableTask | None = None
         self._close_when_stopped = False
         self._loading = False
@@ -176,6 +181,16 @@ class ExportDialog(QDialog):
         rate.addWidget(self.quality_spin, 1)
         rate.addWidget(self.bitrate_spin, 1)
         video_card.add_row("Quality", rate)
+
+        self.subtitles_check = QCheckBox("Burn subtitles into the video", self)
+        has_subs = bool(self.captions) and subtitle_style is not None
+        self.subtitles_check.setChecked(has_subs and subtitle_style.enabled)
+        self.subtitles_check.setEnabled(has_subs)
+        self.subtitles_check.setToolTip(
+            "Draws the captions from the Subtitles tab on the picture" if has_subs
+            else "No subtitles: transcribe the clip and turn them on in the Subtitles tab"
+        )
+        video_card.add_row("Subtitles", self.subtitles_check)
 
         audio_card = Card("Audio", parent=self, label_width=96)
         audio = QHBoxLayout()
@@ -445,6 +460,7 @@ class ExportDialog(QDialog):
         task = CancellableTask(
             render, self.source, self.composition, self.timeline, settings, output,
             self.ffmpeg.ffmpeg, self.ffmpeg.ffprobe, self.encoders,
+            **self._subtitle_args(),
         )
         task.signals.progress.connect(self._on_progress)
         task.signals.finished.connect(self._on_finished)
@@ -459,6 +475,13 @@ class ExportDialog(QDialog):
         self._set_busy(True)
         log.info("Export %s -> %s with %s", self.source.path, output, settings)
         QThreadPool.globalInstance().start(task)
+
+    def _subtitle_args(self) -> dict:
+        if not (self.subtitles_check.isChecked() and self.captions and self.subtitle_style is not None):
+            return {}
+        from dataclasses import replace
+
+        return {"captions": self.captions, "subtitle_style": replace(self.subtitle_style, enabled=True)}
 
     def cancel_render(self) -> None:
         if self._task is not None:

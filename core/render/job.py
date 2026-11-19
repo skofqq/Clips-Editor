@@ -94,11 +94,13 @@ def build_command(
     settings: RenderSettings,
     encoder: str,
     filter_args: list[str],
+    overlay: Path | None = None,
 ) -> list[str]:
     cmd = [
         str(ffmpeg), "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
         "-progress", "pipe:1", "-stats_period", "0.5",
         "-i", str(source),
+        *(["-f", "concat", "-safe", "0", "-i", str(overlay)] if overlay is not None else []),
         *filter_args,
         "-map", f"[{graph.video_label}]",
     ]
@@ -248,6 +250,8 @@ def render(
     encoders: list[EncoderInfo] | None = None,
     progress: Progress | None = None,
     cancel: threading.Event | None = None,
+    captions: list | None = None,
+    subtitle_style=None,
 ) -> RenderResult:
     """Render ``source`` with the edit to ``output``.
 
@@ -263,7 +267,8 @@ def render(
     if output.resolve() == Path(source.path).resolve():
         raise RenderError("The output must not overwrite the source video.")
     output.parent.mkdir(parents=True, exist_ok=True)
-    graph = build_graph(composition, timeline, source, settings)
+    burn = bool(captions) and subtitle_style is not None and subtitle_style.enabled
+    graph = build_graph(composition, timeline, source, settings, overlay_input=1 if burn else None)
     encoder = choose_encoder(settings, encoders)
     partial = partial_path(output)
     started = time.monotonic()
@@ -271,6 +276,20 @@ def render(
     with tempfile.TemporaryDirectory(prefix="tss-render-") as tmp:
         workdir = Path(tmp)
         filter_args = _filter_args(graph, ffmpeg, workdir)
+        overlay = None
+        if burn:
+            from core.subtitles.raster import render_overlay
+
+            progress(0.0, "Drawing subtitles…")
+            overlay = render_overlay(
+                captions, subtitle_style, composition.output_w, composition.output_h, workdir / "subs",
+                divider=composition.divider, duration_us=timeline.output_us, cancel=cancel,
+            )
+            if overlay is None and cancel is not None and cancel.is_set():
+                raise RenderCancelled("Render cancelled")
+            if overlay is None:
+                graph = build_graph(composition, timeline, source, settings)
+                filter_args = _filter_args(graph, ffmpeg, workdir)
         attempts = [encoder]
         software = SOFTWARE_ENCODER[settings.video_codec]
         if encoder != software:
@@ -279,7 +298,8 @@ def render(
             for index, name in enumerate(attempts):
                 label = encoder_info(name).label
                 progress(0.0, f"Starting · {label}")
-                cmd = build_command(ffmpeg, Path(source.path), partial, graph, settings, name, filter_args)
+                cmd = build_command(ffmpeg, Path(source.path), partial, graph, settings, name, filter_args,
+                                    overlay)
                 try:
                     _run_ffmpeg(cmd, graph.duration_s, label, progress, cancel, workdir / "stderr.txt")
                     encoder = name

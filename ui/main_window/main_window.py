@@ -37,6 +37,8 @@ from core.media.errors import MediaError
 from core.media.ffmpeg_locator import FFmpegPaths, tool_version
 from core.media.probe import SUPPORTED_EXTENSIONS, MediaInfo, probe_media
 from core.media.thumbnail import make_thumbnail
+from core.subtitles.export import write_subtitles
+from core.subtitles.model import SubtitleSettings, build_captions
 from core.projects.project import (
     PROJECT_EXTENSION,
     MediaRef,
@@ -64,6 +66,7 @@ from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
 from ui.metadata.library_dialog import LibraryDialog
 from ui.metadata.metadata_panel import MetadataPanel
+from ui.subtitles.subtitles_panel import SubtitlesPanel
 from ui.theme import icon, palette, windows
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.upload_dialog import UploadDialog
@@ -79,7 +82,7 @@ from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 7  # bump when the dock arrangement changes
+LAYOUT_VERSION = 8  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -136,6 +139,8 @@ class MainWindow(QMainWindow):
         self.transcript_panel = TranscriptPanel(self.transcript, self)
         self.censor_panel = CensorPanel(self.censor, self)
         self.metadata_panel = MetadataPanel(self.metadata_library, self)
+        self.subtitles_panel = SubtitlesPanel(self)
+        self.captions: list = []  # current captions (output time)
         metadata_scroll = QScrollArea(self)
         metadata_scroll.setWidgetResizable(True)
         metadata_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -165,11 +170,20 @@ class MainWindow(QMainWindow):
         self.censor_dock = self._add_dock(
             "Censor", "dock_censor", self.censor_panel, Qt.DockWidgetArea.RightDockWidgetArea
         )
+        subtitles_scroll = QScrollArea(self)
+        subtitles_scroll.setWidgetResizable(True)
+        subtitles_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        subtitles_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        subtitles_scroll.setWidget(self.subtitles_panel)
+        self.subtitles_dock = self._add_dock(
+            "Subtitles", "dock_subtitles", subtitles_scroll, Qt.DockWidgetArea.RightDockWidgetArea
+        )
         self.tabifyDockWidget(self.properties_dock, self.transcript_dock)
+        self.tabifyDockWidget(self.transcript_dock, self.subtitles_dock)
         self.metadata_dock = self._add_dock(
             "Metadata", "dock_metadata", metadata_scroll, Qt.DockWidgetArea.RightDockWidgetArea
         )
-        self.tabifyDockWidget(self.transcript_dock, self.censor_dock)
+        self.tabifyDockWidget(self.subtitles_dock, self.censor_dock)
         self.tabifyDockWidget(self.censor_dock, self.metadata_dock)
         self.properties_dock.raise_()
         self.resizeDocks([self.media_dock, self.properties_dock], [240, 360], Qt.Orientation.Horizontal)
@@ -364,8 +378,8 @@ class MainWindow(QMainWindow):
         playback.addActions([self.act_back_second, self.act_forward_second, self.act_go_start, self.act_go_end])
 
         view = self.menuBar().addMenu("&View")
-        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.censor_dock,
-                     self.metadata_dock, self.timeline_dock):
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.subtitles_dock,
+                     self.censor_dock, self.metadata_dock, self.timeline_dock):
             view.addAction(dock.toggleViewAction())
         view.addSeparator()
         zoom = view.addMenu("Timeline Zoom")
@@ -487,6 +501,14 @@ class MainWindow(QMainWindow):
         self.transcript.changed.connect(
             lambda: self.censor_panel.set_has_transcript(self.transcript.transcript is not None)
         )
+        self.subtitles_panel.settings_changed.connect(self._subtitles_changed)
+        self.subtitles_panel.seek_requested.connect(self._seek_output)
+        self.subtitles_panel.split_requested.connect(self.split_caption_at_playhead)
+        self.subtitles_panel.export_requested.connect(self.save_subtitles)
+        self.transcript.changed.connect(self._refresh_subtitles)
+        self.timeline.changed.connect(self._refresh_subtitles)
+        self.composition.changed.connect(self.preview.output_view.update)
+        self.timeline.playhead_changed.connect(self._update_subtitle_time)
         self.censor_panel.detect_requested.connect(self.detect_censor)
         self.censor_panel.apply_requested.connect(self.apply_censor)
         self.censor_panel.remove_requested.connect(self.remove_censor_mutes)
@@ -834,9 +856,11 @@ class MainWindow(QMainWindow):
         defaults = RenderSettings(width=composition.output_w, height=composition.output_h)
         settings = RenderSettings.from_dict(self.config.export_settings) if self.config.export_settings else defaults
         output = default_output_path(Path(media.path), self.config.export_dir, settings.extension)
+        self._refresh_subtitles()
         dialog = ExportDialog(
             media, composition, timeline, self.ffmpeg, settings, output, self.encoders, self,
             upload=self.upload_to_youtube,
+            captions=self.captions, subtitle_style=self.subtitles_panel.style(),
         )
         self._export_dialog = dialog
         try:
@@ -1063,6 +1087,7 @@ class MainWindow(QMainWindow):
         self.project = Project()
         self.project_path = None
         self.metadata_panel.set_metadata(self.project.metadata)
+        self.subtitles_panel.set_settings(self.project.subtitles)
         self.media_panel.clear()
         self.preview.unload()
         self.properties_panel.show_media(None)
@@ -1087,6 +1112,7 @@ class MainWindow(QMainWindow):
         self.project = project
         self.project_path = path
         self.metadata_panel.set_metadata(project.metadata)
+        self.subtitles_panel.set_settings(project.subtitles)
         self.media_panel.clear()
         self.preview.unload()
         self._apply_project_composition()
@@ -1158,6 +1184,68 @@ class MainWindow(QMainWindow):
             self.project_label.setText(f"{self.project_path.stem if self.project_path else 'Untitled project'}"
                                        f"{'  •  unsaved' if self._dirty else ''}")
 
+    # ---------------------------------------------------------- subtitles
+    def _subtitles_changed(self, settings: SubtitleSettings) -> None:
+        if settings != self.project.subtitles:
+            self.project.subtitles = settings
+            self._set_dirty(True)
+        self._refresh_subtitles()
+
+    def _refresh_subtitles(self) -> None:
+        settings = self.subtitles_panel.settings()
+        transcript, timeline = self.transcript.transcript, self.timeline.timeline
+        self.subtitles_panel.set_has_transcript(transcript is not None)
+        self.captions = build_captions(transcript, timeline, settings.style, settings.edits)
+        self.subtitles_panel.set_captions(self.captions)
+        self.preview.output_view.set_subtitles(self.captions, settings.style)
+        self._update_subtitle_time(self.timeline.playhead_us)
+
+    def _update_subtitle_time(self, source_us: int) -> None:
+        timeline = self.timeline.timeline
+        out = timeline.source_to_output(source_us) if timeline is not None else None
+        self.preview.output_view.set_subtitle_time(out)
+
+    def _seek_output(self, output_us: int) -> None:
+        timeline = self.timeline.timeline
+        if timeline is not None:
+            self.preview.seek(us_to_ms(timeline.output_to_source(output_us)))
+
+    def split_caption_at_playhead(self) -> bool:
+        """Start a new caption at the word under (or right after) the playhead."""
+        timeline = self.timeline.timeline
+        if timeline is None or not self.captions:
+            return False
+        now = timeline.source_to_output(self.timeline.playhead_us)
+        words = [w for c in self.captions for w in c.words]
+        word = next((w for w in words if w.start_us <= now < w.end_us), None) \
+            or next((w for w in words if w.start_us >= now), None)
+        if word is None:
+            return False
+        edits = self.subtitles_panel.settings().edits.split_at(word.source_us)
+        self.subtitles_panel.set_edits(edits)
+        return True
+
+    def save_subtitles(self, path: Path | None = None) -> Path | None:
+        if not self.captions:
+            return None
+        if path is None:
+            media = self.preview.media
+            base = Path(self.config.export_dir or (media.path.parent if media else Path.home()))
+            name = (media.path.stem if media else "subtitles") + ".srt"
+            file, _ = QFileDialog.getSaveFileName(
+                self, "Save Subtitles", str(base / name), "SubRip (*.srt);;WebVTT (*.vtt)"
+            )
+            if not file:
+                return None
+            path = Path(file)
+        try:
+            write_subtitles(path, self.captions)
+        except OSError as exc:
+            QMessageBox.warning(self, "Save Subtitles", f"Could not save {path.name}:\n{exc}")
+            return None
+        self.statusBar().showMessage(f"Saved {path}", 8000)
+        return path
+
     # --------------------------------------------------------- appearance
     def set_appearance(self, theme: str | None = None, mica: bool | None = None, ask: bool = True) -> bool:
         """Store the theme / Mica choice; it applies after a restart. Returns
@@ -1190,8 +1278,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- layout
     def reset_layout(self) -> None:
-        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.censor_dock,
-                     self.metadata_dock, self.timeline_dock):
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.subtitles_dock,
+                     self.censor_dock, self.metadata_dock, self.timeline_dock):
             dock.setFloating(False)
             dock.show()
         self.restoreState(self._default_state, LAYOUT_VERSION)

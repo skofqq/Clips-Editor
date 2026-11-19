@@ -29,6 +29,9 @@ class OutputView(QWidget):
         super().__init__(parent)
         self.controller = controller
         self._image: QImage | None = None
+        self._captions: list = []
+        self._subtitle_style = None
+        self._subtitle_us: int | None = None
         self._drag: str | None = None  # "divider" or "pan"
         self._drag_name: str | None = None
         self._drag_start = QPointF()
@@ -39,6 +42,25 @@ class OutputView(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         controller.changed.connect(self.update)
         controller.selection_changed.connect(lambda _name: self.update())
+
+    def set_subtitles(self, captions: list, style) -> None:
+        """Captions (output time) and their style; drawn over the frame."""
+        self._captions = list(captions)
+        self._subtitle_style = style
+        self.update()
+
+    def set_subtitle_time(self, output_us: int | None) -> None:
+        if output_us != self._subtitle_us:
+            self._subtitle_us = output_us
+            if self._captions:
+                self.update()
+
+    def current_caption(self):
+        from core.subtitles.model import caption_at
+
+        if not self._captions or self._subtitle_us is None or not getattr(self._subtitle_style, "enabled", False):
+            return None
+        return caption_at(self._captions, self._subtitle_us)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(320, 568)
@@ -209,6 +231,13 @@ class OutputView(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#ffffff"))
             painter.drawRoundedRect(grip, 4, 4)
+
+        # Captions sit on top of the divider, as they do in the export.
+        caption = self.current_caption()
+        if caption is not None:
+            from core.subtitles.raster import draw_caption
+
+            draw_caption(painter, canvas, caption, self._subtitle_style, self._subtitle_us, comp.divider)
 
         painter.setClipping(False)
         painter.setPen(QPen(QColor(palette.FLYOUT_STROKE), 1))

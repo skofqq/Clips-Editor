@@ -15,6 +15,7 @@ from typing import Any
 from core.censor.review import CensorState
 from core.editor.composition import Composition
 from core.metadata.generate import ClipMetadata
+from core.subtitles.model import SubtitleSettings
 from core.timeline.model import Timeline
 from core.transcription.model import Transcript
 
@@ -55,6 +56,7 @@ class Project:
     transcripts: dict[str, Transcript] = field(default_factory=dict)  # per media path
     censors: dict[str, CensorState] = field(default_factory=dict)  # censor review per media path
     metadata: ClipMetadata = field(default_factory=ClipMetadata)  # YouTube title/description/tags choices
+    subtitles: SubtitleSettings = field(default_factory=SubtitleSettings)  # caption style and edits
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -127,6 +129,8 @@ class Project:
             data["censor"] = [{"media": path, **state.to_dict()} for path, state in self.censors.items()]
         if not self.metadata.empty:
             data["metadata"] = self.metadata.to_dict()
+        if self.subtitles != SubtitleSettings():
+            data["subtitles"] = self.subtitles.to_dict()
         return data
 
     @classmethod
@@ -140,7 +144,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata"}
+        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata", "subtitles"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -180,6 +184,7 @@ class Project:
             transcripts=transcripts,
             censors=censors,
             metadata=metadata,
+            subtitles=SubtitleSettings.from_dict(data.get("subtitles")),
             extra=extra,
         )
 

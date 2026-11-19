@@ -77,7 +77,10 @@ def build_graph(
     timeline: Timeline,
     info: MediaInfo,
     settings: RenderSettings,
+    overlay_input: int | None = None,
 ) -> RenderGraph:
+    """``overlay_input``: index of an extra FFmpeg input (a transparent image
+    stream the size of the canvas, e.g. burnt-in subtitles) laid over the frame."""
     if info.video is None:
         raise ValueError("The source has no video stream.")
     settings = settings.cleaned()
@@ -124,12 +127,19 @@ def build_graph(
             out = "canvas" if i == k - 1 else f"layer{i}"
             lines.append(f"[{current}][region{i}]overlay=x={dx}:y={dy}:shortest=1[{out}]")
             current = out
+    if overlay_input is not None:
+        lines.append(f"[{overlay_input}:v]format=rgba,setpts=PTS-STARTPTS[subs]")
+        lines.append("[canvas][subs]overlay=x=0:y=0:eof_action=pass:repeatlast=0:format=auto[canvas_s]")
+        lines.append("[canvas_s]format=yuv420p[canvas_f]")
+        canvas_label = "canvas_f"
+    else:
+        canvas_label = "canvas"
     if (settings.width, settings.height) == (canvas_w, canvas_h):
-        lines.append("[canvas]format=yuv420p[vout]")
+        lines.append(f"[{canvas_label}]format=yuv420p[vout]")
     else:
         # Other sizes / aspect ratios: fit the canvas and pad with black.
         lines.append(
-            f"[canvas]scale={settings.width}:{settings.height}:force_original_aspect_ratio=decrease"
+            f"[{canvas_label}]scale={settings.width}:{settings.height}:force_original_aspect_ratio=decrease"
             f":flags=lanczos,pad={settings.width}:{settings.height}:(ow-iw)/2:(oh-ih)/2,"
             "setsar=1,format=yuv420p[vout]"
         )

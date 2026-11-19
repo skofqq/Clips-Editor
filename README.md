@@ -194,6 +194,25 @@ Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
    regions; mutes you drew yourself are never touched. **Remove censor
    mutes** takes them off again. The review is saved in the project.
 
+### Subtitles
+
+1. Transcribe the clip, open the **Subtitles** tab and tick **Show
+   subtitles on the video**. Pick a style (Shorts bold, Karaoke green,
+   One word, Clean, Boxed) and adjust font, size, colours, outline,
+   shadow or box. By default the captions sit on the webcam/gameplay
+   border; **Where** can move them to any height.
+2. Captions show 1–3 words at a time (see **Words**, **Letters/line**,
+   **Lines**); a pause or the end of a sentence starts a new one. The word
+   being spoken is highlighted. Cut words disappear and words inside a mute
+   region are written as `б***` (or `****`, or as spoken).
+3. In the caption list, click a caption to jump to it. **Split at
+   playhead** starts a new caption at the word under the playhead, **Merge
+   with next** glues two captions, **Reset** undoes your splits and merges.
+   They are saved in the project.
+4. **Save .srt…** writes SubRip or WebVTT in the time of the edited video.
+   In the Export dialog, **Burn subtitles into the video** draws them
+   exactly as the preview shows them.
+
 ### Editing on the timeline
 
 | Action | How |
