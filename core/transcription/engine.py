@@ -20,7 +20,7 @@ import re
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -68,6 +68,7 @@ class TranscribeOptions:
     vad_threshold: float = 0.5  # Silero speech probability; lower catches quieter speech
     accurate: bool = False  # wider beam search: slower, a little more accurate
     separate_voice: bool = False  # isolate the voice from game audio / music first (slower)
+    refine_timing: bool = True  # snap word edges to where the voice starts and stops
 
 
 VAD_LEVELS = {"normal": 0.5, "sensitive": 0.3}
@@ -522,7 +523,12 @@ def transcribe_file(
     audio = _recognition_input(engine, path, ffmpeg, options, progress, cancel, audio_stream)
     if audio.size == 0:
         raise TranscriptionError("The audio track is empty.")
-    return engine.transcribe(audio, options, progress, cancel)
+    transcript = engine.transcribe(audio, options, progress, cancel)
+    if options.refine_timing and transcript.segments:
+        from core.transcription.alignment import refine_segments
+
+        transcript = replace(transcript, segments=refine_segments(transcript.segments, audio, SAMPLE_RATE))
+    return transcript
 
 
 def transcribe_range(
@@ -542,7 +548,12 @@ def transcribe_range(
     if audio.size == 0:
         raise TranscriptionError("No audio in the selected range.")
     part = engine.transcribe(audio, options, progress, cancel)
-    return shift_segments(part.segments, start_us)
+    segments = part.segments
+    if options.refine_timing and segments:
+        from core.transcription.alignment import refine_segments
+
+        segments = refine_segments(segments, audio, SAMPLE_RATE)
+    return shift_segments(segments, start_us)
 
 
 def shift_segments(segments, offset_us: int) -> tuple[Segment, ...]:

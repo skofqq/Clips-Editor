@@ -160,6 +160,10 @@ Recognition quality options in the Transcript panel:
   once into `models\separation`) and recognises only the voice. Helps when
   explosions, gunfire or music cover the speech. Runs on the CPU, about half
   the clip's length.
+- **Snap word timing to the voice** (on by default): Whisper's word times
+  are often 50–200 ms off. Each word's start and end is moved (at most
+  0.15 s) to where the voice really starts and stops, and touching words are
+  split at the quietest point, so mutes and subtitles hit the word exactly.
 - **Speech detection**: *Sensitive* catches quiet or overlapped speech that
   *Normal* skips; *Off* sends all audio (slower, may invent text in music).
   Long silences no longer produce invented phrases.

@@ -122,6 +122,10 @@ class TranscriptPanel(QWidget):
 
         self.clean_check = QCheckBox("Clean up audio (cut rumble and hiss, lift quiet speech)", self)
         self.clean_check.setChecked(True)
+        self.refine_check = QCheckBox("Snap word timing to the voice (more precise mutes and subtitles)", self)
+        self.refine_check.setChecked(True)
+        self.refine_check.setToolTip(
+            "Moves each word's start and end, by at most 0.15 s, to where the voice really starts and stops.")
         self.separate_check = QCheckBox("Separate the voice from game audio and music (slower)", self)
         self.separate_check.setToolTip(
             "Runs a voice separation model (MDX-Net, about 65 MB, downloaded once) before recognition.\n"
@@ -212,6 +216,7 @@ class TranscriptPanel(QWidget):
         box.addWidget(self.slang_check)
         box.addWidget(self.clean_check)
         box.addWidget(self.separate_check)
+        box.addWidget(self.refine_check)
         quality = QHBoxLayout()
         quality.addWidget(self.vad_combo, 1)
         quality.addWidget(self.accurate_check)
@@ -283,15 +288,17 @@ class TranscriptPanel(QWidget):
             slang=self.slang_check.isChecked(),
             clean_audio=self.clean_check.isChecked(),
             separate_voice=self.separate_check.isChecked(),
+            refine_timing=self.refine_check.isChecked(),
             vad=vad != VAD_OFF,
             vad_threshold=VAD_LEVELS.get(vad, VAD_LEVELS["normal"]),
             accurate=self.accurate_check.isChecked(),
         )
 
     def set_quality_preferences(self, clean: bool, vad: str, accurate: bool, custom_model: str,
-                                separate: bool = False) -> None:
+                                separate: bool = False, refine: bool = True) -> None:
         self.clean_check.setChecked(clean)
         self.separate_check.setChecked(separate)
+        self.refine_check.setChecked(refine)
         index = self.vad_combo.findData(vad)
         self.vad_combo.setCurrentIndex(max(0, index))
         self.accurate_check.setChecked(accurate)
@@ -301,6 +308,7 @@ class TranscriptPanel(QWidget):
         return {
             "clean": self.clean_check.isChecked(),
             "separate": self.separate_check.isChecked(),
+            "refine": self.refine_check.isChecked(),
             "vad": self.vad_combo.currentData(),
             "accurate": self.accurate_check.isChecked(),
             "custom_model": self.custom_model_edit.text().strip(),
@@ -373,7 +381,7 @@ class TranscriptPanel(QWidget):
         self.clear_button.setEnabled(not busy and self.controller.transcript is not None)
         for combo in (self.language_combo, self.model_combo, self.device_combo, self.vocabulary_edit,
                       self.uncensored_check, self.slang_check, self.clean_check, self.vad_combo,
-                      self.accurate_check, self.separate_check, self.custom_model_edit):
+                      self.accurate_check, self.separate_check, self.refine_check, self.custom_model_edit):
             combo.setEnabled(not busy)
         self.progress.setVisible(busy)
 

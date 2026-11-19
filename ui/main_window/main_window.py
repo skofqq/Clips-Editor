@@ -487,6 +487,7 @@ class MainWindow(QMainWindow):
             self.config.transcribe_accurate,
             self.config.transcribe_custom_model,
             self.config.transcribe_separate_voice,
+            self.config.transcribe_refine_timing,
         )
         self.transcript_panel.set_learned(self.config.transcribe_learned)
         self.transcript.corrected.connect(self.learn_correction)
@@ -952,6 +953,7 @@ class MainWindow(QMainWindow):
         quality = panel.quality_preferences()
         self.config.transcribe_clean_audio = quality["clean"]
         self.config.transcribe_separate_voice = quality["separate"]
+        self.config.transcribe_refine_timing = quality["refine"]
         self.config.transcribe_vad = quality["vad"]
         self.config.transcribe_accurate = quality["accurate"]
         self.config.transcribe_custom_model = quality["custom_model"]
