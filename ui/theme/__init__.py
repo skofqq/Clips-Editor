@@ -48,9 +48,14 @@ def _render(data: bytes, size: int) -> QPixmap:
     return QPixmap.fromImage(image)
 
 
+def icon(name: str, color: str | None = None, disabled: str | None = None) -> QIcon:
+    """``icon("save")`` → QIcon from icons/save.svg tinted ``color`` (default: the
+    theme's text colour; empty if missing)."""
+    return _icon(name, color or palette.TEXT, disabled or palette.TEXT_DISABLED)
+
+
 @lru_cache(maxsize=None)
-def icon(name: str, color: str = palette.TEXT, disabled: str = palette.TEXT_DISABLED) -> QIcon:
-    """``icon("save")`` → QIcon from icons/save.svg tinted ``color`` (empty if missing)."""
+def _icon(name: str, color: str, disabled: str) -> QIcon:
     data = _svg(name, color)
     if data is None:
         return QIcon()
@@ -104,6 +109,7 @@ def stylesheet() -> str:
     except OSError as exc:
         log.warning("Theme not loaded: %s", exc)
         return ""
+    text = palette.theme_qss(text)
     for token, value in palette.tokens().items():
         text = text.replace(token, value)
     # Qt wants forward slashes in url(); the folder may contain spaces, so urls are quoted.

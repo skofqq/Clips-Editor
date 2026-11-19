@@ -10,6 +10,8 @@ from PySide6.QtCore import QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from ui.theme import palette
+
 
 def fit_rect(content: QSize, bounds: QRect) -> QRectF:
     """Largest rectangle with the aspect of ``content`` centred inside ``bounds``."""
@@ -56,9 +58,9 @@ class VideoCanvas(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#1c1c1c"))
+        painter.fillRect(self.rect(), QColor(palette.BASE_ALT))
         if self._image is None:
-            painter.setPen(QColor("#9d9d9d"))
+            painter.setPen(QColor(palette.TEXT_TERTIARY))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._placeholder)
             return
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)

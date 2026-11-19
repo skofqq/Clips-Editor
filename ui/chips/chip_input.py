@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidgetItem,
 )
 
+from ui.theme import palette
+
 CHIP_STYLE = (
     "QWidget#chipInput { background: #2d2d2d; border: 1px solid #363636; border-bottom: 1px solid #8a8a8a;"
     " border-radius: 4px; }"
@@ -152,7 +154,7 @@ class ChipInput(QWidget):
         self._chips: dict[str, Chip] = {}
         self.setObjectName("chipInput")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(CHIP_STYLE)
+        self.setStyleSheet(palette.theme_qss(CHIP_STYLE))
 
         self.edit = QLineEdit(self)
         self.edit.setPlaceholderText(placeholder)

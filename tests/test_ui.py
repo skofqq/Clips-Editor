@@ -261,3 +261,43 @@ def test_cards_in_long_forms(qapp, tmp_path):
     panel = CompositionPanel(CompositionController(), PresetStore(tmp_path / "presets.json"))
     titles = [c.title_label.text() for c in panel.findChildren(Card)]
     assert titles == ["Preset", "Region", "Placement in output", "Layout"]
+
+
+def test_light_theme_translates_colours():
+    from ui.theme import palette, stylesheet
+
+    try:
+        assert palette.set_theme("light") == "light"
+        assert palette.is_light() and palette.BASE == "#f3f3f3" and palette.TEXT == "#1b1b1b"
+        assert palette.themed("#2d2d2d") == "#fdfdfd" and palette.themed("#ff4d9d") == "#ff4d9d"
+        qss = stylesheet()
+        assert "#202020" not in qss and "#f3f3f3" in qss and "@" not in qss.replace("@media", "")
+        assert palette.accent().on_fill in ("#ffffff", "#000000")
+        assert palette.resolve_theme("system") in ("dark", "light")
+    finally:
+        palette.set_theme("dark")
+    assert palette.BASE == "#202020" and "#202020" in stylesheet()
+
+
+def test_appearance_setting_is_saved(qapp, data_dir):
+    from app.config import AppConfig
+    from ui.main_window.main_window import MainWindow
+
+    cfg = AppConfig.load(data_dir)
+    w = MainWindow(config=cfg, ffmpeg=None)
+    assert w.theme_actions["dark"].isChecked() and not w.act_mica.isChecked()
+    assert w.set_appearance(theme="light", ask=False)
+    assert not w.set_appearance(theme="light", ask=False)  # nothing changed
+    assert AppConfig.load(data_dir).theme == "light"
+    w._dirty = False
+    w.close()
+
+
+def test_view_settings_survive_reload(data_dir):
+    from app.config import AppConfig
+
+    cfg = AppConfig.load(data_dir)
+    cfg.theme, cfg.mica, cfg.timeline_view = "system", True, {"wave_gain": 2.0}
+    cfg.save()
+    again = AppConfig.load(data_dir)
+    assert (again.theme, again.mica, again.timeline_view) == ("system", True, {"wave_gain": 2.0})

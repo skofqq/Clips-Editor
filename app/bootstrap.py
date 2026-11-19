@@ -21,15 +21,20 @@ def load_theme() -> str:
     return stylesheet()
 
 
-def create_application(argv: list[str]) -> QApplication:
+def create_application(argv: list[str], theme: str = "dark", mica: bool = False) -> QApplication:
+    """QApplication with the Fluent look. The theme must be chosen before any
+    other UI module is imported, because widgets read the colours then."""
+    from ui.theme import palette
+
+    palette.set_theme(theme)
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setStyle("Fusion")
     from ui.theme import windows
 
-    windows.install(app)
-    app.setStyleSheet(load_theme())
+    windows.install(app, mica=mica)
+    app.setStyleSheet(load_theme() + (windows.MICA_QSS if windows.mica_enabled() else ""))
     return app
 
 
@@ -48,7 +53,7 @@ def run(argv: list[str]) -> int:
     log_file = setup_logging(config.log_dir)
     log.info("Starting %s %s (log: %s)", APP_NAME, APP_VERSION, log_file)
 
-    app = create_application(argv)
+    app = create_application(argv, theme=config.theme, mica=config.mica)
 
     # Imported here so that logging is ready before any UI module loads.
     from ui.main_window.main_window import MainWindow
@@ -63,4 +68,20 @@ def run(argv: list[str]) -> int:
     code = app.exec()
     config.save()
     log.info("Exit with code %s", code)
+    if getattr(window, "restart_requested", False):
+        restart()
     return code
+
+
+def restart() -> bool:
+    """Start a fresh copy of the app (used after the theme was changed)."""
+    import sys
+    from pathlib import Path
+
+    from PySide6.QtCore import QProcess
+
+    if getattr(sys, "frozen", False):
+        return QProcess.startDetached(sys.executable, sys.argv[1:])
+    root = str(Path(__file__).resolve().parent.parent)
+    ok, _pid = QProcess.startDetached(sys.executable, ["-m", "app.main"], root)
+    return bool(ok)

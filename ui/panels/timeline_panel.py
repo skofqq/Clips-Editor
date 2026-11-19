@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from core.timeline.model import BEEP, MAX_GAIN_DB, MIN_GAIN_DB, SILENCE
 from core.timeline.timebase import US, format_timecode, us_to_frame
-from ui.theme import icon
+from ui.theme import icon, palette
 from ui.timeline.timeline_controller import MUTE, TimelineController
 from ui.timeline.timeline_view import MAX_PPS, MIN_PPS, TimelineView
 from ui.timeline.track_header import HEADER_W, TrackHeader
@@ -43,7 +43,7 @@ def slider_to_pps(value: int) -> float:
 def _separator(parent: QWidget) -> QFrame:
     line = QFrame(parent)
     line.setFixedWidth(1)
-    line.setStyleSheet("background: #3b3b3b; margin: 6px 4px;")
+    line.setStyleSheet(f"background: {palette.FLYOUT_STROKE}; margin: 6px 4px;")
     return line
 
 

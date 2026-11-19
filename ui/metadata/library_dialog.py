@@ -46,6 +46,7 @@ from core.metadata.library import (
 )
 from core.metadata.template import BUILTIN_VARIABLES
 from core.youtube.metadata import CATEGORIES
+from ui.theme import palette
 
 TAB_TITLES = {
     STREAMER: "Streamers", PARTICIPANT: "Participants", GAME: "Games", STREAM_TYPE: "Stream types",
@@ -138,7 +139,8 @@ class EntityPage(QWidget):
         self.preview_label = QLabel(self)
         self.preview_label.setWordWrap(True)
         self.preview_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.preview_label.setStyleSheet("background: #1c1c1c; border: 1px solid #2f2f2f; padding: 8px; border-radius: 8px;")
+        self.preview_label.setStyleSheet(palette.theme_qss(
+            "background: #1c1c1c; border: 1px solid #2f2f2f; padding: 8px; border-radius: 8px;"))
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)

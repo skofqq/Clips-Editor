@@ -11,6 +11,7 @@ from core.editor.geometry import Rect, clamp
 from ui.editor.composition_controller import CompositionController
 from ui.preview.source_view import REGION_COLORS, REGION_LABELS
 from ui.preview.video_canvas import fit_rect
+from ui.theme import palette
 
 DIVIDER_GRAB = 7
 MARGIN = 10
@@ -165,7 +166,7 @@ class OutputView(QWidget):
     # ------------------------------------------------------------ paint
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#1c1c1c"))
+        painter.fillRect(self.rect(), QColor(palette.BASE_ALT))
         canvas = self.canvas_rect()
         if canvas.isEmpty():
             return
@@ -210,6 +211,6 @@ class OutputView(QWidget):
             painter.drawRoundedRect(grip, 4, 4)
 
         painter.setClipping(False)
-        painter.setPen(QPen(QColor("#3b3b3b"), 1))
+        painter.setPen(QPen(QColor(palette.FLYOUT_STROKE), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(canvas)

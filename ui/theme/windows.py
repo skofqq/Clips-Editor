@@ -28,6 +28,30 @@ DWMWA_BORDER_COLOR = 34
 DWMWA_CAPTION_COLOR = 35
 DWMWA_TEXT_COLOR = 36
 DWMWCP_ROUND, DWMWCP_ROUNDSMALL = 2, 3
+DWMWA_SYSTEMBACKDROP_TYPE = 38  # Windows 11 22H2+
+DWMSBT_MAINWINDOW = 2  # Mica
+
+_mica = False
+
+# With Mica the window itself is see-through: the command bar, menu bar and
+# status bar let the backdrop show; panels and the video stay opaque.
+MICA_QSS = """
+QMainWindow, QMenuBar, QToolBar#mainToolbar, QStatusBar { background: transparent; }
+"""
+
+
+def mica_enabled() -> bool:
+    return _mica
+
+
+def mica_supported() -> bool:
+    """Mica needs Windows 11 build 22621 or later."""
+    if sys.platform != "win32":
+        return False
+    try:
+        return sys.getwindowsversion().build >= 22621
+    except AttributeError:
+        return False
 
 
 def _colorref(color: str) -> int:
@@ -50,11 +74,18 @@ def apply_window_effects(widget: QWidget, small_corners: bool = False) -> bool:
             data = ctypes.c_int(value)
             return dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(data), ctypes.sizeof(data))
 
-        if set_attr(DWMWA_USE_IMMERSIVE_DARK_MODE, 1) != 0:
-            set_attr(DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, 1)
+        dark = 0 if palette.is_light() else 1
+        if set_attr(DWMWA_USE_IMMERSIVE_DARK_MODE, dark) != 0:
+            set_attr(DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, dark)
         # The next ones exist on Windows 11 only; older systems just return an error code.
         set_attr(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUNDSMALL if small_corners else DWMWCP_ROUND)
-        if not small_corners:
+        mica = _mica and widget.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) and not small_corners
+        if mica:
+            margins = (ctypes.c_int * 4)(-1, -1, -1, -1)  # sheet of glass: backdrop under the whole client area
+            dwm.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+            set_attr(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW)
+            set_attr(DWMWA_TEXT_COLOR, _colorref(palette.TEXT))
+        elif not small_corners:
             set_attr(DWMWA_CAPTION_COLOR, _colorref(palette.BASE))
             set_attr(DWMWA_TEXT_COLOR, _colorref(palette.TEXT))
             set_attr(DWMWA_BORDER_COLOR, _colorref(palette.FLYOUT_STROKE))
@@ -94,7 +125,7 @@ def fluent_palette() -> QPalette:
         QPalette.ColorRole.Text: palette.TEXT,
         QPalette.ColorRole.Button: palette.CONTROL,
         QPalette.ColorRole.ButtonText: palette.TEXT,
-        QPalette.ColorRole.BrightText: "#ffffff",
+        QPalette.ColorRole.BrightText: palette.TEXT,
         QPalette.ColorRole.ToolTipBase: palette.FLYOUT,
         QPalette.ColorRole.ToolTipText: palette.TEXT,
         QPalette.ColorRole.Highlight: accent.fill,
@@ -102,9 +133,9 @@ def fluent_palette() -> QPalette:
         QPalette.ColorRole.Link: accent.text,
         QPalette.ColorRole.LinkVisited: accent.text,
         QPalette.ColorRole.PlaceholderText: palette.TEXT_TERTIARY,
-        QPalette.ColorRole.Light: "#3a3a3a",
+        QPalette.ColorRole.Light: palette.themed("#3a3a3a"),
         QPalette.ColorRole.Midlight: palette.STROKE,
-        QPalette.ColorRole.Mid: "#2a2a2a",
+        QPalette.ColorRole.Mid: palette.themed("#2a2a2a"),
         QPalette.ColorRole.Dark: palette.BASE_ALT,
         QPalette.ColorRole.Shadow: "#000000",
     }
@@ -115,7 +146,15 @@ def fluent_palette() -> QPalette:
     return p
 
 
-def install(app: QApplication) -> FluentChrome:
+def prepare_mica(window: QWidget) -> None:
+    """Call on the main window before it is shown, when Mica is on."""
+    if _mica:
+        window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+
+def install(app: QApplication, mica: bool = False) -> FluentChrome:
+    global _mica
+    _mica = bool(mica) and mica_supported()
     app.setPalette(fluent_palette())
     chrome = FluentChrome(app)
     app.installEventFilter(chrome)

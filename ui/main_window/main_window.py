@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSize, QThreadPool, Qt, Signal
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -64,7 +64,7 @@ from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
 from ui.metadata.library_dialog import LibraryDialog
 from ui.metadata.metadata_panel import MetadataPanel
-from ui.theme import icon, palette
+from ui.theme import icon, palette, windows
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.upload_dialog import UploadDialog
 from ui.panels.composition_panel import CompositionPanel
@@ -104,6 +104,8 @@ class MainWindow(QMainWindow):
         self.resize(1440, 900)
         self.setAcceptDrops(True)
         self.setDockNestingEnabled(True)
+        self.restart_requested = False
+        windows.prepare_mica(self)
 
         self.composition = CompositionController(self)
         self.presets = PresetStore(config.data_dir / "presets.json")
@@ -372,6 +374,27 @@ class MainWindow(QMainWindow):
         view.addAction(self.act_reset_layout)
 
         settings_menu = self.menuBar().addMenu("&Settings")
+        appearance = settings_menu.addMenu("Appearance")
+        self._theme_group = QActionGroup(self)
+        self.theme_actions: dict[str, QAction] = {}
+        for name, text in ((palette.SYSTEM, "Match Windows"), (palette.DARK, "Dark"), (palette.LIGHT, "Light")):
+            action = appearance.addAction(text)
+            action.setCheckable(True)
+            action.setChecked(self.config.theme == name)
+            action.setData(name)
+            self._theme_group.addAction(action)
+            self.theme_actions[name] = action
+        if not any(a.isChecked() for a in self.theme_actions.values()):
+            self.theme_actions[palette.DARK].setChecked(True)
+        self._theme_group.triggered.connect(lambda action: self.set_appearance(theme=action.data()))
+        appearance.addSeparator()
+        self.act_mica = appearance.addAction("Mica backdrop (Windows 11)")
+        self.act_mica.setCheckable(True)
+        self.act_mica.setChecked(self.config.mica)
+        self.act_mica.setEnabled(windows.mica_supported())
+        self.act_mica.setToolTip("Lets the desktop colour show through the top bar. Off by default.")
+        self.act_mica.toggled.connect(lambda on: self.set_appearance(mica=on))
+        settings_menu.addSeparator()
         settings_menu.addAction(self.act_metadata_library)
         integrations = settings_menu.addMenu("Integrations")
         integrations.addAction(self.act_youtube_accounts)
@@ -1134,6 +1157,36 @@ class MainWindow(QMainWindow):
         if hasattr(self, "project_label"):
             self.project_label.setText(f"{self.project_path.stem if self.project_path else 'Untitled project'}"
                                        f"{'  •  unsaved' if self._dirty else ''}")
+
+    # --------------------------------------------------------- appearance
+    def set_appearance(self, theme: str | None = None, mica: bool | None = None, ask: bool = True) -> bool:
+        """Store the theme / Mica choice; it applies after a restart. Returns
+        True when anything changed."""
+        changed = False
+        if theme is not None and theme != self.config.theme:
+            self.config.theme = theme
+            changed = True
+        if mica is not None and bool(mica) != self.config.mica:
+            self.config.mica = bool(mica)
+            changed = True
+        if not changed:
+            return False
+        self.config.save()
+        if ask:
+            answer = QMessageBox.question(
+                self, "Restart to apply",
+                "The new look is used after a restart. Restart Twitch Shorts Studio now?\n\n"
+                "Your project is kept: you will be asked to save it if needed.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.restart_requested = True
+                if not self.close():
+                    self.restart_requested = False
+        else:
+            self.statusBar().showMessage("The new look is used after a restart.", 8000)
+        return True
 
     # ------------------------------------------------------------- layout
     def reset_layout(self) -> None:

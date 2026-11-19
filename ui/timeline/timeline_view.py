@@ -116,12 +116,21 @@ C_SEGMENT = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.42))
 C_SEGMENT_SEL = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.72))
 C_SEGMENT_EDGE = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.7))
 C_WAVE = QColor(_ACCENT.text)
-C_WAVE_DIM = QColor("#3a3a3a")
+C_WAVE_DIM = QColor(palette.themed("#3a3a3a"))
 C_MUTE = QColor("#ff6b7a")
 C_BEEP = QColor("#ffb34d")
 C_PLAYHEAD = QColor(palette.TEXT)
 C_TEXT = QColor(palette.TEXT_TERTIARY)
-C_SPEECH = QColor("#2f5a3f")
+C_SPEECH = QColor(palette.themed("#2f5a3f"))
+C_SPEECH_TEXT = QColor(palette.themed("#dfffee"))
+C_WORD_TEXT = QColor("#ffffff" if palette.is_light() else "#0d1f16")
+C_STRONG = QColor(palette.TEXT)  # selection outlines
+C_ON_SEGMENT = QColor(palette.TEXT if palette.is_light() else "#ffffff")
+_LIGHT = palette.is_light()
+C_SHADE = QColor(255, 255, 255, 150) if _LIGHT else QColor(0, 0, 0, 110)  # cut-away parts
+C_FADE = QColor(255, 255, 255, 160) if _LIGHT else QColor(0, 0, 0, 120)
+C_RANGE = QColor(0, 0, 0, 30) if _LIGHT else QColor(255, 255, 255, 45)
+C_RANGE_EDGE = QColor(0, 0, 0, 140) if _LIGHT else QColor(255, 255, 255, 160)
 C_WORD = QColor(palette.SUCCESS)
 C_SUGGEST = QColor(palette.CAUTION)  # pending censor suggestion
 
@@ -634,11 +643,11 @@ class TimelineView(QWidget):
             gradient.setColorAt(1, base)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setBrush(gradient)
-            p.setPen(QPen(QColor("#ffffff") if selected else C_SEGMENT_EDGE, 1))
+            p.setPen(QPen(C_STRONG if selected else C_SEGMENT_EDGE, 1))
             p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             if rect.width() > 60:
-                p.setPen(QColor("#ffffff"))
+                p.setPen(C_ON_SEGMENT)
                 p.drawText(
                     rect.adjusted(6, 0, -4, 0),
                     Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -672,7 +681,7 @@ class TimelineView(QWidget):
 
         # Fades (drawn over the audio track in output order).
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 0, 0, 120))
+        p.setBrush(C_FADE)
         if t.fade_in_us > 0:
             x0 = self.us_to_x(t.start_us)
             x1 = self.us_to_x(t.output_to_source(t.fade_in_us))
@@ -694,7 +703,7 @@ class TimelineView(QWidget):
             block = QRectF(x0, mute_y, max(2.0, x1 - x0), mute_h)
             p.fillRect(block, color)
             if c.selected == (MUTE, m.id):
-                p.setPen(QPen(QColor("#ffffff"), 2))
+                p.setPen(QPen(C_STRONG, 2))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRect(block.adjusted(1, 1, -1, -1))
             if block.width() > 34:
@@ -709,7 +718,7 @@ class TimelineView(QWidget):
                 x0, x1 = self.us_to_x(sug.start_us), self.us_to_x(sug.end_us)
                 if x1 < 0 or x0 > w:
                     continue
-                pen = QPen(C_SUGGEST if sug.status == PENDING else QColor("#ffffff"), 2)
+                pen = QPen(C_SUGGEST if sug.status == PENDING else C_STRONG, 2)
                 if sug.status == PENDING:
                     pen.setStyle(Qt.PenStyle.DashLine)
                 if sug.id == self._current_suggestion:
@@ -736,20 +745,20 @@ class TimelineView(QWidget):
                         rect = QRectF(wx0, speech_y + 3, max(1.0, wx1 - wx0 - 1), speech_h - 6)
                         p.fillRect(rect, C_WORD)
                         if rect.width() > metrics.horizontalAdvance(wd.text) + 4:
-                            p.setPen(QColor("#0d1f16"))
+                            p.setPen(C_WORD_TEXT)
                             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, wd.text)
                 else:
                     if not seg.has_word_timing:
                         p.setPen(QPen(C_WORD, 1, Qt.PenStyle.DashLine))
                         p.setBrush(Qt.BrushStyle.NoBrush)
                         p.drawRect(block.adjusted(0.5, 0.5, -0.5, -0.5))
-                    p.setPen(QColor("#dfffee"))
+                    p.setPen(C_SPEECH_TEXT)
                     text = metrics.elidedText(seg.text, Qt.TextElideMode.ElideRight, int(block.width()) - 6)
                     p.drawText(block.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignVCenter, text)
 
         # Dim everything that is cut away.
         p.setPen(Qt.PenStyle.NoPen)
-        dim = QColor(0, 0, 0, 110)
+        dim = C_SHADE
         cursor = 0.0
         for s in t.segments:
             x0 = self.us_to_x(s.start_us)
@@ -763,8 +772,8 @@ class TimelineView(QWidget):
         if c.range:
             x0, x1 = self.us_to_x(c.range[0]), self.us_to_x(c.range[1])
             bottom = speech_y + speech_h
-            p.fillRect(QRectF(x0, RULER_H, x1 - x0, bottom - RULER_H), QColor(255, 255, 255, 45))
-            p.setPen(QPen(QColor(255, 255, 255, 160), 1))
+            p.fillRect(QRectF(x0, RULER_H, x1 - x0, bottom - RULER_H), C_RANGE)
+            p.setPen(QPen(C_RANGE_EDGE, 1))
             p.drawLine(QLineF(x0, RULER_H, x0, bottom))
             p.drawLine(QLineF(x1, RULER_H, x1, bottom))
 
