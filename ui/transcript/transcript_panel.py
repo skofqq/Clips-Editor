@@ -52,6 +52,8 @@ MODEL_HINTS = {
     "medium": "accurate, slower (1.5 GB)",
     "large-v3": "most accurate, slow on CPU (3 GB)",
     "large-v3-turbo": "near large-v3 accuracy, faster (1.6 GB)",
+    "large-v3-russian": "large-v3 fine-tuned on Russian speech, best for Russian (3 GB, GPU)",
+    "large-v3-russian-int8": "the Russian model compressed: half the size, nearly the same quality (1.6 GB)",
 }
 CUSTOM_MODEL = "__custom__"
 VAD_OFF = "off"

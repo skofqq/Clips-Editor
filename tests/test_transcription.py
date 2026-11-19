@@ -597,3 +597,24 @@ def test_window_learns_and_retranscribes_range(window):
 
     window.forget_learned()
     assert window.config.transcribe_learned == [] and window.transcript_panel.learned_clear.isHidden()
+
+
+def test_russian_model_loads_from_its_repository(fake_whisper, tmp_path, monkeypatch, qapp):
+    from core.transcription import models
+    from ui.transcript.transcript_controller import TranscriptController
+    from ui.transcript.transcript_panel import TranscriptPanel
+
+    monkeypatch.setattr(engine_mod, "cuda_available", lambda: False)
+    engine = WhisperEngine(tmp_path)
+    engine.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), TranscribeOptions(model="large-v3-russian"))
+    assert FakeModel.calls[-1][0] == "bzikst/faster-whisper-large-v3-russian"
+    assert not engine_mod.is_custom_model("large-v3-russian-int8")
+    assert models.REPOS["large-v3-russian-int8"].endswith("-int8") and "large-v3-russian" in models.INFO
+    snap = tmp_path / "models--bzikst--faster-whisper-large-v3-russian" / "snapshots" / "abc"
+    snap.mkdir(parents=True)
+    (snap / "model.bin").write_bytes(b"x")
+    assert engine_mod.downloaded_models(tmp_path) == ["large-v3-russian"]
+    panel = TranscriptPanel(TranscriptController())
+    panel.model_combo.setCurrentIndex(panel.model_combo.findData("large-v3-russian"))
+    assert panel.options().model == "large-v3-russian" and "Russian" in panel.model_combo.toolTip()
+    panel.deleteLater()

@@ -34,7 +34,14 @@ from core.transcription.model import SEGMENT_TIMING, WORD_TIMING, Segment, Trans
 log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16000
-MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo")
+# Named models that are not standard faster-whisper sizes: Hugging Face repos.
+# large-v3 fine-tuned on Russian speech (antony66/whisper-large-v3-russian,
+# converted to CTranslate2): noticeably fewer errors on Russian.
+MODEL_REPOS = {
+    "large-v3-russian": "bzikst/faster-whisper-large-v3-russian",
+    "large-v3-russian-int8": "bzikst/faster-whisper-large-v3-russian-int8",
+}
+MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo") + tuple(MODEL_REPOS)
 DEFAULT_MODEL = "small"
 AUTO = "auto"
 
@@ -398,7 +405,7 @@ class WhisperEngine:
             progress(0.0, f"Loading model '{model}' on {device.upper()} (first use downloads it)…")
             try:
                 self.models_dir.mkdir(parents=True, exist_ok=True)
-                self._model = WhisperModel(model, device=device, compute_type=compute, download_root=str(self.models_dir))
+                self._model = WhisperModel(MODEL_REPOS.get(model, model), device=device, compute_type=compute, download_root=str(self.models_dir))
                 self._key = key
                 self.device_used = device
                 log.info("Whisper model %s loaded on %s (%s)", model, device, compute)

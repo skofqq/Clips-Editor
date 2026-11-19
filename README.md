@@ -145,6 +145,10 @@ profanity is transcribed literally instead of being softened.
 **Expect gaming / streaming slang** primes the model with common gamer and
 Twitch words (катка, рофл, клатч, GG, KEKW…). Larger
 models (`large-v3`, `large-v3-turbo`) recognise Russian noticeably better.
+For Russian, `large-v3-russian` is large-v3 fine-tuned on Russian speech
+([antony66/whisper-large-v3-russian](https://huggingface.co/antony66/whisper-large-v3-russian),
+CTranslate2 build by bzikst, ≈ 3 GB); `large-v3-russian-int8` is the same
+model compressed to ≈ 1.6 GB with almost the same quality. Both want a GPU.
 
 Recognition quality options in the Transcript panel:
 
