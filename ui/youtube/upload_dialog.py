@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,8 +61,18 @@ def default_title(path: Path) -> str:
     return stem.replace("_", " ").strip()
 
 
-def _upload(client, path, metadata, progress=None, cancel=None):
-    return client.upload(path, metadata, progress, cancel)
+def _upload(client, path, metadata, progress=None, cancel=None, captions_srt="", captions_language=""):
+    result = client.upload(path, metadata, progress, cancel)
+    if not captions_srt or not result.video_id:
+        return result
+    if progress is not None:
+        progress(1.0, "Adding subtitles…")
+    try:
+        client.upload_captions(result.video_id, captions_srt, captions_language or metadata.language or "ru")
+    except YouTubeError as exc:  # the video is up; only the captions are missing
+        log.warning("Captions were not added: %s", exc)
+        return replace(result, captions=str(exc))
+    return replace(result, captions="added")
 
 
 class UploadDialog(QDialog):
@@ -75,6 +86,8 @@ class UploadDialog(QDialog):
         manage_accounts=None,  # callable opening the accounts dialog
         parent: QWidget | None = None,
         metadata=None,  # ClipMetadata from the project's Metadata tab
+        captions: list | None = None,  # subtitles (output time) to add as a caption track
+        captions_language: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Upload to YouTube")
@@ -124,6 +137,13 @@ class UploadDialog(QDialog):
         for code, name in LANGUAGES:
             self.language_combo.addItem(name, code)
         self.kids_check = QCheckBox("Made for kids", self)
+        self.captions = list(captions or [])
+        self.captions_language = captions_language
+        self.captions_check = QCheckBox("Add the subtitles as YouTube captions (CC)", self)
+        self.captions_check.setEnabled(bool(self.captions))
+        self.captions_check.setToolTip(
+            "Uploads the project's subtitles as a caption track viewers can turn on; it also helps search."
+            if self.captions else "Transcribe the clip first: the captions come from the Subtitles tab.")
         self.problems_label = QLabel(self)
         self.problems_label.setWordWrap(True)
         self.problems_label.setStyleSheet(f"color: {palette.CRITICAL}")
@@ -172,6 +192,7 @@ class UploadDialog(QDialog):
         extra.addWidget(self.language_combo, 1)
         extra.addWidget(self.kids_check)
         publish.add_row("Language", extra)
+        publish.add_row("Captions", self.captions_check)
         buttons = QHBoxLayout()
         buttons.addWidget(self.copy_button)
         buttons.addStretch(1)
@@ -192,6 +213,7 @@ class UploadDialog(QDialog):
         self._select(self.category_combo, defaults.get("category", DEFAULT_CATEGORY))
         self._select(self.privacy_combo, defaults.get("privacy", PRIVATE))
         self._select(self.language_combo, defaults.get("language", ""))
+        self.captions_check.setChecked(bool(self.captions) and bool(defaults.get("captions", True)))
         self.from_metadata = False
         if metadata is not None and metadata.title.strip():
             self.from_metadata = True
@@ -326,6 +348,7 @@ class UploadDialog(QDialog):
             "privacy": self.privacy_combo.currentData() if not self.schedule_check.isChecked() else PRIVATE,
             "language": self.language_combo.currentData(),
             "tags": self.tags_edit.text() if not self.from_metadata else self._default_tags,
+            "captions": self.captions_check.isChecked() if self.captions else True,
         }
 
     # ------------------------------------------------------------ upload
@@ -334,6 +357,7 @@ class UploadDialog(QDialog):
                        self.tags_edit, self.category_combo, self.language_combo, self.kids_check,
                        self.schedule_check):
             widget.setEnabled(not busy)
+        self.captions_check.setEnabled(not busy and bool(self.captions))
         self.upload_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
         self.close_button.setEnabled(not busy)
@@ -346,7 +370,13 @@ class UploadDialog(QDialog):
         channel_id = self.channel_combo.currentData()
         metadata = self.metadata()
         client = self.service.client_for(channel_id)
-        task = CancellableTask(_upload, client, self.file, metadata)
+        srt = ""
+        if self.captions and self.captions_check.isChecked():
+            from core.subtitles.export import to_srt
+
+            srt = to_srt(self.captions)
+        task = CancellableTask(_upload, client, self.file, metadata, captions_srt=srt,
+                               captions_language=self.captions_language)
         task.signals.progress.connect(self._on_progress)
         task.signals.finished.connect(self._on_finished)
         task.signals.failed.connect(self._on_failed)
@@ -400,6 +430,10 @@ class UploadDialog(QDialog):
             )
         elif result.publish_at:
             text += f"<br>Scheduled for {self.schedule_edit.dateTime().toString('dd.MM.yyyy HH:mm')}."
+        if result.captions == "added":
+            text += "<br>Subtitles added as captions."
+        elif result.captions:
+            text += f"<br>The video is up, but the captions were not added: {result.captions}"
         self.status_label.setText(text)
         self.copy_button.setVisible(True)
         self._finish()

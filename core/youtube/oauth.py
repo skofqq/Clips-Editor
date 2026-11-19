@@ -27,11 +27,14 @@ from core.youtube.errors import AuthCancelled, YouTubeAuthError, YouTubeError
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
-# Minimum scopes: upload videos, and read which channel the account has.
-SCOPES = (
+# Needed: upload videos, and read which channel the account has.
+REQUIRED_SCOPES = (
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
 )
+# Optional: adding captions to an uploaded video (captions.insert) needs it.
+CAPTIONS_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
+SCOPES = REQUIRED_SCOPES + (CAPTIONS_SCOPE,)
 SIGN_IN_TIMEOUT_S = 300
 
 
@@ -213,7 +216,7 @@ def exchange_code(client: ClientConfig, code: str, verifier: str, redirect_uri: 
         "redirect_uri": redirect_uri,
     })
     creds = _credentials(payload)
-    if not set(SCOPES) <= set(creds.scopes):
+    if not set(REQUIRED_SCOPES) <= set(creds.scopes):
         raise YouTubeAuthError("Not all permissions were granted. Reconnect and allow uploading videos.")
     return creds
 

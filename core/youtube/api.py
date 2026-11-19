@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 
 API_URL = "https://www.googleapis.com/youtube/v3"
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
+CAPTIONS_URL = "https://www.googleapis.com/upload/youtube/v3/captions"
 CHUNK = 8 * 1024 * 1024  # bytes per request; a multiple of 256 KiB
 PIECE = 256 * 1024  # bytes written between progress / cancel checks
 MAX_RETRIES = 8
@@ -68,6 +69,7 @@ class UploadResult:
     privacy: str
     publish_at: str
     upload_status: str
+    captions: str = ""  # "" = not asked, "added", or why they could not be added
 
     @property
     def url(self) -> str:
@@ -104,6 +106,11 @@ def _error_from(status: int, raw: bytes) -> YouTubeError:
                             status, reason)
     if status == 401:
         return YouTubeAuthError("YouTube sign-in expired. Reconnect the account.", status, reason)
+    if status == 403 and (reason in ("insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+                          or "insufficient authentication scopes" in message.lower()):
+        return YouTubeAuthError("This account was connected without permission to add captions. "
+                                "Open Accounts…, reconnect the channel and allow managing your YouTube videos.",
+                                status, "insufficientPermissions")
     text = message or reason or http.client.responses.get(status, "")
     return YouTubeError(f"YouTube error {status}: {text}", status, reason)
 
@@ -235,6 +242,36 @@ class YouTubeClient:
             if status == 404:
                 raise YouTubeError("The upload session expired. Start the upload again.", 404)
             raise _error_from(status, raw)
+
+    # ------------------------------------------------------------ captions
+    def upload_captions(self, video_id: str, text: str, language: str, name: str = "",
+                        filename: str = "captions.srt") -> str:
+        """Add a caption track (SubRip text) to ``video_id``; returns its id."""
+        boundary = f"tss{int(time.time() * 1000)}"
+        snippet = {"snippet": {"videoId": video_id, "language": language or "ru", "name": name, "isDraft": False}}
+        body = (
+            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+            f"{json.dumps(snippet)}\r\n"
+            f"--{boundary}\r\nContent-Type: application/octet-stream\r\n"
+            f"Content-Disposition: attachment; filename=\"{filename}\"\r\n\r\n"
+        ).encode() + text.encode("utf-8") + f"\r\n--{boundary}--\r\n".encode()
+        url = f"{CAPTIONS_URL}?uploadType=multipart&part=snippet"
+        for attempt in (0, 1):
+            request = urllib.request.Request(url, data=body, method="POST")
+            request.add_header("Authorization", f"Bearer {self._token(attempt == 1)}")
+            request.add_header("Content-Type", f"multipart/related; boundary={boundary}")
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    raw = response.read()
+                    return str((json.loads(raw) if raw else {}).get("id", ""))
+            except urllib.error.HTTPError as exc:
+                raw = exc.read()
+                if exc.code == 401 and attempt == 0:
+                    continue
+                raise _error_from(exc.code, raw) from exc
+            except (urllib.error.URLError, OSError) as exc:
+                raise YouTubeError(f"Cannot reach YouTube: {exc}") from exc
+        raise YouTubeAuthError("YouTube sign-in expired. Reconnect the account.", 401)
 
     def _backoff(self, retries: int, why: str, cancel: threading.Event | None) -> int:
         retries += 1

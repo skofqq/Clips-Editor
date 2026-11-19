@@ -44,6 +44,8 @@ class FakeGoogle:
         self.quota = False
         self.revoked: list[str] = []
         self.puts = 0
+        self.captions: list[str] = []
+        self.captions_scope_missing = False
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -85,6 +87,17 @@ class FakeGoogle:
                 if url.path == "/revoke":
                     fake.revoked.append(dict(urllib.parse.parse_qsl(self._body().decode()))["token"])
                     return self._send(200, {})
+                if url.path == "/captions":
+                    if not self._authorized():
+                        return self._send(401, {"error": {"code": 401}})
+                    if fake.captions_scope_missing:
+                        self._body()
+                        return self._send(403, {"error": {"code": 403, "message": "Request had insufficient "
+                                                          "authentication scopes.",
+                                                          "errors": [{"reason": "insufficientPermissions"}]}})
+                    assert "multipart/related" in self.headers["Content-Type"]
+                    fake.captions.append(self._body().decode("utf-8"))
+                    return self._send(200, {"id": "cap1"})
                 if url.path == "/upload":
                     if not self._authorized():
                         return self._send(401, {"error": {"code": 401, "message": "Invalid Credentials"}})
@@ -154,6 +167,7 @@ def google(monkeypatch):
     monkeypatch.setattr(oauth, "REVOKE_URL", fake.base + "/revoke")
     monkeypatch.setattr(api_mod, "API_URL", fake.base + "/youtube/v3")
     monkeypatch.setattr(api_mod, "UPLOAD_URL", fake.base + "/upload")
+    monkeypatch.setattr(api_mod, "CAPTIONS_URL", fake.base + "/captions")
     monkeypatch.setattr(api_mod, "CHUNK", 256 * 1024)
     monkeypatch.setattr(api_mod, "PIECE", 64 * 1024)
     monkeypatch.setattr(api_mod.YouTubeClient, "_backoff", lambda self, r, why, cancel: r + 1)
@@ -344,6 +358,30 @@ def test_upload_errors_and_cancel(google, tmp_path):
         YouTubeClient(lambda force: "access-1").upload(empty, VideoMetadata("Clip"))
 
 
+def test_upload_adds_captions_and_survives_missing_permission(google, tmp_path):
+    from core.youtube.errors import YouTubeAuthError
+    from ui.youtube.upload_dialog import _upload
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x" * 300_000)
+    client = YouTubeClient(lambda force: "access-1")
+    srt = "1\n00:00:00,100 --> 00:00:01,000\nПРИВЕТ\n"
+    meta = VideoMetadata(title="t", language="ru")
+    result = _upload(client, video, meta, captions_srt=srt, captions_language="ru")
+    assert result.video_id == "vid42" and result.captions == "added"
+    body = google.captions[0]
+    assert '"videoId": "vid42"' in body and '"language": "ru"' in body and "ПРИВЕТ" in body
+
+    google.uploaded.clear()
+    google.captions_scope_missing = True
+    result = _upload(client, video, meta, captions_srt=srt)
+    assert result.video_id == "vid42" and "reconnect" in result.captions.lower()
+    with pytest.raises(YouTubeAuthError):
+        client.upload_captions("vid42", srt, "ru")
+    # An account connected without the captions permission still connects.
+    assert set(oauth.REQUIRED_SCOPES) < set(oauth.SCOPES)
+
+
 def test_upload_history(tmp_path):
     history = UploadHistory(tmp_path / "uploads.json")
     assert history.records() == []
@@ -434,9 +472,23 @@ def test_upload_dialog_validates_uploads_and_records(qapp, google, data_dir, tmp
     assert dialog.defaults()["privacy"] == "public"
     dialog.close()
 
+    assert not dialog.captions_check.isEnabled() and not google.captions  # no subtitles given
+
     again = UploadDialog(service, history, rendered, ffmpeg_paths.ffprobe)
     assert "already uploaded" in again.status_label.text()
     again.close()
+
+    from core.subtitles.model import Caption, CaptionWord
+
+    caps = [Caption(100_000, 900_000, (CaptionWord("ПРИВЕТ", 100_000, 900_000, 100_000),))]
+    with_subs = UploadDialog(service, history, rendered, ffmpeg_paths.ffprobe, captions=caps, captions_language="ru")
+    assert with_subs.captions_check.isEnabled() and with_subs.captions_check.isChecked()
+    with_subs.upload_button.click()
+    assert _wait(lambda: with_subs._task is None)
+    assert "captions" in with_subs.status_label.text() and "ПРИВЕТ" in google.captions[-1]
+    with_subs.captions_check.setChecked(False)
+    assert with_subs.defaults()["captions"] is False
+    with_subs.close()
 
 
 def test_main_window_refuses_to_upload_source(qapp, data_dir, ffmpeg_paths, sample_clips, monkeypatch):

@@ -898,6 +898,8 @@ class MainWindow(QMainWindow):
             self.youtube, self.upload_history, Path(path), self.ffmpeg.ffprobe if self.ffmpeg else None,
             self.config.youtube_defaults, self.manage_youtube_accounts, self,
             metadata=self.project.metadata,
+            captions=self.captions,
+            captions_language=getattr(self.transcript.transcript, "language", "") or "",
         )
         dialog.exec()
         self.config.youtube_defaults = dialog.defaults()

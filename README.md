@@ -212,6 +212,9 @@ Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
 4. **Save .srt…** writes SubRip or WebVTT in the time of the edited video.
    In the Export dialog, **Burn subtitles into the video** draws them
    exactly as the preview shows them.
+5. When uploading to YouTube, **Add the subtitles as YouTube captions**
+   uploads them as a caption track (CC). This needs the "manage your YouTube
+   videos" permission: channels connected before 0.8.7 must be reconnected.
 
 ### Editing on the timeline
 
