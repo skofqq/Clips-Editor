@@ -171,6 +171,12 @@ Recognition quality options in the Transcript panel:
 - **Learned words**: every word you type when correcting the transcript or
   a censor word is remembered and suggested to the model next time.
   *Forget* clears the list.
+- **Replacement rules…**: your own fixes for words the model keeps getting
+  wrong, one per line (`скоф = Skof`, `кс го -> CS:GO`, `гг → GG`). Case,
+  ё/е and punctuation are ignored when matching, a rule can match several
+  words, and the words keep their timing. **Start every sentence with a
+  capital letter** is on by default. Both run after every transcription and
+  can be applied to the current transcript (one undo step).
 - **Find speakers**: after transcribing, works out who says each word
   (WeSpeaker CAM++ voice model, ≈ 28 MB, downloaded once into
   `models\speakers`). Choose *Detect how many* or the exact number of
@@ -231,6 +237,8 @@ Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
 4. **Save .srt…** writes SubRip or WebVTT in the time of the edited video.
    In the Export dialog, **Burn subtitles into the video** draws them
    exactly as the preview shows them.
+   **Hide commas and periods** gives Shorts-style text (? and ! stay);
+   **Colour per speaker** colours the 2nd, 3rd… speaker after Find speakers.
 5. When uploading to YouTube, **Add the subtitles as YouTube captions**
    uploads them as a caption track (CC). This needs the "manage your YouTube
    videos" permission: channels connected before 0.8.7 must be reconnected.

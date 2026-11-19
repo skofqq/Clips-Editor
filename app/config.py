@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.8.11"
+APP_VERSION = "0.9.0"
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,8 @@ class AppConfig:
     transcribe_clean_audio: bool = True
     transcribe_separate_voice: bool = False
     transcribe_refine_timing: bool = True
+    transcribe_rules: str = ""  # replacement rules, one "find = replace" per line
+    transcribe_capitalise: bool = True
     transcribe_vad: str = "normal"  # normal | sensitive | off
     transcribe_accurate: bool = False
     transcribe_custom_model: str = ""  # folder or Hugging Face id
@@ -108,7 +110,7 @@ class AppConfig:
         for key in (
             "ffmpeg_dir", "last_import_dir", "window_geometry", "window_state",
             "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
-            "youtube_active", "transcribe_vad", "transcribe_custom_model",
+            "youtube_active", "transcribe_vad", "transcribe_custom_model", "transcribe_rules",
         ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
@@ -117,7 +119,7 @@ class AppConfig:
         if raw.get("theme") in ("dark", "light", "system"):
             config.theme = raw["theme"]
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
-                    "transcribe_separate_voice", "transcribe_refine_timing"):
+                    "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_capitalise"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])
         learned = raw.get("transcribe_learned")

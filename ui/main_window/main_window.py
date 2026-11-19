@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSize, QThreadPool, Qt, Signal
@@ -494,6 +495,7 @@ class MainWindow(QMainWindow):
         self.transcript_panel.learned_cleared.connect(self.forget_learned)
         self.transcript_panel.retranscribe_requested.connect(self.retranscribe_range)
         self.transcript_panel.speakers_requested.connect(self.find_speakers)
+        self.transcript_panel.rules_requested.connect(self.edit_replacement_rules)
         self.timeline.selection_changed.connect(self._update_retranscribe)
         self.timeline.playhead_changed.connect(lambda us: self._update_retranscribe())
         self.transcript.changed.connect(self._update_retranscribe)
@@ -1005,6 +1007,37 @@ class MainWindow(QMainWindow):
         log.info("Re-transcribing %s %d-%d us with %s", media.path, start, end, options)
         self.pool.start(task)
 
+    def _cleaned(self, transcript):
+        """Apply the user's replacement rules and capitalisation to fresh recognition results."""
+        from core.transcription.cleanup import clean_transcript, parse_rules
+
+        rules = parse_rules(self.config.transcribe_rules)
+        if not rules and not self.config.transcribe_capitalise:
+            return transcript, 0
+        return clean_transcript(transcript, rules, self.config.transcribe_capitalise)
+
+    def edit_replacement_rules(self) -> None:
+        from ui.transcript.rules_dialog import RulesDialog
+
+        t = self.transcript.transcript
+        dialog = RulesDialog(self.config.transcribe_rules, self.config.transcribe_capitalise, t is not None, self)
+        if dialog.exec() != RulesDialog.DialogCode.Accepted:
+            return
+        self.apply_replacement_rules(dialog.rules(), dialog.capitalise_check.isChecked(),
+                                     dialog.apply_check.isChecked())
+
+    def apply_replacement_rules(self, rules: str, capitalise: bool, apply_now: bool) -> int:
+        self.config.transcribe_rules = rules
+        self.config.transcribe_capitalise = capitalise
+        t = self.transcript.transcript
+        if not apply_now or t is None:
+            return 0
+        cleaned, count = self._cleaned(t)
+        if cleaned != t:
+            self.transcript.set_transcript(cleaned)  # undoable
+        self.statusBar().showMessage(f"Replacement rules: {count} replacement{'s' if count != 1 else ''}.", 8000)
+        return count
+
     def find_speakers(self, count: int | None = None) -> None:
         from core.transcription.diarization import find_speakers_in_file
 
@@ -1043,6 +1076,7 @@ class MainWindow(QMainWindow):
             self.transcript_panel.set_busy(False, "The clip changed; the result was dropped.")
             return
         segments = tuple(s for s in segments if start_us <= (s.start_us + s.end_us) // 2 < end_us)
+        segments = self._cleaned(replace(t, segments=segments))[0].segments
         updated = t.with_range_replaced(start_us, end_us, segments)
         self.transcript.set_transcript(updated)  # undoable
         text = " ".join(s.text for s in segments) or "(no speech found)"
@@ -1072,6 +1106,7 @@ class MainWindow(QMainWindow):
         media = self.preview.media
         if path is None:
             return
+        transcript = self._cleaned(transcript)[0]
         if media is not None and media.path == path:
             self.transcript.set_transcript(transcript)  # undoable like any edit
         else:
@@ -1357,7 +1392,11 @@ class MainWindow(QMainWindow):
         if self._transcribe_task is not None:
             self._transcribe_task.cancel()
         self.edit_playback.shutdown()
-        self.preview.player.stop()
+        player = self.preview.player
+        # stop() on a paused player can block inside Qt's FFmpeg backend when
+        # there is no audio device; the window is closing, so pausing is enough.
+        if player.playbackState() == player.PlaybackState.PlayingState:
+            player.pause()
         self.config.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         self.config.window_state = bytes(self.saveState(LAYOUT_VERSION).toBase64()).decode()
         self.config.timeline_view = self.timeline_panel.view.view_state()

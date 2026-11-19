@@ -366,7 +366,7 @@ def test_window_transcribes_in_background_with_undo(window, tmp_path, data_dir, 
     window.transcript_panel.transcribe_button.click()
     assert _wait(lambda: window.transcript.transcript is not None)
     t = window.transcript.transcript
-    assert [s.text for s in t.segments] == ["hello there", "second half"]
+    assert [s.text for s in t.segments] == ["Hello there", "second half"]  # sentence capitals are on by default
     assert "Done on CPU" in window.transcript_panel.status_label.text()
     assert window.timeline_panel.view._transcript is t
     assert window.project.transcript_for(str(window.preview.media.path)) == t

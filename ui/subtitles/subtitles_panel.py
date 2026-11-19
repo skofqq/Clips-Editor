@@ -112,6 +112,8 @@ class SubtitlesPanel(QWidget):
         self.outline_spin.setRange(0, 30)
         self.outline_spin.setSuffix(" px")
         self.karaoke_check = QCheckBox("Highlight the spoken word", self)
+        self.punct_check = QCheckBox("Hide commas and periods", self)
+        self.punct_check.setToolTip("Shorts-style text without commas and full stops; ? and ! stay.")
         self.speakers_check = QCheckBox("Colour per speaker", self)
         self.speakers_check.setToolTip("After Find speakers (Transcript tab), every other speaker gets "
                                        "their own colour and a new caption starts when the voice changes.")
@@ -139,6 +141,7 @@ class SubtitlesPanel(QWidget):
         look.add_row("Outline", self.outline_spin)
         look.add_row(self.karaoke_check)
         look.add_row(self.speakers_check)
+        look.add_row(self.punct_check)
         effects = QHBoxLayout()
         effects.setSpacing(16)
         effects.addWidget(self.shadow_check)
@@ -223,7 +226,7 @@ class SubtitlesPanel(QWidget):
         for spin in (self.size_spin, self.outline_spin, self.words_spin, self.chars_spin, self.lines_spin):
             spin.valueChanged.connect(self._edited)
         for check in (self.bold_check, self.upper_check, self.karaoke_check, self.shadow_check, self.box_check,
-                      self.speakers_check):
+                      self.speakers_check, self.punct_check):
             check.toggled.connect(self._edited)
         for button in (self.color_button, self.highlight_button, self.outline_button):
             button.color_changed.connect(self._edited)
@@ -262,6 +265,7 @@ class SubtitlesPanel(QWidget):
             self.outline_spin.setValue(s.outline_px)
             self.karaoke_check.setChecked(s.karaoke)
             self.speakers_check.setChecked(s.speaker_colors)
+            self.punct_check.setChecked(s.hide_punctuation)
             self.shadow_check.setChecked(s.shadow)
             self.box_check.setChecked(s.box)
             divider = s.position == POSITION_DIVIDER
@@ -316,6 +320,7 @@ class SubtitlesPanel(QWidget):
             outline_px=self.outline_spin.value(),
             karaoke=self.karaoke_check.isChecked(),
             speaker_colors=self.speakers_check.isChecked(),
+            hide_punctuation=self.punct_check.isChecked(),
             shadow=self.shadow_check.isChecked(),
             box=self.box_check.isChecked(),
             position=self.position_slider.value() / 100 if custom else POSITION_DIVIDER,

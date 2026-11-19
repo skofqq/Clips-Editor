@@ -68,6 +68,7 @@ class TranscriptPanel(QWidget):
     clear_requested = Signal()
     retranscribe_requested = Signal(object)  # TranscribeOptions, for the selected range
     learned_cleared = Signal()
+    rules_requested = Signal()
     speakers_requested = Signal(object)  # number of speakers, or None to detect
 
     def __init__(self, controller: TranscriptController, parent: QWidget | None = None) -> None:
@@ -144,6 +145,8 @@ class TranscriptPanel(QWidget):
         self.learned_label = QLabel(self)
         self.learned_label.setObjectName("muted")
         self.learned_label.setWordWrap(True)
+        self.rules_button = QPushButton("Replacement rules…", self)
+        self.rules_button.setToolTip("Fix words that are always misrecognised, e.g. скоф = Skof; capital letters")
         self.learned_clear = QPushButton("Forget", self)
         self.learned_clear.setToolTip("Forget the words learned from your corrections")
 
@@ -221,6 +224,7 @@ class TranscriptPanel(QWidget):
         learned.addWidget(self.learned_label, 1)
         learned.addWidget(self.learned_clear)
         box.addLayout(learned)
+        box.addWidget(self.rules_button)
         box.addWidget(self.uncensored_check)
         box.addWidget(self.slang_check)
         box.addWidget(self.clean_check)
@@ -267,6 +271,7 @@ class TranscriptPanel(QWidget):
             lambda: self.retranscribe_requested.emit(replace(self.options(), accurate=True))
         )
         self.learned_clear.clicked.connect(self.learned_cleared)
+        self.rules_button.clicked.connect(self.rules_requested)
         self.speakers_button.clicked.connect(
             lambda: self.speakers_requested.emit(self.speakers_combo.currentData()))
         self.model_combo.currentIndexChanged.connect(self._update_model_tip)

@@ -45,6 +45,7 @@ class SubtitleStyle:
     min_duration_ms: int = 400
     mask: str = MASK_FIRST
     karaoke: bool = True
+    hide_punctuation: bool = False  # drop commas and periods (keep ? and !), as many Shorts do
     speaker_colors: bool = True  # after "Find speakers": the 2nd, 3rd… speaker get their own colour
 
     def to_dict(self) -> dict:
@@ -165,6 +166,7 @@ class CaptionWord:
     source_us: int  # source start, the key for edits
     masked: bool = False
     speaker: int = -1
+    ends_sentence: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,6 +223,11 @@ def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle
             text = w.text.strip()
             if not text or not _kept(timeline, w.start_us, w.end_us):
                 continue
+            sentence_end = bool(_SENTENCE_END.search(text))
+            if style.hide_punctuation:
+                from core.transcription.cleanup import strip_punctuation
+
+                text = strip_punctuation(text)
             masked = _muted(timeline, w.start_us, w.end_us)
             if masked:
                 text = mask_word(text, style.mask)
@@ -230,7 +237,7 @@ def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle
             end = timeline.source_to_output(w.end_us)
             if end <= start:
                 end = start + 1
-            result.append(CaptionWord(text, start, end, w.start_us, masked, w.speaker))
+            result.append(CaptionWord(text, start, end, w.start_us, masked, w.speaker, sentence_end))
     result.sort(key=lambda w: w.start_us)
     return result
 
@@ -254,7 +261,7 @@ def build_captions(
             joined = word.source_us in edits.joins
             full = len(current) >= style.max_words or length > style.max_chars * style.max_lines
             pause = word.start_us - current[-1].end_us >= gap
-            sentence = bool(_SENTENCE_END.search(current[-1].text))
+            sentence = current[-1].ends_sentence or bool(_SENTENCE_END.search(current[-1].text))
             other_voice = word.speaker != current[-1].speaker
             if forced or (not joined and (full or pause or sentence or other_voice)):
                 groups.append(current)
