@@ -182,6 +182,7 @@ class PreviewPanel(QWidget):
         self.player.stop()
         self.player.setSource(QUrl())
         self._media = None
+        self._raw_frame = None
         self._duration_ms = 0
         self.slider.setRange(0, 0)
         self._update_time(0)
@@ -247,11 +248,32 @@ class PreviewPanel(QWidget):
         self.seek(self.player.position() + count * self._frame_ms)
 
     # ------------------------------------------------------------ handlers
+    def set_blur_controller(self, timeline_controller) -> None:
+        """Blur boxes of this timeline are painted into the shown frames."""
+        self._blur_source = timeline_controller
+        self.source_view.set_blur_controller(timeline_controller)
+        timeline_controller.changed.connect(self._show_frame)
+
     def _on_frame(self, frame: QVideoFrame) -> None:
         if frame.isValid():
-            image = frame.toImage()
-            self.source_view.set_image(image)
-            self.output_view.set_image(image)
+            self._raw_frame = frame.toImage()
+            start = frame.startTime()
+            self._raw_us = start if start >= 0 else self.player.position() * 1000
+            self._show_frame()
+
+    def _show_frame(self) -> None:
+        image = getattr(self, "_raw_frame", None)
+        if image is None:
+            return
+        source = getattr(self, "_blur_source", None)
+        t = source.timeline if source is not None else None
+        if t is not None and t.blurs:
+            from core.editor.blur_image import apply_blurs
+
+            sw, sh = self.controller.source_size
+            image = apply_blurs(image, t.blurs, self._raw_us, sw, sh)
+        self.source_view.set_image(image)
+        self.output_view.set_image(image)
 
     def _on_duration(self, duration: int) -> None:
         self._duration_ms = max(0, duration)

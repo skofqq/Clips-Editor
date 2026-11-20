@@ -1,4 +1,4 @@
-"""Original frame with editable webcam / gameplay crop rectangles."""
+"""Original frame with editable webcam / gameplay crop rectangles and blur boxes."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from ui.editor.composition_controller import MIN_CROP_PX, CompositionController
 from ui.preview.video_canvas import VideoCanvas
 
 REGION_COLORS = {WEBCAM: QColor("#ff4d9d"), GAMEPLAY: QColor("#35d0ff")}
+BLUR_COLOR = QColor("#5fd4c4")
+MIN_BLUR_PX = 8
 REGION_LABELS = {WEBCAM: "Webcam", GAMEPLAY: "Gameplay"}
 HANDLE = 9  # handle square size, widget pixels
 GRAB = 7  # distance within which an edge/handle is grabbed
@@ -51,6 +53,8 @@ class SourceView(VideoCanvas):
 
     * Drag inside a rectangle: move it. Drag a handle: resize it.
     * Shift+drag (or drag outside every rectangle): draw the selected crop anew.
+    * Blur boxes active at the playhead are drawn in teal and win hit tests;
+      with a blur selected, a drag outside every box draws that blur anew.
     """
 
     def __init__(self, controller: CompositionController, parent: QWidget | None = None) -> None:
@@ -61,9 +65,60 @@ class SourceView(VideoCanvas):
         self._drag_name: str | None = None
         self._drag_start = QPointF()
         self._drag_rect: Rect | None = None
+        self._drag_blur: int | None = None
+        self.blurs = None  # TimelineController with the blur boxes (set_blur_controller)
         controller.changed.connect(self.update)
         controller.time_changed.connect(self.update)
         controller.selection_changed.connect(lambda _name: self.update())
+
+    def set_blur_controller(self, timeline_controller) -> None:
+        self.blurs = timeline_controller
+        timeline_controller.changed.connect(self.update)
+        timeline_controller.selection_changed.connect(self.update)
+        timeline_controller.playhead_changed.connect(lambda _us: self.update())
+
+    def _active_blurs(self) -> list:
+        """Blur boxes shown at the playhead, the selected one first."""
+        t = self.blurs.timeline if self.blurs is not None else None
+        if t is None or not t.blurs:
+            return []
+        now = self.blurs.playhead_us
+        selected = self.blurs.selected_blur()
+        active = [b for b in t.blurs if b.active(now)]
+        active.sort(key=lambda b: selected is None or b.id != selected.id)
+        return active
+
+    def blur_px(self, region) -> Rect:
+        sw, sh = self.controller.source_size
+        return region.rect_at(self.blurs.playhead_us).scaled(sw, sh)
+
+    def _blur_hit(self, point: QPointF) -> tuple[int | None, str | None]:
+        active = self._active_blurs()
+        if not active:
+            return None, None
+        selected = self.blurs.selected_blur()
+        if selected is not None and active[0].id == selected.id:
+            rect = self.source_to_widget(self.blur_px(selected))
+            for handle, pos in self._handle_points(rect).items():
+                if abs(point.x() - pos.x()) <= GRAB and abs(point.y() - pos.y()) <= GRAB:
+                    return selected.id, handle
+        for region in active:
+            if self.source_to_widget(self.blur_px(region)).contains(point):
+                return region.id, "move"
+        return None, None
+
+    def _set_blur_px(self, blur_id: int, shown: Rect) -> None:
+        """Place the blur so that it shows ``shown`` (source px) at the playhead;
+        a motion path keeps its shape."""
+        t = self.blurs.timeline
+        region = t.blur(blur_id) if t is not None else None
+        if region is None:
+            return
+        sw, sh = self.controller.source_size
+        now = region.rect_at(self.blurs.playhead_us)
+        base = region.rect
+        rect = Rect(base.x + shown.x / sw - now.x, base.y + shown.y / sh - now.y, shown.w / sw, shown.h / sh)
+        self.blurs.update_blur(blur_id, key=("blur_rect", blur_id), rect=rect)
 
     # ---------------------------------------------------------- mapping
     def _frame_rect(self) -> QRectF:
@@ -126,6 +181,21 @@ class SourceView(VideoCanvas):
         if event.button() != Qt.MouseButton.LeftButton or not self.has_image():
             return
         pos = event.position()
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        blur_id, blur_mode = (None, None) if shift else self._blur_hit(pos)
+        selected_blur = self.blurs.selected_blur() if self.blurs is not None else None
+        if blur_id is None and not shift and selected_blur is not None \
+                and selected_blur.active(self.blurs.playhead_us) and self._frame_rect().contains(pos) \
+                and self.hit_test(pos)[1] == "draw":
+            blur_id, blur_mode = selected_blur.id, "draw"
+        if blur_id is not None:
+            from ui.timeline.timeline_controller import BLUR
+
+            self.blurs.select(BLUR, blur_id)
+            self._drag_blur, self._drag_mode = blur_id, blur_mode
+            self._drag_start = pos
+            self._drag_rect = self.blur_px(self.blurs.timeline.blur(blur_id))
+            return
         name, mode = self.hit_test(pos)
         if name is None:
             return
@@ -141,7 +211,9 @@ class SourceView(VideoCanvas):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         pos = event.position()
         if self._drag_mode is None:
-            _name, mode = self.hit_test(pos)
+            _blur, mode = self._blur_hit(pos)
+            if mode is None:
+                _name, mode = self.hit_test(pos)
             self.setCursor(_CURSORS.get(mode, Qt.CursorShape.ArrowCursor))
             return
         sw, sh = self.controller.source_size
@@ -149,6 +221,18 @@ class SourceView(VideoCanvas):
         x0, y0 = self.widget_to_source(self._drag_start)
         x1, y1 = self.widget_to_source(pos)
         start = self._drag_rect
+        if self._drag_blur is not None:
+            if self._drag_mode == "move":
+                rect = Rect(start.x + x1 - x0, start.y + y1 - y0, start.w, start.h).moved_inside(bounds)
+            elif self._drag_mode == "draw":
+                clip = lambda v, hi: max(0.0, min(float(hi), v))  # noqa: E731
+                rect = Rect.from_points(clip(x0, sw), clip(y0, sh), clip(x1, sw), clip(y1, sh))
+                if rect.w < MIN_BLUR_PX or rect.h < MIN_BLUR_PX:
+                    return
+            else:
+                rect = resize_rect(start, self._drag_mode, x1 - x0, y1 - y0, bounds, MIN_BLUR_PX)
+            self._set_blur_px(self._drag_blur, rect)
+            return
         if self._drag_mode == "move":
             rect = Rect(start.x + x1 - x0, start.y + y1 - y0, start.w, start.h).moved_inside(bounds)
         elif self._drag_mode == "draw":
@@ -164,6 +248,7 @@ class SourceView(VideoCanvas):
         self._drag_mode = None
         self._drag_name = None
         self._drag_rect = None
+        self._drag_blur = None
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -194,5 +279,28 @@ class SourceView(VideoCanvas):
             if selected:
                 painter.setPen(QPen(QColor("#101014"), 1))
                 painter.setBrush(color)
+                for pos in self._handle_points(rect).values():
+                    painter.drawRect(QRectF(pos.x() - HANDLE / 2, pos.y() - HANDLE / 2, HANDLE, HANDLE))
+
+        # Blur boxes active at the playhead.
+        selected_blur = self.blurs.selected_blur() if self.blurs is not None else None
+        for region in reversed(self._active_blurs()):
+            selected = selected_blur is not None and region.id == selected_blur.id
+            rect = self.source_to_widget(self.blur_px(region))
+            painter.setPen(QPen(BLUR_COLOR, 2 if selected else 1, Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(rect)
+            label = " Blur" + (" · follows" if region.track else "") + " "
+            metrics = painter.fontMetrics()
+            tag = QRectF(rect.left(), rect.top() - metrics.height() - 2, metrics.horizontalAdvance(label),
+                         metrics.height() + 2)
+            if tag.top() < 0:
+                tag.moveTop(rect.top())
+            painter.fillRect(tag, BLUR_COLOR)
+            painter.setPen(QColor("#101014"))
+            painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, label)
+            if selected:
+                painter.setPen(QPen(QColor("#101014"), 1))
+                painter.setBrush(BLUR_COLOR)
                 for pos in self._handle_points(rect).values():
                     painter.drawRect(QRectF(pos.x() - HANDLE / 2, pos.y() - HANDLE / 2, HANDLE, HANDLE))

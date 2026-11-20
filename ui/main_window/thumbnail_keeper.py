@@ -70,6 +70,10 @@ class ThumbnailKeeper(QObject):
         src_w, src_h = self.w.composition.source_size
         return media.path, int(us), composition, src_w, src_h
 
+    def _blurs(self) -> tuple:
+        timeline = self.w.timeline.timeline
+        return timeline.blurs if timeline is not None else ()
+
     def title(self) -> str:
         title = self.w.metadata_panel.metadata().title.strip()
         if not title and self.w.preview.media is not None:
@@ -93,7 +97,8 @@ class ThumbnailKeeper(QObject):
         self._refresh_candidates(video, sw, sh)
         key = (str(video), us)
         if self._frame is not None and self._frame[0] == key:
-            self.image = make_thumbnail(self._frame[1], composition, sw, sh, self.w.project.thumbnail, title)
+            self.image = make_thumbnail(self._frame[1], composition, sw, sh, self.w.project.thumbnail, title,
+                                        self._blurs(), us)
             self.editor.set_image(self.image)
             return
         if self._task is not None and self._task_key == key:
@@ -143,13 +148,14 @@ class ThumbnailKeeper(QObject):
                  if timeline is None or timeline.segment_index_at(h.peak_us) is not None]
         times = candidate_times(self._length_us(), self._to_source, peaks)
         items = [(us, self._composition_at(us)) for us in times]
-        key = (str(video), tuple(items), sw, sh)
+        blurs = self._blurs()
+        key = (str(video), tuple(items), sw, sh, blurs)
         if key == self._candidates_key:
             return
         self._candidates_key = key
         self.editor.set_candidates([])
         self.editor.frames_hint.setText("Looking for good frames…")
-        worker = Worker(candidate_frames, self.w.ffmpeg.ffmpeg, video, items, sw, sh)
+        worker = Worker(candidate_frames, self.w.ffmpeg.ffmpeg, video, items, sw, sh, blurs=blurs)
         worker.signals.finished.connect(
             lambda frames, k=key, t=worker: (self._running.discard(t), self._candidates_ready(k, frames)))
         worker.signals.failed.connect(lambda _e, t=worker: self._running.discard(t))
@@ -187,10 +193,11 @@ class ThumbnailKeeper(QObject):
         video, us, composition, sw, sh = src
         title, ffmpeg = self.title(), self.w.ffmpeg.ffmpeg
         cached = self._frame[1] if self._frame is not None and self._frame[0] == (str(video), us) else None
+        blurs = self._blurs()
 
         def make() -> bytes:
             frame = cached if cached is not None else grab_frame(ffmpeg, video, us)
-            return jpeg_bytes(make_thumbnail(frame, composition, sw, sh, design, title))
+            return jpeg_bytes(make_thumbnail(frame, composition, sw, sh, design, title, blurs, us))
 
         return make
 

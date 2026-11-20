@@ -7,6 +7,8 @@ Everything is expressed in **source time** (integer microseconds):
 * ``mutes`` are audio ranges to silence or beep. Being in source time,
   they stay attached to the same words when the clip is trimmed, and
   transcription / censor results (Phases 4-5) map onto them directly.
+* ``blurs`` are blur / pixelate boxes over the source frame for a time
+  range (:mod:`core.editor.blur`), on their own timeline track.
 * ``gain_db`` and the fades apply to the whole output.
 * a segment may carry its own Stacked ``layout`` (a Composition) for when
   the streamer moved the webcam mid-clip; None means the project's layout.
@@ -69,6 +71,7 @@ class Timeline:
     fade_out_us: int = 0
     next_id: int = 1
     denoise: int = 0  # voice noise reduction level, 0 = off (core.audio.enhance)
+    blurs: tuple = ()  # BlurRegion, sorted by start
 
     @classmethod
     def for_source(cls, duration_us: int) -> "Timeline":
@@ -311,6 +314,54 @@ class Timeline:
             next_id += 1
         return replace(self, mutes=tuple(regions), next_id=next_id)
 
+    # -------------------------------------------------------------- blurs
+    def blur(self, blur_id: int):
+        return next((b for b in self.blurs if b.id == blur_id), None)
+
+    def _with_blurs(self, blurs) -> "Timeline":
+        return replace(self, blurs=tuple(sorted(blurs, key=lambda b: (b.start_us, b.id))))
+
+    def add_blur(self, start_us: int, end_us: int, rect=None, **options) -> "Timeline":
+        """New blur box from ``start_us`` to ``end_us``; its id is ``next_id - 1`` afterwards."""
+        from core.editor.blur import BlurRegion, default_rect
+
+        start_us, end_us = sorted((int(start_us), int(end_us)))
+        region = BlurRegion(self.next_id, start_us, end_us, rect or default_rect(), **options)
+        region = region.cleaned(self.duration_us)
+        return replace(self._with_blurs(self.blurs + (region,)), next_id=self.next_id + 1)
+
+    def update_blur(self, blur_id: int, **changes) -> "Timeline":
+        """Change fields of a blur (start_us, end_us, rect, strength, feather, mode, track)."""
+        from core.editor.blur import MIN_BLUR_US
+
+        region = self.blur(blur_id)
+        if region is None:
+            return self
+        if "start_us" in changes and "end_us" not in changes:
+            changes["start_us"] = _clamp(int(changes["start_us"]), 0, region.end_us - MIN_BLUR_US)
+        if "end_us" in changes and "start_us" not in changes:
+            changes["end_us"] = _clamp(int(changes["end_us"]), region.start_us + MIN_BLUR_US, self.duration_us)
+        updated = replace(region, **changes).cleaned(self.duration_us)
+        if updated == region:
+            return self
+        return self._with_blurs(updated if b.id == blur_id else b for b in self.blurs)
+
+    def move_blur(self, blur_id: int, start_us: int) -> "Timeline":
+        """Move a blur in time keeping its length; a tracked path moves along."""
+        region = self.blur(blur_id)
+        if region is None:
+            return self
+        start = _clamp(start_us, 0, self.duration_us - region.length_us)
+        shift = start - region.start_us
+        if not shift:
+            return self
+        track = tuple(replace(k, t_us=k.t_us + shift) for k in region.track)
+        return self.update_blur(blur_id, start_us=start, end_us=start + region.length_us, track=track)
+
+    def delete_blur(self, blur_id: int) -> "Timeline":
+        blurs = tuple(b for b in self.blurs if b.id != blur_id)
+        return self if len(blurs) == len(self.blurs) else replace(self, blurs=blurs)
+
     # -------------------------------------------------------------- audio
     def with_gain_db(self, gain_db: float) -> "Timeline":
         gain_db = round(max(MIN_GAIN_DB, min(MAX_GAIN_DB, float(gain_db))), 2)
@@ -343,6 +394,7 @@ class Timeline:
             "fade_in_us": self.fade_in_us,
             "fade_out_us": self.fade_out_us,
             **({"denoise": self.denoise} if self.denoise else {}),
+            **({"blurs": [b.to_dict() for b in self.blurs]} if self.blurs else {}),
         }
 
     @classmethod
@@ -377,11 +429,22 @@ class Timeline:
             seen.add(mute_id)
             mutes.append(MuteRegion(mute_id, start, end, mode))
         mutes.sort(key=lambda m: (m.start_us, m.id))
+        from core.editor.blur import BlurRegion
+
+        blurs = []
+        for item in data.get("blurs") or []:
+            region = BlurRegion.from_dict(item).cleaned(duration)
+            if region.id in seen or region.id < 1:
+                raise ValueError("Invalid blur.")
+            seen.add(region.id)
+            blurs.append(region)
+        blurs.sort(key=lambda b: (b.start_us, b.id))
         timeline = cls(
             duration_us=duration,
             segments=tuple(segments),
             mutes=tuple(mutes),
             next_id=max(seen, default=0) + 1,
+            blurs=tuple(blurs),
         )
         timeline = timeline.with_gain_db(float(data.get("gain_db", 0.0))).with_denoise(int(data.get("denoise", 0)))
         return timeline.with_fades(int(data.get("fade_in_us", 0)), int(data.get("fade_out_us", 0)))

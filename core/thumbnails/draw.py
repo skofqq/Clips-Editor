@@ -185,15 +185,24 @@ def save_thumbnail(image: QImage, path: Path) -> Path:
     return path
 
 
+def _blurred(source: QImage, blurs, at_us: int, src_w: int, src_h: int) -> QImage:
+    if not blurs:
+        return source
+    from core.editor.blur_image import apply_blurs
+
+    return apply_blurs(source, blurs, at_us, src_w, src_h)
+
+
 def make_thumbnail(frame_png: bytes, composition: Composition, src_w: int, src_h: int,
-                   design: ThumbnailDesign, title: str) -> QImage:
-    """Source frame (PNG data) → the finished thumbnail."""
-    source = QImage.fromData(frame_png)
+                   design: ThumbnailDesign, title: str, blurs=(), at_us: int = 0) -> QImage:
+    """Source frame (PNG data) → the finished thumbnail (with the blur boxes
+    active at ``at_us``, source time)."""
+    source = _blurred(QImage.fromData(frame_png), blurs, at_us, src_w, src_h)
     return draw_thumbnail(compose_frame(source, composition, src_w, src_h), design, title)
 
 
 def candidate_frames(ffmpeg: Path, video: Path, items, src_w: int, src_h: int,
-                     height: int = 160, cancel=None) -> list[tuple[int, QImage]]:
+                     height: int = 160, cancel=None, blurs=()) -> list[tuple[int, QImage]]:
     """Small composed frames for picking a cover: ``items`` are (source_us, composition)."""
     from core.thumbnails.frame import grab_frame
 
@@ -205,7 +214,7 @@ def candidate_frames(ffmpeg: Path, video: Path, items, src_w: int, src_h: int,
             png = grab_frame(ffmpeg, video, us)
         except Exception:  # noqa: BLE001 - a frame that cannot be read is skipped
             continue
-        frame = compose_frame(QImage.fromData(png), composition, src_w, src_h)
+        frame = compose_frame(_blurred(QImage.fromData(png), blurs, int(us), src_w, src_h), composition, src_w, src_h)
         result.append((int(us), frame.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)))
     return result
 

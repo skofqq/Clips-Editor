@@ -21,6 +21,7 @@ _ROWS = {
     "video": ("film", "Video", "Kept parts of the clip. Drag an edge to trim, S splits at the playhead."),
     "audio": ("volume", "Audio", "Waveform. Alt+wheel or the wheel here makes it taller; double-click resets."),
     "mute": ("volume_off", "Mute", "Mute and beep regions. Select a range and press M."),
+    "blur": ("blur", "Blur", "Blur boxes. Add one in the Blur panel; drag it here to move, its edges to change the time."),
     "speech": ("speech", "Speech", "Recognised words. Click a word to select it."),
 }
 
@@ -113,6 +114,8 @@ class TrackHeader(QWidget):
             label = title
             if name == "mute" and t is not None and t.mutes:
                 label = f"{title}  {len(t.mutes)}"
+            if name == "blur" and t is not None and t.blurs:
+                label = f"{title}  {len(t.blurs)}"
             p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
             if name == "audio" and view.wave_gain != 1.0 and height >= 44:
                 small = p.font()
@@ -123,7 +126,7 @@ class TrackHeader(QWidget):
                            f"Wave ×{view.wave_gain:.1f}")
                 p.setFont(font)
             # Resize grip: two short lines centred on the lower edge.
-            if name != "mute":
+            if name in ("video", "audio", "speech"):
                 p.setPen(QPen(QColor(palette.TEXT_DISABLED), 1))
                 cx, by = w / 2, top + height - 3
                 p.drawLine(QPointF(cx - 7, by - 1.5), QPointF(cx + 7, by - 1.5))

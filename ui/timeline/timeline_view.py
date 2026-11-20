@@ -1,4 +1,4 @@
-"""Timeline widget: ruler, video segments, audio waveform, mute regions.
+"""Timeline widget: ruler, video segments, audio waveform, mute regions, blur boxes.
 
 The horizontal axis is **source time**. Kept segments are highlighted and
 cut-away parts are dimmed, so the waveform, the mute regions and (later)
@@ -19,7 +19,7 @@ from core.timeline.model import BEEP, Timeline
 from ui.theme import palette
 from core.timeline.timebase import US, format_timecode, frame_to_us, us_to_frame
 from core.transcription.model import Transcript
-from ui.timeline.timeline_controller import MUTE, SEGMENT, TimelineController
+from ui.timeline.timeline_controller import BLUR, MUTE, SEGMENT, TimelineController
 
 RULER_H = 22
 TRACK_GAP = 4
@@ -27,7 +27,8 @@ TRACK_GAP = 4
 VIDEO_Y, VIDEO_H = 26, 30
 AUDIO_Y, AUDIO_H = 60, 72
 MUTE_Y, MUTE_H = 136, 24
-SPEECH_Y, SPEECH_H = 164, 22
+BLUR_Y, BLUR_H = 164, 24
+SPEECH_Y, SPEECH_H = 192, 22
 CONTENT_H = SPEECH_Y + SPEECH_H + 6
 HEIGHT_LIMITS = {"video": (20, 90), "audio": (36, 280), "speech": (22, 64)}
 EDGE_GRAB = 6  # px within which an edge is grabbed
@@ -64,8 +65,12 @@ class TrackLayout:
         return MUTE_H
 
     @property
-    def speech_y(self) -> int:
+    def blur_y(self) -> int:
         return self.mute_y + MUTE_H + TRACK_GAP
+
+    @property
+    def speech_y(self) -> int:
+        return self.blur_y + BLUR_H + TRACK_GAP
 
     @property
     def bottom(self) -> int:
@@ -81,6 +86,7 @@ class TrackLayout:
             ("video", self.video_y, self.video_h),
             ("audio", self.audio_y, self.audio_h),
             ("mute", self.mute_y, MUTE_H),
+            ("blur", self.blur_y, BLUR_H),
             ("speech", self.speech_y, self.speech_h),
         ]
 
@@ -121,6 +127,7 @@ C_WAVE = QColor(_ACCENT.text)
 C_WAVE_DIM = QColor(palette.themed("#3a3a3a"))
 C_MUTE = QColor("#ff6b7a")
 C_BEEP = QColor("#ffb34d")
+C_BLUR = QColor("#5fd4c4")  # blur boxes (teal, readable on both themes)
 C_PLAYHEAD = QColor(palette.TEXT)
 C_TEXT = QColor(palette.TEXT_TERTIARY)
 C_SPEECH = QColor(palette.themed("#2f5a3f"))
@@ -334,8 +341,8 @@ class TimelineView(QWidget):
             return None
         if c.range:
             return c.range
-        if c.selected and c.selected[0] == MUTE:
-            region = t.mute(c.selected[1])
+        if c.selected and c.selected[0] in (MUTE, BLUR):
+            region = t.mute(c.selected[1]) if c.selected[0] == MUTE else t.blur(c.selected[1])
             return (region.start_us, region.end_us) if region else None
         if c.selected and c.selected[0] == SEGMENT and 0 <= c.selected[1] < len(t.segments):
             seg = t.segments[c.selected[1]]
@@ -392,6 +399,8 @@ class TimelineView(QWidget):
             targets.update((s.start_us, s.end_us))
         for m in t.mutes:
             targets.update((m.start_us, m.end_us))
+        for b in t.blurs:
+            targets.update((b.start_us, b.end_us))
         if self.controller.range:
             targets.update(self.controller.range)
         if self._transcript is not None:
@@ -436,6 +445,18 @@ class TimelineView(QWidget):
                 if self.us_to_x(m.start_us) <= x <= self.us_to_x(m.end_us):
                     return {"area": "mute", "id": m.id}
             return {"area": "mute_track"}
+        if tr.blur_y <= y <= tr.blur_y + BLUR_H:
+            for b in t.blurs:
+                x0, x1 = self.us_to_x(b.start_us), self.us_to_x(b.end_us)
+                grab = min(EDGE_GRAB, max(2.0, (x1 - x0) / 3))
+                if abs(x - x0) <= grab:
+                    return {"area": "blur_edge", "id": b.id, "edge": "start"}
+                if abs(x - x1) <= grab:
+                    return {"area": "blur_edge", "id": b.id, "edge": "end"}
+            for b in reversed(t.blurs):
+                if self.us_to_x(b.start_us) <= x <= self.us_to_x(b.end_us):
+                    return {"area": "blur", "id": b.id}
+            return {"area": "blur_track"}
         if tr.video_y <= y <= tr.audio_y + tr.audio_h:
             for index, s in enumerate(t.segments):
                 x0, x1 = self.us_to_x(s.start_us), self.us_to_x(s.end_us)
@@ -477,6 +498,11 @@ class TimelineView(QWidget):
             self._drag["offset_us"] = us - t.mute(hit["id"]).start_us
         elif area == "mute_edge":
             self.controller.select(MUTE, hit["id"])
+        elif area == "blur":
+            self.controller.select(BLUR, hit["id"])
+            self._drag["offset_us"] = us - t.blur(hit["id"]).start_us
+        elif area == "blur_edge":
+            self.controller.select(BLUR, hit["id"])
         elif area == "segment_edge":
             self.controller.select(SEGMENT, hit["index"])
 
@@ -486,9 +512,9 @@ class TimelineView(QWidget):
             area = self.hit_test(pos)["area"]
             if area == "track_resize":
                 self.setCursor(Qt.CursorShape.SizeVerCursor)
-            elif area in ("mute_edge", "segment_edge"):
+            elif area in ("mute_edge", "segment_edge", "blur_edge"):
                 self.setCursor(Qt.CursorShape.SizeHorCursor)
-            elif area == "mute":
+            elif area in ("mute", "blur"):
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             else:
                 self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -540,6 +566,27 @@ class TimelineView(QWidget):
             if snap:
                 snapped_start = c.frame_snap(snapped_start)
             c.set_timeline(t.move_mute(hit["id"], snapped_start), key=("mute_move", hit["id"]))
+        elif area == "blur_edge":
+            region = t.blur(hit["id"])
+            if region is None:
+                return
+            us = self._snap(us, exclude={region.start_us, region.end_us}, enabled=snap)
+            us = c.frame_snap(us) if snap else us
+            kwargs = {"start_us": us} if hit["edge"] == "start" else {"end_us": us}
+            c.set_timeline(t.update_blur(hit["id"], **kwargs), key=("blur_edge", hit["id"], hit["edge"]))
+        elif area == "blur":
+            region = t.blur(hit["id"])
+            if region is None:
+                return
+            start = us - drag["offset_us"]
+            own = {region.start_us, region.end_us}
+            snapped_start = self._snap(start, exclude=own, enabled=snap)
+            if snapped_start == start:
+                snapped_end = self._snap(start + region.length_us, exclude=own, enabled=snap)
+                snapped_start = snapped_end - region.length_us
+            if snap:
+                snapped_start = c.frame_snap(snapped_start)
+            c.set_timeline(t.move_blur(hit["id"], snapped_start), key=("blur_move", hit["id"]))
         else:  # segment body, gap or mute track: select a time range
             start = drag["start_us"]
             end = self._snap(us, exclude={start}, enabled=snap)
@@ -565,7 +612,9 @@ class TimelineView(QWidget):
                     self.word_clicked.emit(start, end)
                 else:
                     self.controller.set_range(None)
-            elif area in ("segment", "gap", "mute_track", "speech_track"):
+            elif area in ("blur", "blur_edge"):
+                self.seek_requested.emit(drag["start_us"])
+            elif area in ("segment", "gap", "mute_track", "speech_track", "blur_track"):
                 self.controller.set_range(None)
                 self.seek_requested.emit(drag["start_us"])
                 if area == "segment":
@@ -618,7 +667,8 @@ class TimelineView(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(C_TRACK)
         track_w = min(w + 8.0, max(0.0, x_end))
-        for y, height in ((video_y, video_h), (audio_y, audio_h), (mute_y, mute_h)):
+        blur_y = tr.blur_y
+        for y, height in ((video_y, video_h), (audio_y, audio_h), (mute_y, mute_h), (blur_y, BLUR_H)):
             p.drawRoundedRect(QRectF(0, y, track_w, height), 6, 6)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
@@ -761,6 +811,23 @@ class TimelineView(QWidget):
             if block.width() > 34:
                 p.setPen(QColor("#101014"))
                 p.drawText(block, Qt.AlignmentFlag.AlignCenter, "BEEP" if m.mode == BEEP else "MUTE")
+
+        # Blur boxes: rounded blocks on their own track.
+        for b in t.blurs:
+            x0, x1 = self.us_to_x(b.start_us), self.us_to_x(b.end_us)
+            if x1 < 0 or x0 > w:
+                continue
+            block = QRectF(x0, blur_y + 1, max(3.0, x1 - x0), BLUR_H - 2)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            selected = c.selected == (BLUR, b.id)
+            p.setPen(QPen(C_STRONG, 2) if selected else Qt.PenStyle.NoPen)
+            p.setBrush(C_BLUR)
+            p.drawRoundedRect(block.adjusted(1, 1, -1, -1) if selected else block, 5, 5)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            if block.width() > 44:
+                p.setPen(QColor("#101014"))
+                label = ("PIXELATE" if b.mode == "pixelate" else "BLUR") + ("  ⟿" if b.track else "")
+                p.drawText(block, Qt.AlignmentFlag.AlignCenter, label)
 
         # Censor suggestions: dashed = waiting for review, solid = accepted.
         if self._censor is not None:

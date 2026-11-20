@@ -11,6 +11,7 @@ from core.timeline.timebase import snap_to_frame
 
 SEGMENT = "segment"
 MUTE = "mute"
+BLUR = "blur"
 
 
 class TimelineController(QObject):
@@ -84,6 +85,7 @@ class TimelineController(QObject):
             and (
                 (sel[0] == SEGMENT and 0 <= sel[1] < len(t.segments))
                 or (sel[0] == MUTE and t.mute(sel[1]) is not None)
+                or (sel[0] == BLUR and t.blur(sel[1]) is not None)
             )
         )
         if sel is not None and not valid:
@@ -109,6 +111,8 @@ class TimelineController(QObject):
             return False
         if self._selected and self._selected[0] == MUTE:
             return self.set_timeline(t.delete_mute(self._selected[1]))
+        if self._selected and self._selected[0] == BLUR:
+            return self.set_timeline(t.delete_blur(self._selected[1]))
         if self._range:
             done = self.set_timeline(t.delete_range(*self._range))
             if done:
@@ -168,6 +172,41 @@ class TimelineController(QObject):
         t = self._timeline
         return t is not None and self.set_timeline(t.merge_mutes())
 
+    # -------------------------------------------------------------- blurs
+    def selected_blur(self):
+        t = self._timeline
+        if t is not None and self._selected and self._selected[0] == BLUR:
+            return t.blur(self._selected[1])
+        return None
+
+    def add_blur(self, rect=None, length_us: int = 3_000_000) -> bool:
+        """New blur box over the selected range, else from the playhead for
+        ``length_us`` (to the end of the kept part it is in)."""
+        t = self._timeline
+        if t is None:
+            return False
+        if self._range:
+            start, end = self._range
+        else:
+            start = self.frame_snap(self._playhead_us)
+            index = t.segment_index_at(start)
+            limit = t.segments[index].end_us if index is not None else t.duration_us
+            end = min(limit, start + length_us)
+            if end - start < 500_000:
+                end = min(t.duration_us, start + length_us)
+            if end - start < 500_000:
+                start = max(0, end - length_us)
+        updated = t.add_blur(start, end, rect)
+        if not self.set_timeline(updated):
+            return False
+        self.set_range(None)
+        self.select(BLUR, updated.next_id - 1)
+        return True
+
+    def update_blur(self, blur_id: int, key: object = None, **changes) -> bool:
+        t = self._timeline
+        return t is not None and self.set_timeline(t.update_blur(blur_id, **changes), key=key)
+
     def set_gain_db(self, gain_db: float) -> None:
         if self._timeline is not None:
             self.set_timeline(self._timeline.with_gain_db(gain_db), key="gain")
@@ -181,4 +220,4 @@ class TimelineController(QObject):
             self.set_timeline(self._timeline.with_fades(fade_in_us, fade_out_us), key="fades")
 
 
-__all__ = ["TimelineController", "SEGMENT", "MUTE", "SILENCE", "BEEP"]
+__all__ = ["TimelineController", "SEGMENT", "MUTE", "BLUR", "SILENCE", "BEEP"]

@@ -97,6 +97,8 @@ from ui.preview.edit_playback import EditPlayback
 from ui.preview.preview_panel import PreviewPanel
 from ui.highlights.highlights_panel import HighlightsPanel
 from ui.main_window.autoframe_runner import AutoframeRunner
+from ui.main_window.blur_runner import BlurRunner
+from ui.blur.blur_panel import BlurPanel
 from ui.main_window.highlights_controller import HighlightsController
 from ui.main_window.listen_preview import ListenPreview
 from ui.main_window.pages import DATA, EDIT, PAGES, PUBLISH, RENDER, PageBar, StepPage, page_scroll
@@ -109,7 +111,7 @@ from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 10  # bump when the dock arrangement changes
+LAYOUT_VERSION = 11  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -188,6 +190,9 @@ class MainWindow(QMainWindow):
         self.autoframe = AutoframeRunner(self)  # Composition → Face → Auto-frame
         self.transcript_panel = TranscriptPanel(self.transcript, self)
         self.censor_panel = CensorPanel(self.censor, self)
+        self.blur_panel = BlurPanel(self.timeline, self)
+        self.blur_runner = BlurRunner(self)  # Blur → Follow object
+        self.preview.set_blur_controller(self.timeline)
         self.metadata_panel = MetadataPanel(self.metadata_library, self)
         self.subtitles_panel = SubtitlesPanel(self)
         self.highlights_panel = HighlightsPanel(self)
@@ -276,6 +281,8 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self.properties_dock, self.transcript_dock)
         self.tabifyDockWidget(self.transcript_dock, self.subtitles_dock)
         self.tabifyDockWidget(self.subtitles_dock, self.censor_dock)
+        self.blur_dock = self._add_dock("Blur", "dock_blur", self.blur_panel, Qt.DockWidgetArea.RightDockWidgetArea)
+        self.tabifyDockWidget(self.censor_dock, self.blur_dock)
         self.highlights_dock = self._add_dock(
             "Highlights", "dock_highlights", self.highlights_panel, Qt.DockWidgetArea.RightDockWidgetArea
         )
@@ -481,7 +488,7 @@ class MainWindow(QMainWindow):
         """The blocks (cards) the user can turn off, grouped by panel or page."""
         groups = []
         for dock in (self.properties_dock, self.subtitles_dock, self.transcript_dock, self.censor_dock,
-                     self.highlights_dock, self.media_dock):
+                     self.blur_dock, self.highlights_dock, self.media_dock):
             cards = [c for c in dock.widget().findChildren(Card) if c.title_label.text()]
             if cards:
                 groups.append((dock.windowTitle(), cards))
@@ -607,9 +614,11 @@ class MainWindow(QMainWindow):
         self.act_mute = QAction("Mute selection", self, shortcut=QKeySequence(Qt.Key.Key_M))
         self.act_mute.setToolTip("Create a Mute Region from the selected range (M)")
         self.act_merge_mutes = QAction("Merge overlapping mutes", self)
+        self.act_blur = QAction("Add blur", self, shortcut=QKeySequence(Qt.Key.Key_B))
+        self.act_blur.setToolTip("Add a blur box at the playhead or over the selected range (B)")
         self._edit_actions = (
             self.act_undo, self.act_redo, self.act_split, self.act_delete, self.act_trim,
-            self.act_restore, self.act_mute, self.act_merge_mutes,
+            self.act_restore, self.act_mute, self.act_merge_mutes, self.act_blur,
         )
         self._navigation_actions = (
             self.act_play, self.act_prev, self.act_next, self.act_back_second, self.act_forward_second,
@@ -639,12 +648,16 @@ class MainWindow(QMainWindow):
         edit.addActions([self.act_split, self.act_delete, self.act_trim, self.act_restore])
         edit.addSeparator()
         edit.addActions([self.act_mute, self.act_merge_mutes])
+        edit.addSeparator()
+        edit.addAction(self.act_blur)
         for action, glyph, short in ((self.act_split, "split", "Split"), (self.act_delete, "remove", "Delete"),
-                                     (self.act_trim, "trim", "Trim"), (self.act_mute, "volume_off", "Mute")):
+                                     (self.act_trim, "trim", "Trim"), (self.act_mute, "volume_off", "Mute"),
+                                     (self.act_blur, "blur", "Blur")):
             action.setIcon(icon(glyph))
             action.setIconText(short)
         # Undo / redo live in the main command bar only.
-        self.timeline_panel.add_actions([self.act_split, self.act_delete, self.act_trim, None, self.act_mute])
+        self.timeline_panel.add_actions([self.act_split, self.act_delete, self.act_trim, None, self.act_mute,
+                                         self.act_blur])
 
         playback = self.menuBar().addMenu("&Playback")
         playback.addActions([self.act_play, self.act_prev, self.act_next])
@@ -756,6 +769,9 @@ class MainWindow(QMainWindow):
         self.act_trim.triggered.connect(self.timeline.trim_to_range)
         self.act_restore.triggered.connect(self.timeline.restore_all)
         self.act_mute.triggered.connect(lambda: self.timeline.mute_range())
+        self.act_blur.triggered.connect(self.add_blur)
+        self.blur_panel.seek_requested.connect(lambda us: self.preview.seek(us_to_ms(us)))
+        self.blur_panel.edit_finished.connect(lambda: self.history.break_merge())
         self.act_merge_mutes.triggered.connect(self.timeline.merge_mutes)
 
         self.preview.position_changed.connect(lambda ms: self.timeline.set_playhead(ms_to_us(ms)))
@@ -1779,6 +1795,7 @@ class MainWindow(QMainWindow):
         self.act_delete.setEnabled(has and (selected is not None or rng is not None))
         self.act_trim.setEnabled(has and rng is not None)
         self.act_mute.setEnabled(has and rng is not None)
+        self.act_blur.setEnabled(has)
         self.act_restore.setEnabled(has and t.output_us < t.duration_us)
         self.act_merge_mutes.setEnabled(has and len(t.merged_mutes()) < len(t.mutes))
         media = self.preview.media
@@ -1965,6 +1982,15 @@ class MainWindow(QMainWindow):
         out = timeline.source_to_output(source_us) if timeline is not None else None
         self.preview.output_view.set_subtitle_time(out)
 
+    def add_blur(self) -> bool:
+        """Edit → Add blur (B): a new box, with the Blur panel shown."""
+        if not self.timeline.add_blur():
+            return False
+        self.blur_dock.show()
+        self.blur_dock.raise_()
+        self.statusBar().showMessage("Blur added: drag the teal box over what to hide", 5000)
+        return True
+
     def _seek_output(self, output_us: int) -> None:
         timeline = self.timeline.timeline
         if timeline is not None:
@@ -2114,6 +2140,7 @@ class MainWindow(QMainWindow):
         self.edit_playback.shutdown()
         self.listen.stop()
         self.autoframe.cancel()
+        self.blur_runner.cancel()
         if self._analytics_task is not None:
             self._analytics_task.cancel()
         self.crosspost_panel.cancel()

@@ -7,6 +7,8 @@ see is what you get:
   the output frame rate, then each Stacked Layout region is cropped,
   scaled and placed on a black canvas exactly as ``Composition.layout``
   says (the preview paints the same placements);
+* blur boxes are applied to the source frame first (source time), so they
+  stay on their object through cuts, crops and layouts;
 * audio: mute regions are applied in source time with sample accuracy
   (Silence, or a sine Beep), then the kept segments are joined, and gain
   and Fade In / Fade Out are applied in output time, like the preview.
@@ -146,6 +148,55 @@ def _zoom_filters(region, w: int, h: int, src_w: int, src_h: int, to_time: Calla
     return f"{scale},crop=w={w}:h={h}:x='{x_expr}':y='{y_expr}'"
 
 
+def _even_expr(expr: str) -> str:
+    return f"2*trunc(({expr})/2)"
+
+
+def blur_lines(blurs, src_w: int, src_h: int, source: str, out_label: str) -> list[str]:
+    """Blur / pixelate boxes over ``source`` (source time ``t``) → ``out_label``.
+
+    Each box: cut the (moving) rectangle out, blur or pixelate it, give it a
+    soft-edged alpha mask and lay it back at the same place while it is active."""
+    lines: list[str] = []
+    current = source
+    for i, b in enumerate(blurs):
+        r = b.rect
+        w = max(4, min(src_w, _even(r.w * src_w)))
+        h = max(4, min(src_h, _even(r.h * src_h)))
+        x0, y0 = r.x * src_w, r.y * src_h
+        if b.track:
+            xs = [(k.t_us / 1_000_000, x0 + k.dx * src_w) for k in b.track]
+            ys = [(k.t_us / 1_000_000, y0 + k.dy * src_h) for k in b.track]
+            x_expr, y_expr = piecewise_expression(xs, digits=1), piecewise_expression(ys, digits=1)
+        else:
+            x_expr, y_expr = f"{x0:.1f}", f"{y0:.1f}"
+        x_expr = _even_expr(f"clip({x_expr},0,{src_w - w})")
+        y_expr = _even_expr(f"clip({y_expr},0,{src_h - h})")
+        if b.mode == "pixelate":
+            block = b.block_px(src_h)
+            effect = (f"scale={max(1, w // block)}:{max(1, h // block)}:flags=area,"
+                      f"scale={w}:{h}:flags=neighbor")
+        else:
+            effect = f"gblur=sigma={b.sigma_px(src_h):.2f}:steps=2"
+        feather = b.feather_px(w, h)
+        enable = f"between(t,{_t(b.start_us)},{_t(b.end_us)})"
+        tag = f"bl{i}"
+        lines.append(f"[{current}]split[{tag}main][{tag}cut]")
+        lines.append(f"[{tag}cut]crop=w={w}:h={h}:x='{x_expr}':y='{y_expr}':exact=1,{effect},format=yuva444p[{tag}fx]")
+        if feather >= 1:
+            mask = (f"geq=lum='255*clip(min(min(X+0.5,W-X-0.5),min(Y+0.5,H-Y-0.5))/{feather:.2f},0,1)'")
+            lines.append(f"[{tag}fx]split[{tag}fa][{tag}fb]")
+            lines.append(f"[{tag}fb]format=gray,{mask}[{tag}mask]")
+            lines.append(f"[{tag}fa][{tag}mask]alphamerge[{tag}box]")
+        else:
+            lines.append(f"[{tag}fx]null[{tag}box]")
+        out = out_label if i == len(blurs) - 1 else f"{tag}out"
+        lines.append(f"[{tag}main][{tag}box]overlay=x='{x_expr}':y='{y_expr}':enable='{enable}':format=auto,"
+                     f"format=yuv420p[{out}]")
+        current = out
+    return lines
+
+
 def build_graph(
     composition: Composition,
     timeline: Timeline,
@@ -169,6 +220,11 @@ def build_graph(
 
     # ---------------------------------------------------------------- video
     head = f"[0:v:0]scale={src_w}:{src_h},setsar=1"
+    blurs = tuple(getattr(timeline, "blurs", ()) or ())
+    if blurs:
+        lines.append(f"{head}[vraw]")
+        lines += blur_lines(blurs, src_w, src_h, "vraw", "vblur")
+        head = "[vblur]null"
     if n == 1:
         lines.append(f"{head}[vsrc0]")
     else:

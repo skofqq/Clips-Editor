@@ -354,7 +354,7 @@ def test_track_resize_and_wave_gain(view, controller):
     from ui.timeline.timeline_view import HEIGHT_LIMITS, TrackLayout
 
     tracks = view.tracks
-    assert (tracks.video_y, tracks.audio_y, tracks.mute_y, tracks.speech_y) == (VIDEO_Y, AUDIO_Y, MUTE_Y, 164)
+    assert (tracks.video_y, tracks.audio_y, tracks.mute_y, tracks.speech_y) == (VIDEO_Y, AUDIO_Y, MUTE_Y, 192)
     edge = tracks.audio_y + tracks.audio_h + 1
     assert view.hit_test(QPointF(300, edge))["area"] == "track_resize"
     drag_y = QPointF(300, edge)
