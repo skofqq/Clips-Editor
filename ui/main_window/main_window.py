@@ -17,8 +17,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QTabWidget,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -34,6 +36,7 @@ from core.youtube.service import YouTubeService
 from core.editor.composition import default_composition
 from core.editor.presets import PresetStore
 from core.history import History
+from core.timeline.timebase import format_timecode
 from core.media.errors import MediaError
 from core.media.ffmpeg_locator import FFmpegPaths, tool_version
 from core.media.probe import SUPPORTED_EXTENSIONS, MediaInfo, probe_media
@@ -84,6 +87,7 @@ from ui.highlights.highlights_panel import HighlightsPanel
 from ui.main_window.autoframe_runner import AutoframeRunner
 from ui.main_window.highlights_controller import HighlightsController
 from ui.main_window.listen_preview import ListenPreview
+from ui.main_window.pages import DATA, EDIT, PAGES, PUBLISH, RENDER, PageBar, StepPage, page_scroll
 from ui.main_window.session_keeper import AUTOSAVE_CHOICES, SessionKeeper
 from ui.timeline.timeline_controller import TimelineController
 from ui.transcript.transcript_controller import TranscriptController
@@ -91,7 +95,7 @@ from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 9  # bump when the dock arrangement changes
+LAYOUT_VERSION = 10  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -140,7 +144,14 @@ class MainWindow(QMainWindow):
         self.session = SessionKeeper(self)  # autosave + undo history kept between runs
 
         self.preview = PreviewPanel(self.composition, self)
-        self.setCentralWidget(self.preview)
+        # Steps as pages (Resolve-style): the editor, then data, render and publish pages.
+        self.page_stack = QStackedWidget(self)
+        self.page_stack.addWidget(self.preview)
+        self.setCentralWidget(self.page_stack)
+        self._page = EDIT
+        self._edit_layout: QByteArray | None = None  # the Edit page's docks while another page is shown
+        self._rendered: tuple | None = None  # (path, edit state) of the last export
+        self._published: str = ""  # path of the last uploaded export
 
         self.media_panel = MediaPanel(self)
         self.properties_panel = PropertiesPanel(self)  # media info
@@ -155,11 +166,23 @@ class MainWindow(QMainWindow):
         self.subtitles_panel = SubtitlesPanel(self)
         self.highlights_panel = HighlightsPanel(self)
         self.captions: list = []  # current captions (output time)
-        metadata_scroll = QScrollArea(self)
-        metadata_scroll.setWidgetResizable(True)
-        metadata_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        metadata_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        metadata_scroll.setWidget(self.metadata_panel)
+        data = QWidget(self)
+        data_column = QVBoxLayout(data)
+        data_column.setContentsMargins(0, 0, 0, 0)
+        data_heading = QLabel("Data", data)
+        data_heading.setObjectName("pageTitle")
+        data_column.addWidget(data_heading)
+        data_column.addWidget(self.metadata_panel)
+        self.data_page = page_scroll(data, self)
+        self.page_stack.addWidget(self.data_page)
+        self.render_page = StepPage(
+            "Render", "Export the edited Short to a video file: format, quality, loudness, subtitles.",
+            "Export video…", "export", self)
+        self.page_stack.addWidget(page_scroll(self.render_page, self, 720))
+        self.publish_page = StepPage(
+            "Publish", "Upload the exported video to YouTube with the title, description and tags from Data.",
+            "Upload to YouTube…", "youtube", self)
+        self.page_stack.addWidget(page_scroll(self.publish_page, self, 720))
 
         composition_scroll = QScrollArea(self)
         composition_scroll.setWidgetResizable(True)
@@ -194,11 +217,7 @@ class MainWindow(QMainWindow):
         )
         self.tabifyDockWidget(self.properties_dock, self.transcript_dock)
         self.tabifyDockWidget(self.transcript_dock, self.subtitles_dock)
-        self.metadata_dock = self._add_dock(
-            "Metadata", "dock_metadata", metadata_scroll, Qt.DockWidgetArea.RightDockWidgetArea
-        )
         self.tabifyDockWidget(self.subtitles_dock, self.censor_dock)
-        self.tabifyDockWidget(self.censor_dock, self.metadata_dock)
         self.highlights_dock = self._add_dock(
             "Highlights", "dock_highlights", self.highlights_panel, Qt.DockWidgetArea.RightDockWidgetArea
         )
@@ -212,12 +231,14 @@ class MainWindow(QMainWindow):
         self._create_actions()
         self._create_menus()
         self._create_toolbar()
+        self._create_page_bar()
         self._connect()
         self.highlights = HighlightsController(self)  # Highlights dock ↔ timeline markers
         self._restore_layout()
         self._update_dock_titles()
         self.timeline_panel.view.restore_view_state(self.config.timeline_view)
         self._update_title()
+        self._refresh_steps()
 
         if self.ffmpeg is not None:
             self._start_encoder_detection()
@@ -278,6 +299,97 @@ class MainWindow(QMainWindow):
         self.act_save.setIconText("Save")
         self.act_export.setIconText("Export")
         self.act_upload.setIconText("Upload")
+
+    def _create_page_bar(self) -> None:
+        """Bottom bar with the work steps, like the page buttons in DaVinci Resolve."""
+        bar = QToolBar("Steps", self)
+        bar.setObjectName("pageToolbar")
+        bar.setMovable(False)
+        bar.setFloatable(False)
+        bar.toggleViewAction().setEnabled(False)
+        bar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+        self.page_bar = PageBar(bar)
+        self.page_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        bar.addWidget(self.page_bar)
+        self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, bar)
+        self.page_toolbar = bar
+        self.page_bar.page_requested.connect(self.set_page)
+        self.page_actions: list[QAction] = []
+        for index, (title, _icon, _hint) in enumerate(PAGES):
+            action = QAction(f"{index + 1}  {title}", self)
+            action.setShortcut(QKeySequence(f"Ctrl+{index + 1}"))
+            action.triggered.connect(lambda _=False, i=index: self.set_page(i))
+            self.addAction(action)
+            self.page_actions.append(action)
+        self.render_page.action_requested.connect(self.act_export.trigger)
+        self.publish_page.action_requested.connect(self._publish_latest)
+
+    # --------------------------------------------------------------- pages
+    @property
+    def page(self) -> int:
+        return self._page
+
+    def set_page(self, index: int) -> None:
+        """Show a step. The Edit page keeps its docks; other pages fill the window."""
+        index = max(0, min(index, len(PAGES) - 1))
+        if index != self._page:
+            if self._page == EDIT:
+                if self.preview.is_playing:
+                    self.preview.pause()
+                self._edit_layout = self.saveState(LAYOUT_VERSION)
+                for dock in self._docks():
+                    dock.hide()
+            self.page_stack.setCurrentIndex(index)
+            if index == EDIT and self._edit_layout is not None:
+                self.restoreState(self._edit_layout, LAYOUT_VERSION)
+                self._edit_layout = None
+                self._update_dock_titles()
+            self._page = index
+        self.page_bar.set_current(index)
+        self._refresh_steps()
+
+    def _edit_layout_state(self) -> QByteArray:
+        return self._edit_layout if self._edit_layout is not None else self.saveState(LAYOUT_VERSION)
+
+    def _render_state(self) -> tuple:
+        return (*self._edit_state(), self.project.subtitles)
+
+    def _rendered_path(self) -> Path | None:
+        if self._rendered is None:
+            return None
+        path, state = self._rendered
+        return path if state == self._render_state() and Path(path).is_file() else None
+
+    def _refresh_steps(self) -> None:
+        """Done marks on the step bar and the texts of the Render and Publish pages."""
+        if not hasattr(self, "page_bar"):
+            return
+        timeline = self.timeline.timeline
+        metadata = self.project.metadata
+        rendered = self._rendered_path()
+        self.page_bar.set_done(EDIT, timeline is not None)
+        self.page_bar.set_done(DATA, bool(metadata.title.strip()))
+        self.page_bar.set_done(RENDER, rendered is not None)
+        self.page_bar.set_done(PUBLISH, rendered is not None and self._published == str(rendered))
+        if timeline is None:
+            self.render_page.set_status("Import a clip and edit it on the Edit page first.", False)
+        else:
+            text = f"Length of the Short: <b>{format_timecode(timeline.output_us)}</b>"
+            if rendered is not None:
+                text += f"<br>Exported: {rendered}"
+            elif self._rendered is not None:
+                text += "<br>The edit changed since the last export: export again."
+            self.render_page.set_status(text, self.ffmpeg is not None and self.preview.media is not None)
+        title = metadata.title.strip() or "<i>no title yet: fill it in on the Data page</i>"
+        if rendered is None:
+            self.publish_page.set_status(f"Title: {title}<br>Export the video on the Render page first, "
+                                         "or pick a file to upload.", True)
+        else:
+            done = "<br><b>Uploaded.</b>" if self._published == str(rendered) else ""
+            self.publish_page.set_status(f"Title: {title}<br>File: {rendered}{done}", True)
+
+    def _publish_latest(self) -> None:
+        self.upload_to_youtube(self._rendered_path())
 
     def _add_dock(self, title: str, name: str, widget: QWidget, area: Qt.DockWidgetArea) -> QDockWidget:
         dock = QDockWidget(title, self)
@@ -406,7 +518,7 @@ class MainWindow(QMainWindow):
 
         view = self.menuBar().addMenu("&View")
         for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.highlights_dock, self.subtitles_dock,
-                     self.censor_dock, self.metadata_dock, self.timeline_dock):
+                     self.censor_dock, self.timeline_dock):
             view.addAction(dock.toggleViewAction())
         view.addSeparator()
         zoom = view.addMenu("Timeline Zoom")
@@ -461,6 +573,7 @@ class MainWindow(QMainWindow):
         self._rebuild_recent_menu()
 
     def _connect(self) -> None:
+        self.timeline.changed.connect(self._refresh_steps)
         self.act_import.triggered.connect(self.choose_files)
         self.act_twitch.triggered.connect(lambda: self.import_from_twitch())
         self.act_export.triggered.connect(self.export_video)
@@ -987,7 +1100,9 @@ class MainWindow(QMainWindow):
         self.config.export_settings = dialog.settings().to_dict()
         self.config.export_dir = str(dialog.output_path().parent)
         if dialog.result_path is not None:
+            self._rendered = (Path(dialog.result_path), self._render_state())
             self.statusBar().showMessage(f"Exported {dialog.result_path}", 8000)
+        self._refresh_steps()
 
     # -------------------------------------------------------------- youtube
     def manage_youtube_accounts(self) -> None:
@@ -1021,7 +1136,9 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self.config.youtube_defaults = dialog.defaults()
         if dialog.result is not None:
+            self._published = str(Path(path))
             self.statusBar().showMessage(f"Uploaded to YouTube: {dialog.result.url}", 10000)
+        self._refresh_steps()
 
     # --------------------------------------------------------------- twitch
     def import_from_twitch(self, url: str = "", ydl_factory=None) -> bool:
@@ -1422,6 +1539,7 @@ class MainWindow(QMainWindow):
     def _set_dirty(self, dirty: bool) -> None:
         self._dirty = dirty
         self._update_title()
+        self._refresh_steps()
 
     def _update_title(self) -> None:
         name = self.project_path.name if self.project_path else "Untitled"
@@ -1533,8 +1651,9 @@ class MainWindow(QMainWindow):
         self.session.apply_settings()
 
     def reset_layout(self) -> None:
+        self.set_page(EDIT)
         for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.highlights_dock, self.subtitles_dock,
-                     self.censor_dock, self.metadata_dock, self.timeline_dock):
+                     self.censor_dock, self.timeline_dock):
             dock.setFloating(False)
             dock.show()
         self.restoreState(self._default_state, LAYOUT_VERSION)
@@ -1590,7 +1709,7 @@ class MainWindow(QMainWindow):
         if player.playbackState() == player.PlaybackState.PlayingState:
             player.pause()
         self.config.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
-        self.config.window_state = bytes(self.saveState(LAYOUT_VERSION).toBase64()).decode()
+        self.config.window_state = bytes(self._edit_layout_state().toBase64()).decode()
         self.config.timeline_view = self.timeline_panel.view.view_state()
         self.pool.waitForDone(3000)
         self.session.finish()

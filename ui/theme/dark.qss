@@ -385,3 +385,16 @@ QToolButton#cardToggle {
 }
 QToolButton#cardToggle:hover { color: @ACCENT_TEXT@; }
 QToolButton#cardToggle:checked { background: transparent; color: #ffffff; }
+
+/* ---- step pages (Resolve-style page bar at the bottom) ---- */
+QToolBar#pageToolbar { background: #1c1c1c; border: none; border-top: 1px solid #2f2f2f; padding: 0; spacing: 0; }
+QWidget#pageBar { background: #1c1c1c; }
+QToolButton#pageButton {
+    background: transparent; color: #c5c5c5; border: 1px solid transparent; border-radius: 6px;
+    padding: 6px 14px; font-weight: 600;
+}
+QToolButton#pageButton:hover { background: #2a2a2a; color: #ffffff; }
+QToolButton#pageButton:checked { background: #2d2d2d; color: @ACCENT@; border-color: #363636; }
+QLabel#pageArrow { color: #5d5d5d; font-size: 16px; padding: 0 2px; }
+QLabel#pageTitle { font-size: 24px; font-weight: 600; padding: 4px 0 8px 0; }
+QScrollArea#pageScroll, QScrollArea#pageScroll > QWidget > QWidget { background: #202020; }

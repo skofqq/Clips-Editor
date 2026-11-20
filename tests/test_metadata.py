@@ -383,7 +383,7 @@ def test_window_stores_metadata_and_prefills_upload(qapp, data_dir, ffmpeg_paths
 
     w = MainWindow(config=AppConfig.load(data_dir), ffmpeg=ffmpeg_paths)
     assert (data_dir / "metadata_library.sqlite").exists()
-    assert w.metadata_dock.windowTitle() == "Metadata"
+    assert w.metadata_panel.window() is w  # on the Data page
     panel = w.metadata_panel
     panel.streamer_chips.add_text("sasavot")
     panel.clip_title_edit.setText("Танк")

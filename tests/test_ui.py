@@ -43,8 +43,48 @@ def test_main_window_has_panels(qapp, data_dir):
     window = _window(data_dir, None)
     titles = {d.windowTitle() for d in (window.media_dock, window.properties_dock, window.timeline_dock)}
     assert titles == {"Media", "Properties", "Timeline"}
-    assert window.centralWidget() is window.preview
+    assert window.page_stack.currentWidget() is window.preview
     window.close()
+
+
+def test_step_pages(qapp, data_dir, ffmpeg_paths, sample_clips):
+    from ui.main_window.pages import DATA, EDIT, PUBLISH, RENDER
+
+    w = _window(data_dir, ffmpeg_paths)
+    w.show()
+    qapp.processEvents()
+    assert w.page == EDIT and w.media_dock.isVisible() and not w.page_bar.is_done(EDIT)
+    assert not w.render_page.action_button.isEnabled()
+    w.import_files([str(sample_clips["mp4"])])
+    assert _wait(lambda: w.timeline.timeline is not None)
+    assert w.page_bar.is_done(EDIT) and not w.page_bar.is_done(DATA)
+
+    w.page_bar.next_button.click()  # Edit → Data
+    assert w.page == DATA and w.page_stack.currentWidget() is w.data_page
+    assert not w.media_dock.isVisible() and not w.timeline_dock.isVisible()
+    w.metadata_panel.title_edit.setText("Мой шорт")
+    assert w.page_bar.is_done(DATA)
+    w.page_actions[RENDER].trigger()  # Ctrl+3
+    assert w.page == RENDER and w.render_page.action_button.isEnabled()
+    assert "Length of the Short" in w.render_page.status.text()
+
+    # An export marks Render done until the edit changes.
+    out = data_dir / "short.mp4"
+    out.write_bytes(b"x")
+    w._rendered = (out, w._render_state())
+    w._refresh_steps()
+    assert w.page_bar.is_done(RENDER) and "short.mp4" in w.publish_page.status.text()
+    w._published = str(out)
+    w.set_page(PUBLISH)
+    assert w.page_bar.is_done(PUBLISH) and w.page_bar.next_button.isHidden()
+
+    w.set_page(EDIT)
+    assert w.media_dock.isVisible() and w.timeline_dock.isVisible()  # the editor's docks come back
+    w.timeline.set_playhead(1_000_000)
+    w.act_split.trigger()
+    assert not w.page_bar.is_done(RENDER)  # edited after the export
+    w._set_dirty(False)
+    w.close()
 
 
 def test_import_in_background_and_show_properties(qapp, data_dir, ffmpeg_paths, sample_clips):
@@ -201,7 +241,7 @@ def test_tabbed_docks_have_no_duplicate_title(qapp, data_dir):
     w.show()
     qapp.processEvents()
     # Properties, Transcript, Censor and Metadata share one tab group: the tab names them.
-    for dock in (w.properties_dock, w.transcript_dock, w.censor_dock, w.metadata_dock):
+    for dock in (w.properties_dock, w.transcript_dock, w.censor_dock, w.subtitles_dock):
         assert dock.titleBarWidget() is not None and dock.titleBarWidget().height() == 0
     assert w.media_dock.titleBarWidget() is None  # a lone dock keeps its title
     w.censor_dock.setFloating(True)
