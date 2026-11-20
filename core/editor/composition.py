@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any
 
 from core.editor.geometry import UNIT, Rect, clamp
-from core.editor.track import TrackKey, clean_track, offset_at
+from core.editor.track import TrackKey, clean_track, offset_at, zoom_at
 
 WEBCAM = "webcam"
 GAMEPLAY = "gameplay"
@@ -58,6 +58,11 @@ class Region:
             return self
         dx, dy = offset_at(self.track, t_us)
         moved = Rect(self.crop.x + dx, self.crop.y + dy, self.crop.w, self.crop.h).moved_inside(UNIT)
+        zoom = zoom_at(self.track, t_us)
+        if zoom != 1.0:  # closer: a smaller crop around the same centre
+            cx, cy = moved.x + moved.w / 2, moved.y + moved.h / 2
+            w, h = moved.w / zoom, moved.h / zoom
+            moved = Rect(cx - w / 2, cy - h / 2, w, h)
         return replace(self, crop=moved, track=())
 
     def cleaned(self) -> "Region":

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -29,6 +30,7 @@ from core.editor.composition import (
 )
 from core.editor.geometry import Rect
 from core.editor.presets import PresetStore
+from core.editor.track import MAX_ZOOM, MIN_ZOOM, has_zoom
 from ui.editor.composition_controller import MIN_CROP_PX, CompositionController
 from ui.widgets.card import Card
 
@@ -175,10 +177,39 @@ class CompositionPanel(QWidget):
         self.face_card.add_row(self.face_status)
         self._autoframe_busy = False
 
+        # ---- zoom & pan: keyframes on the selected region (mostly gameplay)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.zoom_slider.setRange(round(MIN_ZOOM * 100), round(MAX_ZOOM * 100))
+        self.zoom_slider.setSingleStep(5)
+        self.zoom_slider.setPageStep(25)
+        self.zoom_slider.setToolTip("Zoom at the playhead (adds or changes a key)")
+        self.zoom_label = QLabel("100 %", self)
+        self.zoom_label.setMinimumWidth(48)
+        zoom_row = QHBoxLayout()
+        zoom_row.addWidget(QLabel("Zoom", self))
+        zoom_row.addWidget(self.zoom_slider, 1)
+        zoom_row.addWidget(self.zoom_label)
+        self.add_key_button = QPushButton("Add key", self)
+        self.add_key_button.setToolTip("Keyframe at the playhead holding the zoom and position of this moment")
+        self.remove_key_button = QPushButton("Remove key", self)
+        self.clear_keys_button = QPushButton("Clear", self)
+        self.clear_keys_button.setToolTip("Remove all keys of this region")
+        key_row = QHBoxLayout()
+        for button in (self.add_key_button, self.remove_key_button, self.clear_keys_button):
+            key_row.addWidget(button)
+        self.zoom_status = QLabel(self)
+        self.zoom_status.setObjectName("muted")
+        self.zoom_status.setWordWrap(True)
+        self.zoom_card = Card("Zoom & pan", "Move the playhead, add a key, then drag the crop to pan "
+                              "or use the slider to zoom. Motion is smooth between keys.", self)
+        self.zoom_card.body.addLayout(zoom_row)
+        self.zoom_card.body.addLayout(key_row)
+        self.zoom_card.add_row(self.zoom_status)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-        for card in (self.part_card, preset_card, region_card, self.face_card, placement_card, layout_card):
+        for card in (self.part_card, preset_card, region_card, self.face_card, self.zoom_card, placement_card, layout_card):
             layout.addWidget(card)
         layout.addStretch(1)
 
@@ -198,6 +229,10 @@ class CompositionPanel(QWidget):
         )
         self.autoframe_button.clicked.connect(self._on_autoframe)
         self.clear_track_button.clicked.connect(lambda: self.controller.clear_track(WEBCAM))
+        self.zoom_slider.valueChanged.connect(self._on_zoom_edited)
+        self.add_key_button.clicked.connect(lambda: self.controller.add_key(self.controller.selected))
+        self.remove_key_button.clicked.connect(lambda: self.controller.remove_key(self.controller.selected))
+        self.clear_keys_button.clicked.connect(lambda: self.controller.clear_track(self.controller.selected))
         self.divider_spin.valueChanged.connect(self._on_divider_edited)
         self.swap_button.clicked.connect(self.controller.swap)
         self.reset_button.clicked.connect(self.controller.reset)
@@ -286,13 +321,15 @@ class CompositionPanel(QWidget):
             self.offset_x.setValue(region.offset_x * 100)
             self.offset_y.setValue(region.offset_y * 100)
 
-            tracked = bool(comp.webcam.track)
+            tracked = bool(comp.webcam.track) and not has_zoom(comp.webcam.track)
             self.clear_track_button.setVisible(tracked)
             if not self._autoframe_busy:
                 self.face_status.setText(
                     f"Following the face ({len(comp.webcam.track)} keys). Drag the crop to adjust; "
                     "the motion is kept." if tracked else "")
             self.face_card.setVisible(comp.webcam.enabled)
+
+            self._refresh_zoom(name, region.enabled)
 
             self.divider_spin.setValue(comp.divider * 100)
             both = len(comp.slots()) == 2
@@ -308,7 +345,30 @@ class CompositionPanel(QWidget):
         finally:
             self._updating = False
 
+    def _refresh_zoom(self, name: str, enabled: bool) -> None:
+        keys = self.controller.keys(name)
+        zoom = self.controller.zoom(name)
+        self.zoom_slider.setValue(round(zoom * 100))
+        self.zoom_label.setText(f"{round(zoom * 100)} %")
+        at_key = self.controller.key_at(name) is not None
+        self.remove_key_button.setEnabled(enabled and at_key)
+        self.clear_keys_button.setEnabled(enabled and bool(keys))
+        self.add_key_button.setEnabled(enabled and not at_key)
+        self.zoom_slider.setEnabled(enabled)
+        if not keys:
+            text = "No keys yet."
+        elif at_key:
+            text = f"{len(keys)} key(s). Editing the key at the playhead."
+        else:
+            text = f"{len(keys)} key(s). Add a key here to change this moment."
+        self.zoom_status.setText(text)
+
     # ----------------------------------------------------- widgets → model
+    def _on_zoom_edited(self, value: int) -> None:
+        self.zoom_label.setText(f"{value} %")
+        if not self._updating:
+            self.controller.add_key(self.controller.selected, zoom=value / 100)
+
     def _on_enabled(self, checked: bool) -> None:
         if not self._updating:
             self.controller.update_region(self.controller.selected, enabled=checked)

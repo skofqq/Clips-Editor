@@ -19,7 +19,7 @@ from typing import Callable
 from fractions import Fraction
 
 from core.editor.composition import Composition
-from core.editor.track import piecewise_expression
+from core.editor.track import has_zoom, piecewise_expression
 from core.media.probe import MediaInfo
 from core.audio.enhance import denoise_filter, measure_filter
 from core.render.settings import AUDIO_SAMPLE_RATE, SOURCE_FPS, RenderSettings
@@ -103,7 +103,9 @@ def _place(lines: list[str], source: str, composition: Composition, src_w: int, 
         dw, dh = _even(p.dst.w), _even(p.dst.h)
         dx, dy = int(round(p.dst.x)), int(round(p.dst.y))
         region = composition.region(p.name)
-        if region.track and to_time is not None:
+        if region.track and to_time is not None and has_zoom(region.track):
+            crop = _zoom_filters(region, w, h, src_w, src_h, to_time)
+        elif region.track and to_time is not None:
             x_expr, y_expr = _track_expressions(region, x, y, w, h, src_w, src_h, to_time)
             crop = f"crop=w={w}:h={h}:x='{x_expr}':y='{y_expr}'"
         else:
@@ -125,6 +127,23 @@ def _track_expressions(region, x: int, y: int, w: int, h: int, src_w: int, src_h
     x_expr = f"clip({piecewise_expression(xs)},0,{max(0, src_w - w)})"
     y_expr = f"clip({piecewise_expression(ys)},0,{max(0, src_h - h)})"
     return x_expr, y_expr
+
+
+def _zoom_filters(region, w: int, h: int, src_w: int, src_h: int, to_time: Callable[[int], float]) -> str:
+    """Zoom keyframes: scale the frame by the zoom of the moment, then cut a fixed
+    w×h window around the moving centre (FFmpeg's crop cannot change its size)."""
+    zs, cxs, cys = [], [], []
+    for key in region.track:
+        shown = region.at(key.t_us).crop
+        t = to_time(key.t_us)
+        zs.append((t, key.z))
+        cxs.append((t, shown.x + shown.w / 2))
+        cys.append((t, shown.y + shown.h / 2))
+    z = piecewise_expression(zs, digits=4)
+    scale = (f"scale=w='trunc({src_w}*{z}/2)*2':h='trunc({src_h}*{z}/2)*2':eval=frame:flags=bicubic")
+    x_expr = f"clip({piecewise_expression(cxs, digits=5)}*in_w-{w}/2,0,in_w-{w})"
+    y_expr = f"clip({piecewise_expression(cys, digits=5)}*in_h-{h}/2,0,in_h-{h})"
+    return f"{scale},crop=w={w}:h={h}:x='{x_expr}':y='{y_expr}'"
 
 
 def build_graph(
