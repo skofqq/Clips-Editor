@@ -150,6 +150,10 @@ class YouTubeClient:
                 raise YouTubeError(f"Cannot reach YouTube: {exc}") from exc
         raise YouTubeAuthError("YouTube sign-in expired. Reconnect the account.", 401)
 
+    def get_json(self, url: str) -> dict:
+        """GET any Google API URL with this channel's token."""
+        return self._call("GET", url)
+
     def my_channels(self) -> list[Channel]:
         payload = self._call("GET", f"{API_URL}/channels?part=snippet&mine=true&maxResults=50")
         channels = []

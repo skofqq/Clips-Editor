@@ -81,6 +81,7 @@ from ui.twitch.import_dialog import TwitchImportDialog
 from core.twitch.autofill import autofill
 from core.twitch.clip import parse_clip_url
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
+from ui.youtube.analytics_panel import AnalyticsPanel
 from ui.youtube.upload_dialog import UploadDialog, _upload
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
@@ -208,7 +209,12 @@ class MainWindow(QMainWindow):
             "Publish", "Upload the exported video to YouTube with the title, description and tags from Data.",
             "Choose another file…", "folder", self)
         self.publish_page.action_button.setObjectName("")
-        self.page_stack.addWidget(page_scroll(self.publish_page, self, 820))
+        self.analytics_panel = AnalyticsPanel(self.publish_page)
+        self.publish_page.footer.addWidget(self.analytics_panel)
+        self.analytics_panel.refresh_requested.connect(self.refresh_analytics)
+        self._analytics_task: CancellableTask | None = None
+        self._analytics_loaded = ""  # channel whose numbers are shown
+        self.page_stack.addWidget(page_scroll(self.publish_page, self, 960))
 
         composition_scroll = QScrollArea(self)
         composition_scroll.setWidgetResizable(True)
@@ -371,6 +377,7 @@ class MainWindow(QMainWindow):
             self.page_stack.setCurrentIndex(index)
             if index == PUBLISH:
                 self._sync_publish_page()
+                self._sync_analytics()
             if index == DATA:
                 self._page = DATA
                 self.thumbnails.refresh()
@@ -1237,6 +1244,7 @@ class MainWindow(QMainWindow):
             privacy=result.privacy,
             publish_at=result.publish_at,
         ))
+        self._analytics_loaded = ""
         if job.tag == self._render_state():
             self._published = str(job.output)
         self.statusBar().showMessage(f"Uploaded to YouTube: {result.url}", 10000)
@@ -1324,10 +1332,48 @@ class MainWindow(QMainWindow):
         if self.upload_widget is not None:
             self.config.youtube_defaults = self.upload_widget.defaults()
 
+    # ------------------------------------------------------------ analytics
+    def _sync_analytics(self) -> None:
+        """Show the active channel; load its numbers the first time the page opens."""
+        channel = self.youtube.active
+        connected = channel is not None and self.youtube.has_token(channel.id)
+        self.analytics_panel.set_channel(channel.title if connected else "")
+        if connected and self._analytics_loaded != channel.id and self._analytics_task is None:
+            self.refresh_analytics()
+
+    def refresh_analytics(self) -> None:
+        from core.youtube.analytics import collect
+
+        channel = self.youtube.active
+        if channel is None or not self.youtube.has_token(channel.id) or self._analytics_task is not None:
+            return
+        app_ids = [r.video_id for r in self.upload_history.records() if r.channel_id == channel.id and r.video_id]
+        task = CancellableTask(collect, self.youtube.client_for(channel.id), app_ids)
+        task.signals.progress.connect(lambda _f, message: self.analytics_panel.set_busy(True, message))
+        task.signals.finished.connect(lambda result, cid=channel.id: self._analytics_done(cid, result))
+        task.signals.failed.connect(self._analytics_failed)
+        task.signals.cancelled.connect(lambda: self._analytics_failed(None))
+        self._analytics_task = task
+        self._analytics_loaded = channel.id
+        self.analytics_panel.set_busy(True, "Loading…")
+        QThreadPool.globalInstance().start(task)
+
+    def _analytics_done(self, channel_id: str, result) -> None:
+        self._analytics_task = None
+        stats, note = result
+        self.analytics_panel.set_stats(stats, note)
+
+    def _analytics_failed(self, error) -> None:
+        self._analytics_task = None
+        self._analytics_loaded = ""
+        message = str(error) if error is not None else "Cancelled."
+        self.analytics_panel.set_error(f"Could not load the analytics: {message}")
+
     def _upload_finished(self, form, result) -> None:
         self._save_upload_defaults()
         self._published = str(form.file)
         self.statusBar().showMessage(f"Uploaded to YouTube: {result.url}", 10000)
+        self._analytics_loaded = ""  # the new video shows on the next visit
         self._refresh_steps()
 
     # --------------------------------------------------------------- twitch
@@ -1941,6 +1987,8 @@ class MainWindow(QMainWindow):
         self.edit_playback.shutdown()
         self.listen.stop()
         self.autoframe.cancel()
+        if self._analytics_task is not None:
+            self._analytics_task.cancel()
         player = self.preview.player
         # stop() on a paused player can block inside Qt's FFmpeg backend when
         # there is no audio device; the window is closing, so pausing is enough.

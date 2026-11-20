@@ -34,7 +34,9 @@ REQUIRED_SCOPES = (
 )
 # Optional: adding captions to an uploaded video (captions.insert) needs it.
 CAPTIONS_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
-SCOPES = REQUIRED_SCOPES + (CAPTIONS_SCOPE,)
+# Optional: watch time and retention of the channel's videos (YouTube Analytics API).
+ANALYTICS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly"
+SCOPES = REQUIRED_SCOPES + (CAPTIONS_SCOPE, ANALYTICS_SCOPE)
 SIGN_IN_TIMEOUT_S = 300
 
 
