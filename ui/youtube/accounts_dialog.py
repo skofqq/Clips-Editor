@@ -107,7 +107,7 @@ class YouTubeAccountsDialog(QDialog):
         layout.addWidget(note)
         layout.addLayout(bottom)
 
-        self.client_button.clicked.connect(self.load_client)
+        self.client_button.clicked.connect(lambda: self.load_client())  # clicked passes checked=False
         self.guide_button.clicked.connect(self._open_guide)
         self.connect_button.clicked.connect(self.connect_account)
         self.reconnect_button.clicked.connect(self.connect_account)
@@ -182,7 +182,7 @@ class YouTubeAccountsDialog(QDialog):
 
     # ------------------------------------------------------------ actions
     def load_client(self, path: str | None = None) -> bool:
-        if path is None:
+        if not isinstance(path, (str, Path)) or not str(path):
             path, _ = QFileDialog.getOpenFileName(self, "OAuth client file", "", "JSON (*.json)")
             if not path:
                 return False

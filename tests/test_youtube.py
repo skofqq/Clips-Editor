@@ -426,6 +426,12 @@ def test_accounts_dialog_connects_and_disconnects(qapp, google, data_dir, tmp_pa
     dialog.guide_dialog.close()
     client_file = tmp_path / "client_secret_x.json"
     client_file.write_text(json.dumps({"installed": CLIENT.to_dict()}), encoding="utf-8")
+    # The Load button opens a file picker (clicked used to pass False as the path and fail silently).
+    picked = []
+    monkeypatch.setattr(dlg_mod.QFileDialog, "getOpenFileName",
+                        lambda *a, **k: picked.append(1) or (str(client_file), ""))
+    dialog.client_button.click()
+    assert picked and service.client is not None
     assert dialog.load_client(str(client_file))
     assert dialog.connect_button.isEnabled()
 
