@@ -149,3 +149,96 @@ def test_window_queues_the_current_edit(qapp, data_dir, ffmpeg_paths, sample_cli
     assert w.page_bar.is_done(RENDER)  # the queued render was of the current edit
     w._set_dirty(False)
     w.close()
+
+
+def test_render_queue_uploads_after_render(qapp, tmp_path, ffmpeg_paths):
+    from core.youtube.api import UploadResult
+    from ui.export.render_queue import UPLOAD_FAILED, UPLOADED, QueuePanel, RenderJob, RenderQueue, UploadPlan
+
+    _fake_render.gate = None
+    calls = []
+
+    def uploader(job, progress=None, cancel=None):
+        calls.append(job.output.name)
+        progress(0.5, "half")
+        if job.output.name == "bad.mp4":
+            raise RuntimeError("quota")
+        return UploadResult("vid" + job.output.stem, "private", "", "uploaded", thumbnail="not verified")
+
+    queue = RenderQueue(ffmpeg_paths, runner=_fake_render, uploader=uploader)
+    panel = QueuePanel(queue)
+    plan = lambda: UploadPlan("UC1", "Chan", object())  # noqa: E731
+    good = RenderJob(None, None, None, None, tmp_path / "good.mp4", upload=plan())
+    bad = RenderJob(None, None, None, None, tmp_path / "bad.mp4", upload=plan())
+    plain = RenderJob(None, None, None, None, tmp_path / "plain.mp4")
+    for job in (good, bad, plain):
+        queue.add(job)
+    assert "→ YouTube" in panel.list.item(0).text()
+    rendered, uploaded = [], []
+    queue.job_finished.connect(rendered.append)
+    queue.job_uploaded.connect(uploaded.append)
+    queue.start()
+    assert _wait(lambda: not queue.running and not queue.busy)
+    assert calls == ["good.mp4", "bad.mp4"]  # in order, the plain job is not uploaded
+    assert rendered == [good, bad, plain] and uploaded == [good]
+    assert good.status == UPLOADED and "youtube.com/shorts/vidgood" in good.message and "verified" in good.message
+    assert bad.status == UPLOAD_FAILED and "quota" in bad.message and bad.output.is_file()
+    panel.list.setCurrentRow(0)
+    assert panel.open_button.isVisibleTo(panel) and not panel.upload_button.isEnabled()
+    panel.list.setCurrentRow(1)
+    assert panel.upload_button.isEnabled()  # retry through the Publish page
+
+
+def test_window_queues_render_with_upload(qapp, data_dir, ffmpeg_paths, sample_clips, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from core.youtube.api import Channel, UploadResult
+    from ui.export import render_queue
+    from ui.main_window import main_window as mw
+    from ui.main_window.pages import PUBLISH
+
+    _fake_render.gate = None
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a[2]))
+    w = _window(data_dir, ffmpeg_paths)
+    w.render_queue.runner = _fake_render
+    w.import_files([str(sample_clips["mp4"])])
+    assert _wait(lambda: w.timeline.timeline is not None)
+    w.act_export.trigger()
+    form = w.export_widget
+    form.folder_edit.setText(str(tmp_path))
+    form.upload_check.setChecked(True)
+    form.add_to_queue()
+    assert not w.render_queue.jobs and "Connect a YouTube channel" in warnings[-1]
+
+    channel = Channel("UC1", "Skof Clips")
+    monkeypatch.setattr(type(w.youtube), "active", property(lambda self: channel))
+    monkeypatch.setattr(w.youtube, "has_token", lambda cid: True)
+    form.add_to_queue()
+    assert not w.render_queue.jobs and "title is empty" in warnings[-1].lower()
+
+    w.metadata_panel.title_edit.setText("ОХОТА | #sasavot on #Twitch")
+    w.config.youtube_defaults = {**w.config.youtube_defaults, "privacy": "unlisted", "category": "20"}
+    form.add_to_queue()
+    job = w.render_queue.jobs[0]
+    assert job.upload.metadata.title == "ОХОТА | #sasavot on #Twitch"
+    assert job.upload.metadata.privacy == "unlisted" and job.upload.metadata.category_id == "20"
+    assert job.upload.thumbnail is not None  # the Data page's cover goes with it
+
+    sent = []
+
+    def fake_upload(client, path, metadata, progress=None, cancel=None, **kw):
+        sent.append((path, metadata.title, kw["thumbnail"]()[:2]))
+        return UploadResult("vid9", "unlisted", "", "uploaded", thumbnail="set")
+
+    monkeypatch.setattr(mw, "_upload", fake_upload)
+    w.queue_panel.start_button.click()
+    assert _wait(lambda: job.status == render_queue.UPLOADED)
+    assert sent[0][1] == "ОХОТА | #sasavot on #Twitch" and sent[0][2] == b"\xff\xd8"
+    assert w.upload_history.records()[0].video_id == "vid9"
+    assert w.page_bar.is_done(PUBLISH)
+    from app.config import AppConfig
+
+    assert AppConfig.load(data_dir).youtube_defaults.get("queue_upload") is True
+    w._set_dirty(False)
+    w.close()

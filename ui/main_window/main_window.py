@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSize, QThreadPool, Qt, Signal
@@ -32,7 +33,8 @@ from core.censor.review import detect
 from core.render.encoders import detect_encoders
 from core.render.settings import RenderSettings
 from core.metadata.library import Library
-from core.youtube.history import UploadHistory
+from core.youtube.history import UploadHistory, UploadRecord
+from core.youtube.metadata import DEFAULT_CATEGORY, PRIVATE, VideoMetadata
 from core.youtube.service import YouTubeService
 from core.editor.composition import default_composition
 from core.editor.presets import PresetStore
@@ -69,7 +71,7 @@ from ui.censor.censor_panel import CensorPanel
 from ui.censor.dictionary_dialog import DictionaryDialog
 from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
-from ui.export.render_queue import QueuePanel, RenderQueue
+from ui.export.render_queue import QueuePanel, RenderQueue, UploadPlan
 from ui.metadata.library_dialog import LibraryDialog
 from ui.metadata.metadata_panel import MetadataPanel
 from ui.metadata.youtube_preview import YouTubePreview
@@ -79,7 +81,7 @@ from ui.twitch.import_dialog import TwitchImportDialog
 from core.twitch.autofill import autofill
 from core.twitch.clip import parse_clip_url
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
-from ui.youtube.upload_dialog import UploadDialog
+from ui.youtube.upload_dialog import UploadDialog, _upload
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
 from ui.panels.properties_panel import PropertiesPanel
@@ -195,10 +197,11 @@ class MainWindow(QMainWindow):
             "Render", "Export the edited Short to a video file: format, quality, loudness, subtitles.",
             "", "export", self)
         self.render_page.action_button.hide()  # the form below has the Render button
-        self.render_queue = RenderQueue(ffmpeg, self)
+        self.render_queue = RenderQueue(ffmpeg, self, uploader=_queued_upload)
         self.queue_panel = QueuePanel(self.render_queue, self.render_page)
         self.render_page.footer.addWidget(self.queue_panel)
         self.render_queue.job_finished.connect(self._queued_render_done)
+        self.render_queue.job_uploaded.connect(self._queued_upload_done)
         self.queue_panel.upload_requested.connect(self.upload_to_youtube)
         self.page_stack.addWidget(page_scroll(self.render_page, self, 820))
         self.publish_page = StepPage(
@@ -1144,6 +1147,9 @@ class MainWindow(QMainWindow):
                                 upload=self.upload_to_youtube, captions=self.captions, subtitle_style=style)
             form.embed()
             form.queue_button.show()
+            form.upload_check.show()
+            form.upload_check.setChecked(bool(self.config.youtube_defaults.get("queue_upload", False)))
+            form.upload_check.toggled.connect(self._remember_queue_upload)
             form.queued.connect(self._queue_render)
             form.rendered.connect(self._export_finished)
             form.folder_edit.editingFinished.connect(self._save_export_settings)
@@ -1161,10 +1167,80 @@ class MainWindow(QMainWindow):
             if folder and Path(folder).is_dir():
                 self._remember_folder("export_dir", Path(folder))
 
+    def _remember_queue_upload(self, on: bool) -> None:
+        self.config.youtube_defaults = {**self.config.youtube_defaults, "queue_upload": bool(on)}
+        try:
+            self.config.save()
+        except OSError:
+            pass
+
     def _queue_render(self, job) -> None:
+        form = self.export_widget
+        if form is not None and form.upload_check.isChecked():
+            plan = self._upload_plan()
+            if plan is None:
+                return  # told why; nothing queued
+            job.upload = plan
         job.tag = self._render_state()
         self._save_export_settings()
         self.render_queue.add(job)
+
+    def _upload_plan(self) -> UploadPlan | None:
+        """Everything a queued upload needs, taken now: the Data page's text and
+        thumbnail, the active channel, the last Publish page choices."""
+        channel = self.youtube.active
+        if channel is None or not self.youtube.has_token(channel.id):
+            QMessageBox.warning(self, "Upload from the queue",
+                                "Connect a YouTube channel first: Publish page → Accounts…")
+            return None
+        defaults = self.config.youtube_defaults
+        meta = self.project.metadata
+        category = defaults.get("category") or (
+            meta.generated.category_id if meta.generated is not None and meta.generated.category_id
+            else DEFAULT_CATEGORY)
+        video = VideoMetadata(
+            title=meta.title.strip(),
+            description=meta.description,
+            tags=tuple(meta.tags),
+            category_id=str(category),
+            privacy=str(defaults.get("privacy") or PRIVATE),
+            language=str(defaults.get("language") or ""),
+        )
+        problems = video.problems()
+        if problems:
+            QMessageBox.warning(self, "Upload from the queue",
+                                "Fill in the Data page first:\n\n" + "\n".join(problems))
+            return None
+        srt = ""
+        if self.captions and defaults.get("captions", True):
+            from core.subtitles.export import to_srt
+
+            srt = to_srt(self.captions)
+        return UploadPlan(
+            channel.id, channel.title, video,
+            captions_srt=srt,
+            captions_language=getattr(self.transcript.transcript, "language", "") or "",
+            thumbnail=self.thumbnails.job() if defaults.get("thumbnail", True) else None,
+            client=self.youtube.client_for(channel.id),
+        )
+
+    def _queued_upload_done(self, job) -> None:
+        plan, result = job.upload, job.upload.result
+        self.upload_history.add(UploadRecord(
+            uploaded_at=datetime.now().isoformat(timespec="seconds"),
+            file=str(job.output),
+            video_id=result.video_id,
+            url=result.url,
+            title=plan.metadata.title,
+            channel_id=plan.channel_id,
+            channel_title=plan.channel_title,
+            privacy=result.privacy,
+            publish_at=result.publish_at,
+        ))
+        if job.tag == self._render_state():
+            self._published = str(job.output)
+        self.statusBar().showMessage(f"Uploaded to YouTube: {result.url}", 10000)
+        self._refresh_steps()
 
     def _queued_render_done(self, job) -> None:
         if job.tag == self._render_state():  # still the current edit
@@ -1896,3 +1972,11 @@ class MainWindow(QMainWindow):
                 f"ffprobe: {self.ffmpeg.ffprobe}\n{tool_version(self.ffmpeg.ffprobe)}"
             )
         QMessageBox.information(self, "FFmpeg", text)
+
+
+def _queued_upload(job, progress=None, cancel=None):
+    """Upload a rendered queue job (runs off the GUI thread)."""
+    plan = job.upload
+    return _upload(plan.client, Path(job.output), plan.metadata, progress, cancel,
+                   captions_srt=plan.captions_srt, captions_language=plan.captions_language,
+                   thumbnail=plan.thumbnail)

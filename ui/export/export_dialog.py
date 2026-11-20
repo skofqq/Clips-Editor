@@ -189,6 +189,11 @@ class ExportDialog(QDialog):
         self.queue_button = QPushButton("Add to queue", self)
         self.queue_button.setToolTip("Render later, one after another, while you edit the next clip")
         self.queue_button.hide()  # shown where a queue exists (the Render page)
+        self.upload_check = QCheckBox("Upload to YouTube when rendered", self)
+        self.upload_check.setToolTip(
+            "For queued jobs: publish right after rendering with the Data page's title, description, tags and "
+            "thumbnail, on the active channel, with the last visibility and category from the Publish page")
+        self.upload_check.hide()
 
         # ------------------------------------------------------ layout
         video_card = Card("Video", parent=self, label_width=96)
@@ -242,6 +247,7 @@ class ExportDialog(QDialog):
         buttons.addWidget(self.upload_button)
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.upload_check)
         buttons.addWidget(self.queue_button)
         buttons.addWidget(self.render_button)
         buttons.addWidget(self.close_button)
