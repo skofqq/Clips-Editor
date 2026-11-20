@@ -415,7 +415,15 @@ def test_accounts_dialog_connects_and_disconnects(qapp, google, data_dir, tmp_pa
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     service = YouTubeService(AppConfig.load(data_dir), MemoryStore())
     dialog = dlg_mod.YouTubeAccountsDialog(service)
-    assert not dialog.connect_button.isEnabled() and "Not set" in dialog.client_label.text()
+    # Connect is clickable before the client is loaded: it asks for the file instead of doing nothing.
+    assert dialog.connect_button.isEnabled() and "Not set" in dialog.client_label.text()
+    asked = []
+    monkeypatch.setattr(dialog, "_ask_for_client", lambda: asked.append(1) or False)
+    dialog.connect_button.click()
+    assert asked and dialog._task is None
+    dialog._open_guide()  # the guide opens inside the app
+    assert "YouTube" in dialog.guide_dialog.findChild(dlg_mod.QTextBrowser).toPlainText()
+    dialog.guide_dialog.close()
     client_file = tmp_path / "client_secret_x.json"
     client_file.write_text(json.dumps({"installed": CLIENT.to_dict()}), encoding="utf-8")
     assert dialog.load_client(str(client_file))

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -154,7 +155,7 @@ class YouTubeAccountsDialog(QDialog):
         selected = self.selected_id() is not None
         has_client = self.service.client is not None
         self.client_button.setEnabled(not busy)
-        self.connect_button.setEnabled(not busy and has_client)
+        self.connect_button.setEnabled(not busy)  # without a client it asks for the file first
         self.reconnect_button.setEnabled(not busy and has_client and selected)
         for b in (self.disconnect_button, self.active_button, self.open_button):
             b.setEnabled(not busy and selected)
@@ -200,6 +201,8 @@ class YouTubeAccountsDialog(QDialog):
 
     def connect_account(self) -> None:
         if self._task is not None:
+            return
+        if self.service.client is None and not self._ask_for_client():
             return
         task = CancellableTask(_authorize, self.service)
         task.signals.finished.connect(self._connected)
@@ -270,8 +273,46 @@ class YouTubeAccountsDialog(QDialog):
         if channel is not None:
             QDesktopServices.openUrl(QUrl(channel.url))
 
+    def _ask_for_client(self) -> bool:
+        """Connect was pressed before the OAuth client file was loaded."""
+        box = QMessageBox(self)
+        box.setWindowTitle("YouTube")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("First load your OAuth client file (client_secret_….json).")
+        box.setInformativeText(
+            "Google requires your own API client for uploads. Create it once in Google Cloud Console "
+            "(type 'Desktop app'), download the JSON and load it here. 'How to get it' shows the steps."
+        )
+        load = box.addButton("Load client_secret.json…", QMessageBox.ButtonRole.AcceptRole)
+        guide = box.addButton("How to get it", QMessageBox.ButtonRole.HelpRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is guide:
+            self._open_guide()
+            return False
+        return box.clickedButton() is load and self.load_client()
+
     def _open_guide(self) -> None:
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(project_root()) / SETUP_GUIDE)))
+        """Show the setup guide inside the app (a .md file may have no program to open it on Windows)."""
+        path = Path(project_root()) / SETUP_GUIDE
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            QMessageBox.warning(self, "YouTube", f"The guide was not found: {path}")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("How to connect YouTube")
+        dialog.resize(720, 640)
+        view = QTextBrowser(dialog)
+        view.setOpenExternalLinks(True)
+        view.setMarkdown(text)
+        close = QPushButton("Close", dialog)
+        close.clicked.connect(dialog.accept)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(view, 1)
+        layout.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        self.guide_dialog = dialog
+        dialog.show()
 
     def reject(self) -> None:
         if self._task is not None:
