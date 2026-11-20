@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -68,8 +69,10 @@ from ui.censor.censor_panel import CensorPanel
 from ui.censor.dictionary_dialog import DictionaryDialog
 from ui.editor.composition_controller import CompositionController
 from ui.export.export_dialog import ExportDialog, default_output_path
+from ui.export.render_queue import QueuePanel, RenderQueue
 from ui.metadata.library_dialog import LibraryDialog
 from ui.metadata.metadata_panel import MetadataPanel
+from ui.metadata.youtube_preview import YouTubePreview
 from ui.subtitles.subtitles_panel import SubtitlesPanel
 from ui.theme import icon, palette, windows
 from ui.twitch.import_dialog import TwitchImportDialog
@@ -175,13 +178,23 @@ class MainWindow(QMainWindow):
         data_heading = QLabel("Data", data)
         data_heading.setObjectName("pageTitle")
         data_column.addWidget(data_heading)
-        data_column.addWidget(self.metadata_panel)
-        self.data_page = page_scroll(data, self)
+        data_row = QHBoxLayout()
+        data_row.setSpacing(20)
+        data_row.addWidget(self.metadata_panel, 1)
+        self.youtube_preview = YouTubePreview(data)
+        data_row.addWidget(self.youtube_preview, 0, Qt.AlignmentFlag.AlignTop)
+        data_column.addLayout(data_row)
+        self.data_page = page_scroll(data, self, 1240)
         self.page_stack.addWidget(self.data_page)
         self.render_page = StepPage(
             "Render", "Export the edited Short to a video file: format, quality, loudness, subtitles.",
             "", "export", self)
         self.render_page.action_button.hide()  # the form below has the Render button
+        self.render_queue = RenderQueue(ffmpeg, self)
+        self.queue_panel = QueuePanel(self.render_queue, self.render_page)
+        self.render_page.footer.addWidget(self.queue_panel)
+        self.render_queue.job_finished.connect(self._queued_render_done)
+        self.queue_panel.upload_requested.connect(self.upload_to_youtube)
         self.page_stack.addWidget(page_scroll(self.render_page, self, 820))
         self.publish_page = StepPage(
             "Publish", "Upload the exported video to YouTube with the title, description and tags from Data.",
@@ -350,6 +363,9 @@ class MainWindow(QMainWindow):
             self.page_stack.setCurrentIndex(index)
             if index == PUBLISH:
                 self._sync_publish_page()
+            if index == DATA:
+                self._page = DATA
+                self._update_youtube_preview()
             if index == EDIT and self._edit_layout is not None:
                 self.restoreState(self._edit_layout, LAYOUT_VERSION)
                 self._edit_layout = None
@@ -708,7 +724,7 @@ class MainWindow(QMainWindow):
             self, "Import Video", self.config.last_import_dir, _VIDEO_FILTER
         )
         if files:
-            self.config.last_import_dir = str(Path(files[0]).parent)
+            self._remember_folder("last_import_dir", Path(files[0]).parent)
             self.import_files(files)
 
     def import_files(self, files: list[str]) -> None:
@@ -1121,7 +1137,11 @@ class MainWindow(QMainWindow):
             form = ExportDialog(media, composition, timeline, self.ffmpeg, settings, output, self.encoders, None,
                                 upload=self.upload_to_youtube, captions=self.captions, subtitle_style=style)
             form.embed()
+            form.queue_button.show()
+            form.queued.connect(self._queue_render)
             form.rendered.connect(self._export_finished)
+            form.folder_edit.editingFinished.connect(self._save_export_settings)
+            form.browse_button.clicked.connect(self._save_export_settings)
             self.render_page.set_content(form)
             self.export_widget = self._export_dialog = form
         else:
@@ -1132,8 +1152,19 @@ class MainWindow(QMainWindow):
         if form is not None:
             self.config.export_settings = form.settings().to_dict()
             folder = form.folder_edit.text().strip()
-            if folder:
-                self.config.export_dir = folder
+            if folder and Path(folder).is_dir():
+                self._remember_folder("export_dir", Path(folder))
+
+    def _queue_render(self, job) -> None:
+        job.tag = self._render_state()
+        self._save_export_settings()
+        self.render_queue.add(job)
+
+    def _queued_render_done(self, job) -> None:
+        if job.tag == self._render_state():  # still the current edit
+            self._rendered = (Path(job.output), job.tag)
+        self.statusBar().showMessage(f"Rendered {job.output}", 8000)
+        self._refresh_steps()
 
     def _export_finished(self, path) -> None:
         self._save_export_settings()
@@ -1261,6 +1292,17 @@ class MainWindow(QMainWindow):
         if metadata != self.project.metadata:
             self.project.metadata = metadata
             self._set_dirty(True)
+        self._update_youtube_preview()
+
+    def _update_youtube_preview(self) -> None:
+        if self._page != DATA:
+            return  # updated when the Data page is shown
+        meta = self.metadata_panel.metadata()
+        channel = self.youtube.active
+        media = self.preview.media
+        frame = self.media_panel.thumbnail(media.path) if media is not None else None
+        self.youtube_preview.set_metadata(meta.title, meta.description, meta.tags,
+                                          channel.title if channel else "", frame)
 
     # -------------------------------------------------------- transcription
     def start_transcription(self, options) -> None:
@@ -1506,11 +1548,27 @@ class MainWindow(QMainWindow):
         self._apply_project_composition()
         self._set_dirty(False)
 
+    def _project_folder(self) -> str:
+        """Where Open/Save Project start: the last project folder, else the last import folder."""
+        for folder in (self.config.project_dir, self.config.last_import_dir):
+            if folder and Path(folder).is_dir():
+                return folder
+        return ""
+
+    def _remember_folder(self, key: str, folder: Path) -> None:
+        """Keep a last-used folder and write the settings at once (not only on exit)."""
+        if str(folder) and getattr(self.config, key) != str(folder):
+            setattr(self.config, key, str(folder))
+            try:
+                self.config.save()
+            except OSError:
+                pass
+
     def choose_project(self) -> None:
         if not self._confirm_discard():
             return
         file, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", "", f"Project (*{PROJECT_EXTENSION})"
+            self, "Open Project", self._project_folder(), f"Project (*{PROJECT_EXTENSION})"
         )
         if file:
             self.open_project(Path(file))
@@ -1521,6 +1579,7 @@ class MainWindow(QMainWindow):
         except (OSError, ProjectFormatError) as exc:
             QMessageBox.warning(self, "Cannot open project", f"{path.name}\n\n{exc}")
             return
+        self._remember_folder("project_dir", Path(path).parent)
         self.session.load_for(path)
         self._load_project(project, path)
         self._set_dirty(False)
@@ -1581,12 +1640,12 @@ class MainWindow(QMainWindow):
         return True
 
     def save_as(self) -> bool:
-        file, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", f"{self.project.name}{PROJECT_EXTENSION}", f"Project (*{PROJECT_EXTENSION})"
-        )
+        start = Path(self._project_folder()) / f"{self.project.name}{PROJECT_EXTENSION}"
+        file, _ = QFileDialog.getSaveFileName(self, "Save Project", str(start), f"Project (*{PROJECT_EXTENSION})")
         if not file:
             return False
         self.project_path = Path(file)
+        self._remember_folder("project_dir", self.project_path.parent)
         self.project.name = self.project_path.stem
         return self.save()
 
@@ -1771,7 +1830,8 @@ class MainWindow(QMainWindow):
             self.import_files(videos)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        running = [name for name, form in (("rendering", self.export_widget), ("uploading", self.upload_widget))
+        running = [name for name, form in (("rendering", self.export_widget), ("uploading", self.upload_widget),
+                                           ("rendering the queue", self.render_queue))
                    if form is not None and form.busy]
         if running:
             answer = QMessageBox.question(self, APP_NAME, f"Still {' and '.join(running)}. Stop and quit?")
@@ -1781,7 +1841,8 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             event.ignore()
             return
-        for form, stop in ((self.export_widget, "cancel_render"), (self.upload_widget, "cancel_upload")):
+        for form, stop in ((self.export_widget, "cancel_render"), (self.upload_widget, "cancel_upload"),
+                           (self.render_queue, "stop")):
             if form is not None and form.busy:
                 getattr(form, stop)()
         self._save_export_settings()

@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.9"
+APP_VERSION = "0.9.10"
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ class AppConfig:
 
     ffmpeg_dir: str = ""  # optional folder that contains ffmpeg/ffprobe
     last_import_dir: str = ""
+    project_dir: str = ""  # last folder a project was opened from or saved to
     recent_files: list[str] = field(default_factory=list)
     window_geometry: str = ""  # base64 of QMainWindow.saveGeometry()
     window_state: str = ""  # base64 of QMainWindow.saveState()
@@ -113,7 +114,7 @@ class AppConfig:
         if not isinstance(raw, dict):
             return config
         for key in (
-            "ffmpeg_dir", "last_import_dir", "window_geometry", "window_state",
+            "ffmpeg_dir", "last_import_dir", "project_dir", "window_geometry", "window_state",
             "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
             "youtube_active", "transcribe_vad", "transcribe_custom_model", "transcribe_rules", "twitch_folder",
         ):

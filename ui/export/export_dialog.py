@@ -79,6 +79,7 @@ class ExportDialog(QDialog):
     (:meth:`embed`) or, for scripts and tests, as a dialog."""
 
     rendered = Signal(object)  # Path of a finished export
+    queued = Signal(object)  # RenderJob to add to the render queue
 
     def __init__(
         self,
@@ -185,6 +186,9 @@ class ExportDialog(QDialog):
         self.open_button = QPushButton("Show in folder", self)
         self.close_button = QPushButton("Close", self)
         self.upload_button = QPushButton("Upload to YouTube…", self)
+        self.queue_button = QPushButton("Add to queue", self)
+        self.queue_button.setToolTip("Render later, one after another, while you edit the next clip")
+        self.queue_button.hide()  # shown where a queue exists (the Render page)
 
         # ------------------------------------------------------ layout
         video_card = Card("Video", parent=self, label_width=96)
@@ -238,6 +242,7 @@ class ExportDialog(QDialog):
         buttons.addWidget(self.upload_button)
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.queue_button)
         buttons.addWidget(self.render_button)
         buttons.addWidget(self.close_button)
 
@@ -267,6 +272,7 @@ class ExportDialog(QDialog):
         self.open_button.clicked.connect(self._show_in_folder)
         self.close_button.clicked.connect(self.reject)
         self.upload_button.clicked.connect(self._upload)
+        self.queue_button.clicked.connect(self.add_to_queue)
 
         self.set_settings(settings)
         self._set_busy(False)
@@ -472,28 +478,46 @@ class ExportDialog(QDialog):
         self.close_button.setEnabled(not busy)
         self.progress.setVisible(busy)
 
-    def start_render(self) -> None:
-        if self._task is not None:
-            return
+    def _checked_output(self) -> Path | None:
+        """The output path after the usual checks (asks before replacing a file); None to stop."""
         if not self.folder_edit.text().strip():
             QMessageBox.warning(self, "Export Video", "Choose the folder to save the video in.")
-            return
+            return None
         if not self.file_name():
             QMessageBox.warning(self, "Export Video", "Type a file name.")
-            return
+            return None
         output = self.output_path()
         try:
             output.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             QMessageBox.warning(self, "Export Video", f"Cannot use this folder: {exc}")
-            return
+            return None
         if output.resolve() == Path(self.source.path).resolve():
             QMessageBox.warning(self, "Export Video", "Choose a different file: this is the source video.")
-            return
+            return None
         if output.exists():
             answer = QMessageBox.question(self, "Export Video", f"{output.name} already exists. Replace it?")
             if answer != QMessageBox.StandardButton.Yes:
-                return
+                return None
+        return output
+
+    def add_to_queue(self) -> None:
+        from ui.export.render_queue import RenderJob
+
+        output = self._checked_output()
+        if output is None:
+            return
+        job = RenderJob(self.source, self.composition, self.timeline, self.settings(), output,
+                        self.encoders, self._subtitle_args())
+        self.queued.emit(job)
+        self.status_label.setText(f"Added to the queue: {output.name}")
+
+    def start_render(self) -> None:
+        if self._task is not None:
+            return
+        output = self._checked_output()
+        if output is None:
+            return
         settings = self.settings()
         task = CancellableTask(
             render, self.source, self.composition, self.timeline, settings, output,

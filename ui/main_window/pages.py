@@ -149,6 +149,9 @@ class StepPage(QWidget):
         self.slot = QVBoxLayout()  # the page's own form (export settings, upload form)
         self.slot.setContentsMargins(0, 0, 0, 0)
         column.addLayout(self.slot)
+        self.footer = QVBoxLayout()  # more sections under the form (the render queue)
+        self.footer.setContentsMargins(0, 0, 0, 0)
+        column.addLayout(self.footer)
         column.addStretch(1)
         self.content: QWidget | None = None
         self.action_button.clicked.connect(self.action_requested)
