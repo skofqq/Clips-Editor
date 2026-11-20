@@ -10,12 +10,61 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen
+import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 
-from core.subtitles.model import POSITION_DIVIDER, Caption, SubtitleStyle, speaker_text_color, wrap_lines
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QTransform
+
+from core.subtitles.emoji import emoji_for
+from core.subtitles.model import (
+    ANIM_NONE,
+    ANIM_POP,
+    ANIM_WORD,
+    POSITION_DIVIDER,
+    Caption,
+    SubtitleStyle,
+    speaker_text_color,
+    wrap_lines,
+)
 
 REFERENCE_H = 1920  # style sizes are given for a 1080×1920 canvas
+POP_US = 180_000  # length of the pop-in and word-jump animations
+FRAME_US = 40_000  # export draws animations at 25 images per second
+WORD_SCALE = 1.12  # the spoken word stays this much bigger in the "word" animation
+PNG_QUALITY = 80  # Qt's PNG "quality" is the compression level: 80 is fast and still small
+EMOJI_FONTS = ["Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji"]
+
+
+def _ease_out_back(t: float) -> float:
+    """0 → 1 with a small overshoot, the usual "pop"."""
+    t = min(1.0, max(0.0, t))
+    c1 = 1.70158
+    return 1 + (c1 + 1) * (t - 1) ** 3 + c1 * (t - 1) ** 2
+
+
+def caption_scale(style: SubtitleStyle, caption: Caption, now_us: int | None) -> float:
+    """Size of the whole caption: grows from 70 % to 100 % when it appears."""
+    if style.animation == ANIM_NONE or now_us is None:
+        return 1.0
+    t = (now_us - caption.start_us) / POP_US
+    return 1.0 if t >= 1 else 0.7 + 0.3 * _ease_out_back(t)
+
+
+def word_scale(style: SubtitleStyle, caption: Caption, index: int, now_us: int | None) -> float:
+    """Size of the spoken word: jumps up, then stays a little bigger while it is spoken."""
+    if style.animation != ANIM_WORD or now_us is None:
+        return 1.0
+    t = (now_us - caption.words[index].start_us) / POP_US
+    if t >= 1:
+        return WORD_SCALE
+    return 1.0 + (WORD_SCALE - 1.0) * _ease_out_back(t) + 0.1 * math.sin(math.pi * max(0.0, t))
+
+
+def _readable_on(color: QColor) -> QColor:
+    light = 0.299 * color.redF() + 0.587 * color.greenF() + 0.114 * color.blueF()
+    return QColor("#111111") if light > 0.62 else QColor("#ffffff")
 
 
 def _color(value: str, fallback: str = "#ffffff") -> QColor:
@@ -62,6 +111,9 @@ def draw_caption(painter: QPainter, canvas: QRectF, caption: Caption | None, sty
     space = metrics.horizontalAdvance(" ")
     line_h = metrics.height() * 1.02
     current = caption.word_at(now_us) if (style.karaoke and now_us is not None) else None
+    if current is None and style.animation == ANIM_WORD and now_us is not None:
+        current = caption.word_at(now_us)  # the jump shows the spoken word even without a colour
+    pop = caption_scale(style, caption, now_us)
 
     total_h = line_h * len(lines)
     top = centre_y(style, canvas, divider) - total_h / 2
@@ -72,6 +124,11 @@ def draw_caption(painter: QPainter, canvas: QRectF, caption: Caption | None, sty
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+    centre = QPointF(canvas.center().x(), top + total_h / 2)
+    if pop != 1.0:  # the whole caption grows around its centre
+        painter.translate(centre)
+        painter.scale(pop, pop)
+        painter.translate(-centre)
     placed: list[tuple[int, QPainterPath]] = []
     boxes: list[QRectF] = []
     for row, line in enumerate(lines):
@@ -82,6 +139,11 @@ def draw_caption(painter: QPainter, canvas: QRectF, caption: Caption | None, sty
         for i in line:
             path = QPainterPath()
             path.addText(QPointF(x, baseline), font, words[i])
+            if i == current:
+                grow = word_scale(style, caption, i, now_us)
+                if grow != 1.0:
+                    c = QPointF(x + metrics.horizontalAdvance(words[i]) / 2, top + row * line_h + line_h / 2)
+                    path = QTransform().translate(c.x(), c.y()).scale(grow, grow).translate(-c.x(), -c.y()).map(path)
             placed.append((i, path))
             x += metrics.horizontalAdvance(words[i]) + space
 
@@ -91,6 +153,13 @@ def draw_caption(painter: QPainter, canvas: QRectF, caption: Caption | None, sty
         painter.setBrush(_color(style.box_color, "#000000"))
         for rect in boxes:
             painter.drawRoundedRect(rect.adjusted(-pad, -pad * 0.3, pad, pad * 0.3), pad * 0.6, pad * 0.6)
+    word_box = style.highlight_box and current is not None
+    if word_box:  # the spoken word on a rounded box of the highlight colour
+        rect = dict(placed)[current].boundingRect()
+        pad = 0.18 * metrics.height()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(_color(style.highlight, style.color))
+        painter.drawRoundedRect(rect.adjusted(-pad, -pad * 0.7, pad, pad * 0.7), pad, pad)
     if style.shadow:
         offset = max(1.0, 4 * scale)
         shadow = QColor(0, 0, 0, 110)
@@ -105,29 +174,67 @@ def draw_caption(painter: QPainter, canvas: QRectF, caption: Caption | None, sty
     if outline > 0:
         pen = QPen(_color(style.outline, "#000000"), outline * 2, Qt.PenStyle.SolidLine,
                    Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-        for _i, path in placed:
-            painter.strokePath(path, pen)
+        for i, path in placed:
+            if not (word_box and i == current):  # no outline on the box
+                painter.strokePath(path, pen)
     painter.setPen(Qt.PenStyle.NoPen)
     for i, path in placed:
         speaker = caption.words[i].speaker
         own = text_color if speaker <= 0 or not style.speaker_colors else _color(speaker_text_color(style, speaker))
-        painter.setBrush(highlight if i == current else own)
+        if i == current and word_box:
+            painter.setBrush(_readable_on(highlight))
+        elif i == current and style.karaoke:
+            painter.setBrush(highlight)
+        else:
+            painter.setBrush(own)
         painter.drawPath(path)
+    if style.emoji:
+        _draw_emoji(painter, caption, font, centre, top, metrics)
     painter.restore()
 
 
-def _states(caption: Caption, style: SubtitleStyle) -> list[tuple[int, int, int | None]]:
-    """(start, end, highlighted word) intervals that make up one caption."""
-    if not style.karaoke or style.highlight.lower() == style.color.lower():
-        return [(caption.start_us, caption.end_us, None)]
-    result = []
-    words = caption.words
-    for i, word in enumerate(words):
-        start = caption.start_us if i == 0 else word.start_us
-        end = words[i + 1].start_us if i + 1 < len(words) else caption.end_us
-        if end > start:
-            result.append((start, end, i))
-    return result or [(caption.start_us, caption.end_us, None)]
+def caption_emoji(caption: Caption) -> str:
+    return emoji_for([w.text for w in caption.words if not w.masked])
+
+
+def _draw_emoji(painter: QPainter, caption: Caption, font: QFont, centre: QPointF, top: float,
+                metrics: QFontMetricsF) -> None:
+    emoji = caption_emoji(caption)
+    if not emoji:
+        return
+    size = max(8, int(font.pixelSize() * 1.25))
+    efont = QFont()
+    efont.setFamilies(EMOJI_FONTS)
+    efont.setPixelSize(size)
+    rect = QRectF(centre.x() - size, top - size * 1.35, size * 2, size * 1.4)
+    painter.setFont(efont)
+    painter.setPen(QColor("#ffffff"))
+    painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, emoji)
+
+
+def frame_times(caption: Caption, style: SubtitleStyle) -> list[int]:
+    """Output times where the caption's picture changes: its start, every spoken word
+    (when words are highlighted or jump) and the steps of each animation."""
+    per_word = (style.karaoke and (style.highlight.lower() != style.color.lower() or style.highlight_box)) \
+        or style.animation == ANIM_WORD
+    keys = {caption.start_us}
+    if per_word:
+        keys |= {w.start_us for w in caption.words}
+    animated = set()
+    if style.animation in (ANIM_POP, ANIM_WORD):
+        animated.add(caption.start_us)
+    if style.animation == ANIM_WORD:
+        animated |= {w.start_us for w in caption.words}
+    times = set(keys)
+    for start in animated:
+        times |= {start + step for step in range(FRAME_US, POP_US + FRAME_US, FRAME_US)}
+    return sorted(t for t in times if caption.start_us <= t < caption.end_us)
+
+
+def _states(caption: Caption, style: SubtitleStyle) -> list[tuple[int, int]]:
+    """(start, end) intervals with one picture each; the picture is drawn at ``start``."""
+    times = frame_times(caption, style)
+    return [(t, times[i + 1] if i + 1 < len(times) else caption.end_us) for i, t in enumerate(times)]
 
 
 def render_overlay(captions: list[Caption], style: SubtitleStyle, width: int, height: int,
@@ -148,26 +255,38 @@ def render_overlay(captions: list[Caption], style: SubtitleStyle, width: int, he
     image.save(str(blank))
 
     entries: list[tuple[Path, int]] = []
+    jobs: list[tuple[Path, Caption, int]] = []
     cursor = 0
-    n = 0
     for caption in captions:
-        for start, end, word in _states(caption, style):
-            if cancel is not None and cancel.is_set():
-                return None
+        for start, end in _states(caption, style):
             if start > cursor:
                 entries.append((blank, start - cursor))
-            image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
-            image.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(image)
-            moment = caption.words[word].start_us if word is not None else None
-            draw_caption(painter, canvas, caption, style if word is not None else _no_karaoke(style),
-                         moment, divider_at(start) if divider_at is not None else divider)
-            painter.end()
-            n += 1
-            path = folder / f"cap{n:05d}.png"
-            image.save(str(path))
+            path = folder / f"cap{len(jobs) + 1:05d}.png"
+            jobs.append((path, caption, start))
             entries.append((path, end - max(start, cursor)))
             cursor = max(cursor, end)
+
+    def draw(job: tuple[Path, Caption, int]) -> None:
+        if cancel is not None and cancel.is_set():
+            return
+        path, caption, start = job
+        image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        draw_caption(painter, canvas, caption, style, start, divider_at(start) if divider_at is not None else divider)
+        painter.end()
+        image.save(str(path), "PNG", PNG_QUALITY)
+
+    # Animated captions need hundreds of images: draw and compress them on several threads.
+    workers = min(8, max(1, (os.cpu_count() or 2) - 1))
+    if len(jobs) < 8 or workers == 1:
+        for job in jobs:
+            draw(job)
+    else:
+        with ThreadPoolExecutor(workers) as pool:
+            list(pool.map(draw, jobs))
+    if cancel is not None and cancel.is_set():
+        return None
     tail = max(1_000_000, (duration_us or cursor) - cursor + 1_000_000)
     entries.append((blank, tail))
 
@@ -182,8 +301,3 @@ def render_overlay(captions: list[Caption], style: SubtitleStyle, width: int, he
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out
 
-
-def _no_karaoke(style: SubtitleStyle) -> SubtitleStyle:
-    from dataclasses import replace
-
-    return replace(style, karaoke=False)

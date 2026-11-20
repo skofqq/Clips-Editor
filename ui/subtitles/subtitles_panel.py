@@ -31,6 +31,9 @@ from PySide6.QtWidgets import (
 )
 
 from core.subtitles.model import (
+    ANIM_NONE,
+    ANIM_POP,
+    ANIM_WORD,
     MASK_ALL,
     MASK_FIRST,
     MASK_NONE,
@@ -117,6 +120,15 @@ class SubtitlesPanel(QWidget):
         self.speakers_check = QCheckBox("Colour per speaker", self)
         self.speakers_check.setToolTip("After Find speakers (Transcript tab), every other speaker gets "
                                        "their own colour and a new caption starts when the voice changes.")
+        self.animation_combo = QComboBox(self)
+        for label, value in (("None", ANIM_NONE), ("Pop in", ANIM_POP), ("Pop in + word jump", ANIM_WORD)):
+            self.animation_combo.addItem(label, value)
+        self.animation_combo.setToolTip("Pop in: each caption grows in as it appears.\n"
+                                        "Word jump: the spoken word also jumps up and stays a bit bigger.")
+        self.word_box_check = QCheckBox("Box on the spoken word", self)
+        self.word_box_check.setToolTip("The spoken word sits on a rounded box in the Spoken colour.")
+        self.emoji_check = QCheckBox("Emoji for key words", self)
+        self.emoji_check.setToolTip("Laughter, «жесть», money, clutch… put a matching emoji above the caption.")
         self.shadow_check = QCheckBox("Shadow", self)
         self.box_check = QCheckBox("Box behind text", self)
         look = Card("Look", parent=self, label_width=84)
@@ -140,6 +152,9 @@ class SubtitlesPanel(QWidget):
         look.add_row("Colours", colors)
         look.add_row("Outline", self.outline_spin)
         look.add_row(self.karaoke_check)
+        look.add_row("Animation", self.animation_combo)
+        look.add_row(self.word_box_check)
+        look.add_row(self.emoji_check)
         look.add_row(self.speakers_check)
         look.add_row(self.punct_check)
         effects = QHBoxLayout()
@@ -225,8 +240,9 @@ class SubtitlesPanel(QWidget):
         self.font_combo.currentFontChanged.connect(self._edited)
         for spin in (self.size_spin, self.outline_spin, self.words_spin, self.chars_spin, self.lines_spin):
             spin.valueChanged.connect(self._edited)
+        self.animation_combo.currentIndexChanged.connect(self._edited)
         for check in (self.bold_check, self.upper_check, self.karaoke_check, self.shadow_check, self.box_check,
-                      self.speakers_check, self.punct_check):
+                      self.speakers_check, self.punct_check, self.word_box_check, self.emoji_check):
             check.toggled.connect(self._edited)
         for button in (self.color_button, self.highlight_button, self.outline_button):
             button.color_changed.connect(self._edited)
@@ -264,6 +280,9 @@ class SubtitlesPanel(QWidget):
             self.outline_button.set_color(s.outline)
             self.outline_spin.setValue(s.outline_px)
             self.karaoke_check.setChecked(s.karaoke)
+            self.animation_combo.setCurrentIndex(max(0, self.animation_combo.findData(s.animation)))
+            self.word_box_check.setChecked(s.highlight_box)
+            self.emoji_check.setChecked(s.emoji)
             self.speakers_check.setChecked(s.speaker_colors)
             self.punct_check.setChecked(s.hide_punctuation)
             self.shadow_check.setChecked(s.shadow)
@@ -319,6 +338,9 @@ class SubtitlesPanel(QWidget):
             outline=self.outline_button.color(),
             outline_px=self.outline_spin.value(),
             karaoke=self.karaoke_check.isChecked(),
+            animation=self.animation_combo.currentData(),
+            highlight_box=self.word_box_check.isChecked(),
+            emoji=self.emoji_check.isChecked(),
             speaker_colors=self.speakers_check.isChecked(),
             hide_punctuation=self.punct_check.isChecked(),
             shadow=self.shadow_check.isChecked(),
@@ -351,7 +373,7 @@ class SubtitlesPanel(QWidget):
     def _update_enabled(self) -> None:
         self.position_slider.setEnabled(self.position_combo.currentData() == "custom")
         self.outline_spin.setEnabled(not self.box_check.isChecked())
-        self.highlight_button.setEnabled(self.karaoke_check.isChecked())
+        self.highlight_button.setEnabled(self.karaoke_check.isChecked() or self.word_box_check.isChecked())
 
     def _update_buttons(self) -> None:
         row = self.list.currentRow()

@@ -20,6 +20,9 @@ from core.timeline.model import Timeline
 from core.transcription.model import Transcript
 
 MASK_NONE, MASK_FIRST, MASK_ALL = "none", "first", "all"
+# Animation: none; the caption pops in; the caption pops in and every spoken word jumps.
+ANIM_NONE, ANIM_POP, ANIM_WORD = "none", "pop", "word"
+ANIMATIONS = (ANIM_NONE, ANIM_POP, ANIM_WORD)
 POSITION_DIVIDER = -1.0  # sentinel: centre on the webcam/gameplay border
 
 
@@ -47,6 +50,9 @@ class SubtitleStyle:
     karaoke: bool = True
     hide_punctuation: bool = False  # drop commas and periods (keep ? and !), as many Shorts do
     speaker_colors: bool = True  # after "Find speakers": the 2nd, 3rd… speaker get their own colour
+    animation: str = ANIM_NONE
+    highlight_box: bool = False  # the spoken word sits on a box in the highlight colour
+    emoji: bool = False  # an emoji above captions with a matching word (laughter, fire, money…)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -87,6 +93,7 @@ class SubtitleStyle:
             gap_split_ms=min(5000, max(0, self.gap_split_ms)),
             min_duration_ms=min(3000, max(0, self.min_duration_ms)),
             mask=self.mask if self.mask in (MASK_NONE, MASK_FIRST, MASK_ALL) else MASK_FIRST,
+            animation=self.animation if self.animation in ANIMATIONS else ANIM_NONE,
             position=position,
         )
 
@@ -102,6 +109,16 @@ def speaker_text_color(style: "SubtitleStyle", speaker: int) -> str:
 
 
 PRESETS: dict[str, SubtitleStyle] = {
+    # Animated Shorts looks.
+    "Pop yellow": SubtitleStyle(enabled=True, animation=ANIM_WORD, max_words=3, emoji=True),
+    "Green box": SubtitleStyle(enabled=True, animation=ANIM_WORD, highlight="#2bd94f", highlight_box=True,
+                               max_words=3, emoji=True),
+    "Purple box": SubtitleStyle(enabled=True, animation=ANIM_POP, highlight="#8b5cf6", highlight_box=True,
+                                max_words=4, max_chars=22, emoji=True),
+    "One word pop": SubtitleStyle(enabled=True, animation=ANIM_POP, max_words=1, size=104, max_chars=14,
+                                  highlight="#ffffff", emoji=True),
+    "Red word": SubtitleStyle(enabled=True, animation=ANIM_WORD, highlight="#ff3b3b", max_words=2, size=84),
+    # Still looks.
     "Shorts bold": SubtitleStyle(enabled=True),
     "Karaoke green": SubtitleStyle(enabled=True, highlight="#4dff6a", max_words=2),
     "One word": SubtitleStyle(enabled=True, max_words=1, size=96, max_chars=14),
