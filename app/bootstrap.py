@@ -64,6 +64,11 @@ def run(argv: list[str]) -> int:
     files = [arg for arg in argv[1:] if not arg.startswith("-")]
     if files:
         window.import_files(files)
+    else:
+        from PySide6.QtCore import QTimer
+
+        # Unsaved work left by a crash: offer it once the window is on screen.
+        QTimer.singleShot(300, window.session.offer_recovery)
 
     code = app.exec()
     config.save()

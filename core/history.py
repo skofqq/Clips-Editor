@@ -78,3 +78,15 @@ class History(Generic[T]):
         self._current = self._redo.pop()
         self._last_key = None
         return self._current
+
+    # ------------------------------------------------------- persistence
+    def snapshot(self) -> tuple[list[T], T, list[T]]:
+        """(undo states oldest first, current, redo states nearest last)."""
+        return list(self._undo), self._current, list(self._redo)
+
+    def restore(self, undo: list[T], current: T, redo: list[T]) -> None:
+        """Replace the whole history (e.g. with one loaded from disk)."""
+        self._undo = list(undo)[-self._limit:]
+        self._redo = list(redo)
+        self._current = current
+        self._last_key = None

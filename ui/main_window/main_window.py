@@ -77,6 +77,7 @@ from ui.panels.properties_panel import PropertiesPanel
 from ui.panels.timeline_panel import TimelinePanel
 from ui.preview.edit_playback import EditPlayback
 from ui.preview.preview_panel import PreviewPanel
+from ui.main_window.session_keeper import AUTOSAVE_CHOICES, SessionKeeper
 from ui.timeline.timeline_controller import TimelineController
 from ui.transcript.transcript_controller import TranscriptController
 from ui.transcript.transcript_panel import TranscriptPanel
@@ -129,6 +130,7 @@ class MainWindow(QMainWindow):
         self.upload_history = UploadHistory(config.data_dir / "youtube_uploads.json")  # pause here when listening to a suggestion
         self.metadata_library = Library(config.data_dir / "metadata_library.sqlite")
         self.history: History = History(self._edit_state())
+        self.session = SessionKeeper(self)  # autosave + undo history kept between runs
 
         self.preview = PreviewPanel(self.composition, self)
         self.setCentralWidget(self.preview)
@@ -307,6 +309,8 @@ class MainWindow(QMainWindow):
         self.act_save = QAction("&Save Project", self, shortcut=QKeySequence.StandardKey.Save)
         self.act_save_as = QAction("Save Project &As…", self, shortcut=QKeySequence("Ctrl+Shift+S"))
         self.act_exit = QAction("E&xit", self, shortcut=QKeySequence("Alt+F4"))
+        self.act_recover = QAction("Restore Unsaved Work…", self)
+        self.act_recover.setToolTip("Open a recovery copy left when the app was closed without saving")
         self.act_play = QAction("Play / Pause", self, shortcut=QKeySequence(Qt.Key.Key_Space))
         self.act_prev = QAction("Previous Frame", self, shortcut=QKeySequence(Qt.Key.Key_Left))
         self.act_next = QAction("Next Frame", self, shortcut=QKeySequence(Qt.Key.Key_Right))
@@ -358,6 +362,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.act_export)
         file_menu.addAction(self.act_upload)
         self.recent_menu = file_menu.addMenu("Recent Files")
+        file_menu.addAction(self.act_recover)
         file_menu.addSeparator()
         file_menu.addAction(self.act_exit)
 
@@ -410,6 +415,22 @@ class MainWindow(QMainWindow):
         self.act_mica.setEnabled(windows.mica_supported())
         self.act_mica.setToolTip("Lets the desktop colour show through the top bar. Off by default.")
         self.act_mica.toggled.connect(lambda on: self.set_appearance(mica=on))
+        autosave = settings_menu.addMenu("Autosave")
+        self.act_autosave = autosave.addAction("Keep a recovery copy of unsaved work")
+        self.act_autosave.setCheckable(True)
+        self.act_autosave.setChecked(self.config.autosave_enabled)
+        self.act_autosave.toggled.connect(self.set_autosave)
+        autosave.addSeparator()
+        self._autosave_group = QActionGroup(self)
+        self.autosave_actions: dict[int, QAction] = {}
+        for minutes in AUTOSAVE_CHOICES:
+            action = autosave.addAction(f"Every {minutes} min")
+            action.setCheckable(True)
+            action.setChecked(self.config.autosave_minutes == minutes)
+            action.setData(minutes)
+            self._autosave_group.addAction(action)
+            self.autosave_actions[minutes] = action
+        self._autosave_group.triggered.connect(lambda action: self.set_autosave(minutes=action.data()))
         settings_menu.addSeparator()
         settings_menu.addAction(self.act_metadata_library)
         integrations = settings_menu.addMenu("Integrations")
@@ -432,6 +453,7 @@ class MainWindow(QMainWindow):
         self.act_save.triggered.connect(self.save)
         self.act_save_as.triggered.connect(self.save_as)
         self.act_exit.triggered.connect(self.close)
+        self.act_recover.triggered.connect(lambda: self.session.offer_recovery(quiet=False))
         self.act_play.triggered.connect(self.preview.toggle_play)
         self.act_prev.triggered.connect(lambda: self.preview.step_frames(-1))
         self.act_next.triggered.connect(lambda: self.preview.step_frames(1))
@@ -462,7 +484,7 @@ class MainWindow(QMainWindow):
 
         self.preview.position_changed.connect(lambda ms: self.timeline.set_playhead(ms_to_us(ms)))
         self.timeline_panel.view.seek_requested.connect(lambda us: self.preview.seek(us_to_ms(us)))
-        self.timeline_panel.view.gesture_finished.connect(self.history.break_merge)
+        self.timeline_panel.view.gesture_finished.connect(lambda: self.history.break_merge())
         self.composition.changed.connect(self._on_layout_changed)
         self.timeline.playhead_changed.connect(lambda _us: self._refresh_layout())
         self.timeline.changed.connect(self._refresh_layout)
@@ -525,7 +547,7 @@ class MainWindow(QMainWindow):
         self.censor_panel.word_edited.connect(self.edit_censor_word)
         self.censor_panel.preview_requested.connect(self.preview_range)
         self.censor_panel.dictionary_requested.connect(self.edit_censor_dictionary)
-        self.censor_panel.range_edit_finished.connect(self.history.break_merge)
+        self.censor_panel.range_edit_finished.connect(lambda: self.history.break_merge())
         self.timeline.playhead_changed.connect(self._check_preview_stop)
         self.timeline.selection_changed.connect(self._update_edit_actions)
         self._update_edit_actions()
@@ -663,7 +685,7 @@ class MainWindow(QMainWindow):
         self._refresh_censor_view()
         self.transcript_panel.set_has_audio(info is not None and info.has_audio)
         self.transcript_panel.rebuild()
-        self.history.reset(self._edit_state())
+        self.history = self.session.history_for(info.path if info is not None else None, self._edit_state())
         self._update_edit_actions()
         view = self.timeline_panel.view
         view.set_waveform(None)
@@ -1216,6 +1238,7 @@ class MainWindow(QMainWindow):
 
     def _on_remove_media(self, info: MediaInfo) -> None:
         self.project.remove_media(str(info.path))
+        self.session.forget(info.path)
         self.media_panel.remove_media(info.path)
         self._set_dirty(True)
 
@@ -1225,6 +1248,7 @@ class MainWindow(QMainWindow):
             return
         self.project = Project()
         self.project_path = None
+        self.session.reset()
         self.metadata_panel.set_metadata(self.project.metadata)
         self.subtitles_panel.set_settings(self.project.subtitles)
         self.media_panel.clear()
@@ -1248,6 +1272,26 @@ class MainWindow(QMainWindow):
         except (OSError, ProjectFormatError) as exc:
             QMessageBox.warning(self, "Cannot open project", f"{path.name}\n\n{exc}")
             return
+        self.session.load_for(path)
+        self._load_project(project, path)
+        self._set_dirty(False)
+
+    def restore_recovery(self, entry) -> bool:
+        """Open a crash-recovery copy; it stays unsaved until the user saves."""
+        try:
+            data, histories = self.session.store.load(entry)
+            project = Project.from_dict(data)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            QMessageBox.warning(self, "Cannot restore", f"{entry.project_name}\n\n{exc}")
+            return False
+        self.session.reset(histories)
+        self.session.adopt(entry)
+        self._load_project(project, Path(entry.original_path) if entry.original_path else None)
+        self._set_dirty(True)
+        self.statusBar().showMessage(f"Restored unsaved work of {entry.project_name}", 6000)
+        return True
+
+    def _load_project(self, project: Project, path: Path | None) -> None:
         self.project = project
         self.project_path = path
         self.metadata_panel.set_metadata(project.metadata)
@@ -1257,7 +1301,6 @@ class MainWindow(QMainWindow):
         self._apply_project_composition()
         missing = [m.path for m in project.media if not Path(m.path).is_file()]
         self.import_files([m.path for m in project.media if Path(m.path).is_file()])
-        self._set_dirty(False)
         if missing:
             QMessageBox.warning(
                 self, "Missing media", "These source files were not found:\n\n" + "\n".join(missing)
@@ -1272,7 +1315,7 @@ class MainWindow(QMainWindow):
             self._refresh_layout()
         finally:
             self._loading_composition = False
-        self.history.reset(self._edit_state())
+        self.history = History(self._edit_state())
         self._update_edit_actions()
 
     def save(self) -> bool:
@@ -1284,6 +1327,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Save failed", str(exc))
             return False
         self._set_dirty(False)
+        self.session.on_saved()
         self.statusBar().showMessage(f"Saved {self.project_path}", 4000)
         return True
 
@@ -1310,7 +1354,14 @@ class MainWindow(QMainWindow):
         )
         if answer == QMessageBox.StandardButton.Save:
             return self.save()
-        return answer == QMessageBox.StandardButton.Discard
+        if answer == QMessageBox.StandardButton.Discard:
+            self.session.discard_recovery()
+            return True
+        return False
+
+    @property
+    def is_dirty(self) -> bool:
+        return self._dirty
 
     def _set_dirty(self, dirty: bool) -> None:
         self._dirty = dirty
@@ -1416,6 +1467,15 @@ class MainWindow(QMainWindow):
         return True
 
     # ------------------------------------------------------------- layout
+    def set_autosave(self, enabled: bool | None = None, minutes: int | None = None) -> None:
+        if enabled is not None:
+            self.config.autosave_enabled = bool(enabled)
+        if minutes in AUTOSAVE_CHOICES:
+            self.config.autosave_minutes = minutes
+        for action in self.autosave_actions.values():
+            action.setEnabled(self.config.autosave_enabled)
+        self.session.apply_settings()
+
     def reset_layout(self) -> None:
         for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.subtitles_dock,
                      self.censor_dock, self.metadata_dock, self.timeline_dock):
@@ -1467,6 +1527,7 @@ class MainWindow(QMainWindow):
         self.config.window_state = bytes(self.saveState(LAYOUT_VERSION).toBase64()).decode()
         self.config.timeline_view = self.timeline_panel.view.view_state()
         self.pool.waitForDone(3000)
+        self.session.finish()
         self.metadata_library.close()
         event.accept()
 

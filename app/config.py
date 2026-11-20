@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.1"
+APP_VERSION = "0.9.2"
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,8 @@ class AppConfig:
     youtube_accounts: list[dict] = field(default_factory=list)  # Channel.to_dict(); tokens are NOT here
     youtube_active: str = ""  # channel id
     youtube_defaults: dict = field(default_factory=dict)  # last category / visibility / language / tags
+    autosave_enabled: bool = True  # keep a crash-recovery copy of unsaved work
+    autosave_minutes: int = 2
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -119,9 +121,13 @@ class AppConfig:
         if raw.get("theme") in ("dark", "light", "system"):
             config.theme = raw["theme"]
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
-                    "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_capitalise"):
+                    "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_capitalise",
+                    "autosave_enabled"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])
+        minutes = raw.get("autosave_minutes")
+        if isinstance(minutes, int) and not isinstance(minutes, bool) and 1 <= minutes <= 60:
+            config.autosave_minutes = minutes
         learned = raw.get("transcribe_learned")
         if isinstance(learned, list):
             config.transcribe_learned = [w for w in learned if isinstance(w, str)][:100]

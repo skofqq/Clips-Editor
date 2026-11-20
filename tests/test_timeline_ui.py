@@ -274,12 +274,17 @@ def test_timeline_saved_and_restored(window, tmp_path, data_dir, ffmpeg_paths):
     saved = window.timeline.timeline
     window.project_path = tmp_path / "edit.tssproj"
     assert window.save()
+    window.pool.waitForDone(3000)  # the undo history is written in the background
 
     other = MainWindow(config=AppConfig.load(data_dir), ffmpeg=ffmpeg_paths)
     other.open_project(tmp_path / "edit.tssproj")
     assert _wait(lambda: other.timeline.timeline is not None)
     assert other.timeline.timeline == saved
-    assert not other._dirty and not other.act_undo.isEnabled()
+    # Not dirty, but the edits can still be undone (history kept with the project).
+    assert not other._dirty and other.act_undo.isEnabled()
+    other.act_undo.trigger()
+    assert other.timeline.timeline.gain_db == 0.0
+    other._set_dirty(False)
     other.close()
 
 
