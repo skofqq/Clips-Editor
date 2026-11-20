@@ -17,6 +17,7 @@ from core.editor.composition import Composition
 from core.highlights.finder import Highlight
 from core.metadata.generate import ClipMetadata
 from core.subtitles.model import SubtitleSettings
+from core.thumbnails.model import ThumbnailDesign
 from core.timeline.model import Timeline
 from core.transcription.model import Transcript
 
@@ -59,6 +60,7 @@ class Project:
     metadata: ClipMetadata = field(default_factory=ClipMetadata)  # YouTube title/description/tags choices
     subtitles: SubtitleSettings = field(default_factory=SubtitleSettings)  # caption style and edits
     highlights: dict[str, tuple[Highlight, ...]] = field(default_factory=dict)  # found moments per media path
+    thumbnail: ThumbnailDesign = field(default_factory=ThumbnailDesign)  # the cover
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -148,6 +150,8 @@ class Project:
             ]
         if self.subtitles != SubtitleSettings():
             data["subtitles"] = self.subtitles.to_dict()
+        if self.thumbnail != ThumbnailDesign():
+            data["thumbnail"] = self.thumbnail.to_dict()
         return data
 
     @classmethod
@@ -161,7 +165,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata", "subtitles", "highlights"}
+        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata", "subtitles", "highlights", "thumbnail"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -209,6 +213,7 @@ class Project:
             metadata=metadata,
             subtitles=SubtitleSettings.from_dict(data.get("subtitles")),
             highlights=highlights,
+            thumbnail=ThumbnailDesign.from_dict(data.get("thumbnail")),
             extra=extra,
         )
 

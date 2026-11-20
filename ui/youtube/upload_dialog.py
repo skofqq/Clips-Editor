@@ -61,18 +61,32 @@ def default_title(path: Path) -> str:
     return stem.replace("_", " ").strip()
 
 
-def _upload(client, path, metadata, progress=None, cancel=None, captions_srt="", captions_language=""):
+def _upload(client, path, metadata, progress=None, cancel=None, captions_srt="", captions_language="",
+            thumbnail=None):
+    """Upload the video, then its captions and thumbnail (``thumbnail``: a callable
+    returning JPEG bytes, run here off the GUI thread)."""
     result = client.upload(path, metadata, progress, cancel)
-    if not captions_srt or not result.video_id:
+    if not result.video_id:
         return result
-    if progress is not None:
-        progress(1.0, "Adding subtitles…")
-    try:
-        client.upload_captions(result.video_id, captions_srt, captions_language or metadata.language or "ru")
-    except YouTubeError as exc:  # the video is up; only the captions are missing
-        log.warning("Captions were not added: %s", exc)
-        return replace(result, captions=str(exc))
-    return replace(result, captions="added")
+    if captions_srt:
+        if progress is not None:
+            progress(1.0, "Adding subtitles…")
+        try:
+            client.upload_captions(result.video_id, captions_srt, captions_language or metadata.language or "ru")
+            result = replace(result, captions="added")
+        except YouTubeError as exc:  # the video is up; only the captions are missing
+            log.warning("Captions were not added: %s", exc)
+            result = replace(result, captions=str(exc))
+    if thumbnail is not None:
+        if progress is not None:
+            progress(1.0, "Setting the thumbnail…")
+        try:
+            client.set_thumbnail(result.video_id, thumbnail())
+            result = replace(result, thumbnail="set")
+        except Exception as exc:  # noqa: BLE001 - the video is up; only the cover is missing
+            log.warning("Thumbnail was not set: %s", exc)
+            result = replace(result, thumbnail=str(exc))
+    return result
 
 
 class UploadDialog(QDialog):
@@ -92,6 +106,7 @@ class UploadDialog(QDialog):
         metadata=None,  # ClipMetadata from the project's Metadata tab
         captions: list | None = None,  # subtitles (output time) to add as a caption track
         captions_language: str = "",
+        thumbnail=None,  # callable giving the Data page's thumbnail job (a callable making JPEG bytes) or None
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Upload to YouTube")
@@ -148,6 +163,12 @@ class UploadDialog(QDialog):
         self.captions_check.setToolTip(
             "Uploads the project's subtitles as a caption track viewers can turn on; it also helps search."
             if self.captions else "Transcribe the clip first: the captions come from the Subtitles tab.")
+        self.thumbnail = thumbnail
+        self.thumbnail_check = QCheckBox("Set the thumbnail from the Data page", self)
+        self.thumbnail_check.setEnabled(thumbnail is not None)
+        self.thumbnail_check.setToolTip(
+            "The thumbnail made on the Data page. Shown in search, on the channel page and in links. "
+            "Needs a verified channel (phone number).")
         self.problems_label = QLabel(self)
         self.problems_label.setWordWrap(True)
         self.problems_label.setStyleSheet(f"color: {palette.CRITICAL}")
@@ -197,6 +218,7 @@ class UploadDialog(QDialog):
         extra.addWidget(self.kids_check)
         publish.add_row("Language", extra)
         publish.add_row("Captions", self.captions_check)
+        publish.add_row("Thumbnail", self.thumbnail_check)
         buttons = QHBoxLayout()
         buttons.addWidget(self.copy_button)
         buttons.addStretch(1)
@@ -218,6 +240,7 @@ class UploadDialog(QDialog):
         self._select(self.privacy_combo, defaults.get("privacy", PRIVATE))
         self._select(self.language_combo, defaults.get("language", ""))
         self.captions_check.setChecked(bool(self.captions) and bool(defaults.get("captions", True)))
+        self.thumbnail_check.setChecked(thumbnail is not None and bool(defaults.get("thumbnail", True)))
         self.from_metadata = False
         if metadata is not None and metadata.title.strip():
             self.from_metadata = True
@@ -354,6 +377,7 @@ class UploadDialog(QDialog):
             "language": self.language_combo.currentData(),
             "tags": self.tags_edit.text() if not self.from_metadata else self._default_tags,
             "captions": self.captions_check.isChecked() if self.captions else True,
+            "thumbnail": self.thumbnail_check.isChecked() if self.thumbnail is not None else True,
         }
 
     # ------------------------------------------------------------ upload
@@ -363,6 +387,7 @@ class UploadDialog(QDialog):
                        self.schedule_check):
             widget.setEnabled(not busy)
         self.captions_check.setEnabled(not busy and bool(self.captions))
+        self.thumbnail_check.setEnabled(not busy and self.thumbnail is not None)
         self.upload_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
         self.close_button.setEnabled(not busy)
@@ -380,8 +405,10 @@ class UploadDialog(QDialog):
             from core.subtitles.export import to_srt
 
             srt = to_srt(self.captions)
+        job = self.thumbnail() if self.thumbnail is not None and self.thumbnail_check.isChecked() else None
         task = CancellableTask(_upload, client, self.file, metadata, captions_srt=srt,
-                               captions_language=self.captions_language)
+                               captions_language=self.captions_language,
+                               thumbnail=job)
         task.signals.progress.connect(self._on_progress)
         task.signals.finished.connect(self._on_finished)
         task.signals.failed.connect(self._on_failed)
@@ -439,6 +466,10 @@ class UploadDialog(QDialog):
             text += "<br>Subtitles added as captions."
         elif result.captions:
             text += f"<br>The video is up, but the captions were not added: {result.captions}"
+        if result.thumbnail == "set":
+            text += "<br>Thumbnail set."
+        elif result.thumbnail:
+            text += f"<br>The video is up, but the thumbnail was not set: {result.thumbnail}"
         self.status_label.setText(text)
         self.copy_button.setVisible(True)
         self._finish()

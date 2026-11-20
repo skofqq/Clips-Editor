@@ -92,6 +92,8 @@ from ui.main_window.highlights_controller import HighlightsController
 from ui.main_window.listen_preview import ListenPreview
 from ui.main_window.pages import DATA, EDIT, PAGES, PUBLISH, RENDER, PageBar, StepPage, page_scroll
 from ui.main_window.session_keeper import AUTOSAVE_CHOICES, SessionKeeper
+from ui.main_window.thumbnail_keeper import ThumbnailKeeper
+from ui.thumbnails.thumbnail_editor import ThumbnailEditor
 from ui.timeline.timeline_controller import TimelineController
 from ui.transcript.transcript_controller import TranscriptController
 from ui.transcript.transcript_panel import TranscriptPanel
@@ -184,6 +186,9 @@ class MainWindow(QMainWindow):
         self.youtube_preview = YouTubePreview(data)
         data_row.addWidget(self.youtube_preview, 0, Qt.AlignmentFlag.AlignTop)
         data_column.addLayout(data_row)
+        self.thumbnail_editor = ThumbnailEditor(data)
+        data_column.addWidget(self.thumbnail_editor)
+        self.thumbnails = ThumbnailKeeper(self, self.thumbnail_editor)
         self.data_page = page_scroll(data, self, 1240)
         self.page_stack.addWidget(self.data_page)
         self.render_page = StepPage(
@@ -365,6 +370,7 @@ class MainWindow(QMainWindow):
                 self._sync_publish_page()
             if index == DATA:
                 self._page = DATA
+                self.thumbnails.refresh()
                 self._update_youtube_preview()
             if index == EDIT and self._edit_layout is not None:
                 self.restoreState(self._edit_layout, LAYOUT_VERSION)
@@ -1219,6 +1225,7 @@ class MainWindow(QMainWindow):
             metadata=self.project.metadata,
             captions=self.captions,
             captions_language=getattr(self.transcript.transcript, "language", "") or "",
+            thumbnail=self.thumbnails.job,
         )
         form.embed()
         form.uploaded.connect(lambda result, f=form: self._upload_finished(f, result))
@@ -1292,6 +1299,8 @@ class MainWindow(QMainWindow):
         if metadata != self.project.metadata:
             self.project.metadata = metadata
             self._set_dirty(True)
+        if self._page == DATA:
+            self.thumbnails.refresh()  # the default text is the title
         self._update_youtube_preview()
 
     def _update_youtube_preview(self) -> None:
@@ -1300,7 +1309,9 @@ class MainWindow(QMainWindow):
         meta = self.metadata_panel.metadata()
         channel = self.youtube.active
         media = self.preview.media
-        frame = self.media_panel.thumbnail(media.path) if media is not None else None
+        frame = self.thumbnails.pixmap()
+        if frame is None:
+            frame = self.media_panel.thumbnail(media.path) if media is not None else None
         self.youtube_preview.set_metadata(meta.title, meta.description, meta.tags,
                                           channel.title if channel else "", frame)
 
@@ -1542,6 +1553,7 @@ class MainWindow(QMainWindow):
         self.session.reset()
         self.metadata_panel.set_metadata(self.project.metadata)
         self.subtitles_panel.set_settings(self.project.subtitles)
+        self.thumbnail_editor.set_design(self.project.thumbnail)
         self.media_panel.clear()
         self.preview.unload()
         self.properties_panel.show_media(None)
@@ -1604,6 +1616,7 @@ class MainWindow(QMainWindow):
         self.project_path = path
         self.metadata_panel.set_metadata(project.metadata)
         self.subtitles_panel.set_settings(project.subtitles)
+        self.thumbnail_editor.set_design(self.project.thumbnail)
         self.media_panel.clear()
         self.preview.unload()
         self._apply_project_composition()

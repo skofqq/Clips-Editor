@@ -1,0 +1,1 @@
+"""Thumbnail editor (Data page)."""

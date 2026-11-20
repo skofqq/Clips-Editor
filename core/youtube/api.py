@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 API_URL = "https://www.googleapis.com/youtube/v3"
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 CAPTIONS_URL = "https://www.googleapis.com/upload/youtube/v3/captions"
+THUMBNAILS_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 CHUNK = 8 * 1024 * 1024  # bytes per request; a multiple of 256 KiB
 PIECE = 256 * 1024  # bytes written between progress / cancel checks
 MAX_RETRIES = 8
@@ -70,6 +71,7 @@ class UploadResult:
     publish_at: str
     upload_status: str
     captions: str = ""  # "" = not asked, "added", or why they could not be added
+    thumbnail: str = ""  # "" = not asked, "set", or why it could not be set
 
     @property
     def url(self) -> str:
@@ -111,6 +113,9 @@ def _error_from(status: int, raw: bytes) -> YouTubeError:
         return YouTubeAuthError("This account was connected without permission to add captions. "
                                 "Open Accounts…, reconnect the channel and allow managing your YouTube videos.",
                                 status, "insufficientPermissions")
+    if status == 403 and "thumbnail" in message.lower():
+        return YouTubeError("YouTube allows custom thumbnails only on verified channels. Verify the channel "
+                            "with a phone number at youtube.com/verify, then try again.", status, reason)
     text = message or reason or http.client.responses.get(status, "")
     return YouTubeError(f"YouTube error {status}: {text}", status, reason)
 
@@ -256,14 +261,24 @@ class YouTubeClient:
             f"Content-Disposition: attachment; filename=\"{filename}\"\r\n\r\n"
         ).encode() + text.encode("utf-8") + f"\r\n--{boundary}--\r\n".encode()
         url = f"{CAPTIONS_URL}?uploadType=multipart&part=snippet"
+        payload = self._post_bytes(url, body, f"multipart/related; boundary={boundary}")
+        return str(payload.get("id", ""))
+
+    def set_thumbnail(self, video_id: str, image: bytes, content_type: str = "image/jpeg") -> None:
+        """Set the custom thumbnail of ``video_id`` (JPEG or PNG, at most 2 MB).
+        YouTube allows it only on channels with a verified phone number."""
+        url = f"{THUMBNAILS_URL}?videoId={urllib.parse.quote(video_id)}&uploadType=media"
+        self._post_bytes(url, image, content_type)
+
+    def _post_bytes(self, url: str, body: bytes, content_type: str) -> dict:
         for attempt in (0, 1):
             request = urllib.request.Request(url, data=body, method="POST")
             request.add_header("Authorization", f"Bearer {self._token(attempt == 1)}")
-            request.add_header("Content-Type", f"multipart/related; boundary={boundary}")
+            request.add_header("Content-Type", content_type)
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     raw = response.read()
-                    return str((json.loads(raw) if raw else {}).get("id", ""))
+                    return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as exc:
                 raw = exc.read()
                 if exc.code == 401 and attempt == 0:

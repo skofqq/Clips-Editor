@@ -46,6 +46,8 @@ class FakeGoogle:
         self.puts = 0
         self.captions: list[str] = []
         self.captions_scope_missing = False
+        self.thumbnails: list = []
+        self.thumbnail_forbidden = False
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -87,6 +89,15 @@ class FakeGoogle:
                 if url.path == "/revoke":
                     fake.revoked.append(dict(urllib.parse.parse_qsl(self._body().decode()))["token"])
                     return self._send(200, {})
+                if url.path == "/thumbnails":
+                    body = self._body()
+                    if fake.thumbnail_forbidden:
+                        return self._send(403, {"error": {"code": 403, "message": "The authenticated user doesn't "
+                                                          "have permissions to upload and set custom video "
+                                                          "thumbnails.", "errors": [{"reason": "forbidden"}]}})
+                    query = dict(urllib.parse.parse_qsl(url.query))
+                    fake.thumbnails.append((query["videoId"], self.headers["Content-Type"], body))
+                    return self._send(200, {"kind": "youtube#thumbnailSetResponse"})
                 if url.path == "/captions":
                     if not self._authorized():
                         return self._send(401, {"error": {"code": 401}})
@@ -168,6 +179,7 @@ def google(monkeypatch):
     monkeypatch.setattr(api_mod, "API_URL", fake.base + "/youtube/v3")
     monkeypatch.setattr(api_mod, "UPLOAD_URL", fake.base + "/upload")
     monkeypatch.setattr(api_mod, "CAPTIONS_URL", fake.base + "/captions")
+    monkeypatch.setattr(api_mod, "THUMBNAILS_URL", fake.base + "/thumbnails")
     monkeypatch.setattr(api_mod, "CHUNK", 256 * 1024)
     monkeypatch.setattr(api_mod, "PIECE", 64 * 1024)
     monkeypatch.setattr(api_mod.YouTubeClient, "_backoff", lambda self, r, why, cancel: r + 1)
@@ -520,3 +532,20 @@ def test_main_window_refuses_to_upload_source(qapp, data_dir, ffmpeg_paths, samp
     assert warnings and "source clip" in warnings[0]
     w._dirty = False
     w.close()
+
+
+def test_upload_sets_thumbnail_and_explains_unverified_channel(google, tmp_path):
+    from ui.youtube.upload_dialog import _upload
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x" * 300_000)
+    client = YouTubeClient(lambda force: "access-1")
+    meta = VideoMetadata(title="t")
+    result = _upload(client, video, meta, thumbnail=lambda: b"\xff\xd8jpeg")
+    assert result.thumbnail == "set"
+    assert google.thumbnails == [("vid42", "image/jpeg", b"\xff\xd8jpeg")]
+
+    google.uploaded.clear()
+    google.thumbnail_forbidden = True
+    result = _upload(client, video, meta, thumbnail=lambda: b"\xff\xd8jpeg")
+    assert result.video_id == "vid42" and "verif" in result.thumbnail
