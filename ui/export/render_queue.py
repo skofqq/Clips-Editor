@@ -207,6 +207,12 @@ class QueuePanel(Card):
         self.open_button = QPushButton("Open on YouTube", self)
         self.summary = QLabel(self)
         self.summary.setObjectName("muted")
+        from ui.widgets.m3_progress import ProgressCard
+
+        self.active_card = ProgressCard("", self)  # the job running now
+        self.active_card.hide()
+        self._active: tuple | None = None
+        self.body.addWidget(self.active_card)
         self.body.addWidget(self.list)
         row = QHBoxLayout()
         for b in (self.remove_button, self.clear_button, self.upload_button, self.open_button):
@@ -246,10 +252,24 @@ class QueuePanel(Card):
             self.list.addItem(item)
         if 0 <= row < self.list.count():
             self.list.setCurrentRow(row)
+        self._refresh_active()
         waiting = self.queue.waiting
         self.summary.setText(f"{len(self.queue.jobs)} in the queue · {waiting} waiting" if self.queue.jobs else "")
         self.setVisible(bool(self.queue.jobs))
         self._update_buttons()
+
+    def _refresh_active(self) -> None:
+        job = next((j for j in self.queue.jobs if j.status in (RENDERING, UPLOADING)), None)
+        if job is None:
+            self._active = None
+            self.active_card.hide()
+            return
+        key = (id(job), job.status)
+        if key != self._active:
+            self._active = key
+            title = f"Rendering {job.name}" if job.status == RENDERING else f"Uploading {job.name} to YouTube"
+            self.active_card.start(title, str(job.output) if job.status == RENDERING else "")
+        self.active_card.set_progress(job.progress, job.message)
 
     def _update_buttons(self) -> None:
         job = self._selected()

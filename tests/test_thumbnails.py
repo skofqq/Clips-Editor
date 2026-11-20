@@ -199,3 +199,36 @@ def test_blocks_can_be_turned_off(qapp, data_dir, ffmpeg_paths):
     assert not again.composition_panel.zoom_card.isHidden() and AppConfig.load(data_dir).hidden_blocks == []
     again._set_dirty(False)
     again.close()
+
+
+def test_text_can_be_moved_up_and_down(qapp):
+    from PySide6.QtGui import QColor, QImage
+
+    from core.thumbnails.draw import draw_thumbnail
+    from core.thumbnails.model import MIDDLE, ThumbnailDesign
+    from ui.thumbnails.thumbnail_editor import ThumbnailEditor
+
+    frame = QImage(1080, 1920, QImage.Format.Format_RGB32)
+    frame.fill(QColor("#000000"))
+
+    def text_rows(design):
+        image = draw_thumbnail(frame, design, "ТЕСТ").scaled(108, 192)
+        rows = [y for y in range(image.height())
+                if any(QColor(image.pixel(x, y)).red() > 200 for x in range(image.width()))]
+        return min(rows), max(rows)
+
+    base = ThumbnailDesign(position=MIDDLE, shade=False)
+    middle = text_rows(base)
+    lower = text_rows(ThumbnailDesign(position=MIDDLE, shade=False, offset=30))
+    higher = text_rows(ThumbnailDesign(position=MIDDLE, shade=False, offset=-30))
+    assert lower[0] > middle[0] + 40 and higher[0] < middle[0] - 40
+    bottom = text_rows(ThumbnailDesign(position=MIDDLE, shade=False, offset=45, size=260))
+    assert bottom[1] < 192  # kept on the picture
+    assert ThumbnailDesign.from_dict({"offset": 400}).offset == 45
+    assert ThumbnailDesign.from_dict(ThumbnailDesign(offset=-12).to_dict()).offset == -12
+
+    editor = ThumbnailEditor()
+    seen = []
+    editor.design_changed.connect(seen.append)
+    editor.offset_slider.setValue(-20)
+    assert seen[-1].offset == -20 and editor.offset_label.text() == "↑ 20%"

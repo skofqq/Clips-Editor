@@ -37,6 +37,7 @@ STYLES: dict[str, TextStyle] = {
 
 MIN_SIZE, MAX_SIZE = 50, 260  # text height in px of a 1080-wide picture
 MIN_ZOOM, MAX_ZOOM = 1.0, 2.0
+MAX_OFFSET = 45  # text shift up (-) or down (+), % of the picture height
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class ThumbnailDesign:
     text: str = ""  # empty = the clip title
     style: str = "yellow"
     position: str = TOP
+    offset: int = 0  # move the text down (+) or up (-) from its position, % of the height
     size: int = 140
     uppercase: bool = True
     shade: bool = True  # darken behind the text so it reads on any frame
@@ -84,6 +86,7 @@ class ThumbnailDesign:
             text=str(self.text or ""),
             style=self.style if self.style in STYLES else "yellow",
             position=self.position if self.position in POSITIONS else TOP,
+            offset=max(-MAX_OFFSET, min(MAX_OFFSET, int(self.offset))),
             size=max(MIN_SIZE, min(MAX_SIZE, int(self.size))),
             uppercase=bool(self.uppercase),
             shade=bool(self.shade),

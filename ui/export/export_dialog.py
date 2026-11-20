@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -57,6 +56,7 @@ from core.timeline.model import Timeline
 from core.timeline.timebase import format_timecode
 from core.workers import CancellableTask
 from ui.widgets.card import Card
+from ui.widgets.m3_progress import ProgressCard
 
 log = logging.getLogger(__name__)
 
@@ -184,10 +184,8 @@ class ExportDialog(QDialog):
         self.summary_label = QLabel(self)
         self.summary_label.setObjectName("muted")
         self.summary_label.setWordWrap(True)
-        self.progress = QProgressBar(self)
-        self.progress.setRange(0, 1000)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(8)
+        self.progress_card = ProgressCard("Rendering", self)
+        self.progress = self.progress_card.bar
         self.status_label = QLabel(self)
         self.status_label.setWordWrap(True)
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -270,7 +268,7 @@ class ExportDialog(QDialog):
         for card in (video_card, audio_card, file_card):
             layout.addWidget(card)
         layout.addWidget(self.summary_label)
-        layout.addWidget(self.progress)
+        layout.addWidget(self.progress_card)
         layout.addWidget(self.status_label)
         layout.addLayout(buttons)
 
@@ -495,7 +493,8 @@ class ExportDialog(QDialog):
         self.render_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
         self.close_button.setEnabled(not busy)
-        self.progress.setVisible(busy)
+        self.progress_card.setVisible(busy)
+        self.status_label.setVisible(not busy)
 
     def _checked_output(self) -> Path | None:
         """The output path after the usual checks (asks before replacing a file); None to stop."""
@@ -551,8 +550,8 @@ class ExportDialog(QDialog):
         self.result_path = None
         self.open_button.setVisible(False)
         self.upload_button.setVisible(False)
-        self.progress.setValue(0)
-        self.status_label.setText(f"Rendering to {output}…")
+        self.status_label.setText("")
+        self.progress_card.start("Rendering", str(output))
         self._set_busy(True)
         log.info("Export %s -> %s with %s", self.source.path, output, settings)
         QThreadPool.globalInstance().start(task)
@@ -567,11 +566,10 @@ class ExportDialog(QDialog):
     def cancel_render(self) -> None:
         if self._task is not None:
             self._task.cancel()
-            self.status_label.setText("Cancelling…")
+            self.progress_card.title_label.setText("Cancelling…")
 
     def _on_progress(self, fraction: float, message: str) -> None:
-        self.progress.setValue(int(fraction * 1000))
-        self.status_label.setText(f"{message}\n{self.output_path()}")
+        self.progress_card.set_progress(fraction, message, str(self.output_path()))
 
     def _finish(self) -> None:
         self._task = None

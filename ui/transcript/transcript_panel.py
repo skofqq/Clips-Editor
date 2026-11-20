@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QProgressBar,
     QPushButton,
     QStackedWidget,
     QToolButton,
@@ -34,6 +33,7 @@ from core.transcription.engine import (
     parse_vocabulary,
 )
 from core.transcription.model import LANGUAGES, Transcript
+from ui.widgets.m3_progress import WavyProgressBar
 from ui.theme import palette
 from ui.transcript.transcript_controller import TranscriptController
 from ui.widgets.card import Card
@@ -167,7 +167,7 @@ class TranscriptPanel(QWidget):
         self.speakers_combo.addItem("Detect how many", None)
         for count in range(2, 6):
             self.speakers_combo.addItem(f"{count} speakers", count)
-        self.progress = QProgressBar(self)
+        self.progress = WavyProgressBar(self)
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(6)

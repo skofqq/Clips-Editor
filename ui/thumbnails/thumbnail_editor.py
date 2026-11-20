@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from core.thumbnails.model import (
     FORMAT_TEXT,
+    MAX_OFFSET,
     MAX_SIZE,
     MAX_ZOOM,
     MIN_SIZE,
@@ -97,6 +98,13 @@ class ThumbnailEditor(Card):
         self.position_combo = QComboBox(self)
         for key, text in POSITION_TEXT.items():
             self.position_combo.addItem(text, key)
+        self.offset_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.offset_slider.setRange(-MAX_OFFSET, MAX_OFFSET)
+        self.offset_slider.setToolTip("Left moves the text up, right moves it down. Double-click: back to the middle.")
+        self.offset_slider.mouseDoubleClickEvent = lambda _e: self.offset_slider.setValue(0)
+        self.offset_label = QLabel(self)
+        self.offset_label.setObjectName("muted")
+        self.offset_label.setMinimumWidth(44)
         self.size_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.size_slider.setRange(MIN_SIZE, MAX_SIZE)
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal, self)
@@ -126,6 +134,10 @@ class ThumbnailEditor(Card):
         form.addRow("Text", self.text_edit)
         form.addRow("Style", self.style_combo)
         form.addRow("Position", self.position_combo)
+        offset_row = QHBoxLayout()
+        offset_row.addWidget(self.offset_slider, 1)
+        offset_row.addWidget(self.offset_label)
+        form.addRow("Up / down", offset_row)
         form.addRow("Text size", self.size_slider)
         form.addRow("Zoom", self.zoom_slider)
         form.addRow("", checks)
@@ -150,6 +162,7 @@ class ThumbnailEditor(Card):
         self.position_combo.currentIndexChanged.connect(
             lambda _i: self._edit(position=self.position_combo.currentData()))
         self.size_slider.valueChanged.connect(lambda v: self._edit(size=v))
+        self.offset_slider.valueChanged.connect(lambda v: (self._show_offset(v), self._edit(offset=v)))
         self.zoom_slider.valueChanged.connect(lambda v: self._edit(zoom=v / 100))
         self.uppercase_check.toggled.connect(lambda v: self._edit(uppercase=v))
         self.shade_check.toggled.connect(lambda v: self._edit(shade=v))
@@ -174,6 +187,8 @@ class ThumbnailEditor(Card):
                                  (self.format_combo, design.format)):
                 combo.setCurrentIndex(max(0, combo.findData(value)))
             self.size_slider.setValue(design.size)
+            self.offset_slider.setValue(design.offset)
+            self._show_offset(design.offset)
             self.zoom_slider.setValue(round(design.zoom * 100))
             self.uppercase_check.setChecked(design.uppercase)
             self.shade_check.setChecked(design.shade)
@@ -181,11 +196,14 @@ class ThumbnailEditor(Card):
                 f"Frame at {_format_time(design.source_us)} of the source" if design.source_us is not None
                 else "A quarter into the clip")
             for widget in (self.frame_button, self.scrub, *self.frame_buttons, self.text_edit, self.style_combo, self.position_combo,
-                           self.size_slider, self.zoom_slider, self.uppercase_check, self.shade_check,
+                           self.offset_slider, self.size_slider, self.zoom_slider, self.uppercase_check, self.shade_check,
                            self.format_combo, self.save_button):
                 widget.setEnabled(design.enabled)
         finally:
             self._updating = False
+
+    def _show_offset(self, value: int) -> None:
+        self.offset_label.setText("0" if value == 0 else (f"↑ {-value}%" if value < 0 else f"↓ {value}%"))
 
     # ------------------------------------------------------------ frames
     def set_candidates(self, frames: list[tuple[int, QImage]], selected_us: int | None = None) -> None:

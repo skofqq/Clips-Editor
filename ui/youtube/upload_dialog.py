@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
-    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -45,6 +44,7 @@ from core.youtube.metadata import (
 from core.youtube.service import YouTubeService
 from ui.theme import palette
 from ui.widgets.card import Card
+from ui.widgets.m3_progress import ProgressCard
 
 log = logging.getLogger(__name__)
 
@@ -175,10 +175,9 @@ class UploadDialog(QDialog):
         self.note_label = QLabel(self)
         self.note_label.setObjectName("muted")
         self.note_label.setWordWrap(True)
-        self.progress = QProgressBar(self)
-        self.progress.setRange(0, 1000)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(8)
+        self.progress_card = ProgressCard("Uploading to YouTube", self)
+        self.progress_card.hide()
+        self.progress = self.progress_card.bar
         self.status_label = QLabel(self)
         self.status_label.setWordWrap(True)
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
@@ -231,7 +230,7 @@ class UploadDialog(QDialog):
             layout.addWidget(card)
         layout.addWidget(self.note_label)
         layout.addWidget(self.problems_label)
-        layout.addWidget(self.progress)
+        layout.addWidget(self.progress_card)
         layout.addWidget(self.status_label)
         layout.addLayout(buttons)
 
@@ -391,7 +390,8 @@ class UploadDialog(QDialog):
         self.upload_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
         self.close_button.setEnabled(not busy)
-        self.progress.setVisible(busy)
+        self.progress_card.setVisible(busy)
+        self.status_label.setVisible(not busy)
         self._update_schedule()
 
     def start_upload(self) -> None:
@@ -416,8 +416,8 @@ class UploadDialog(QDialog):
         self._task = task
         self._metadata = metadata
         self._channel_id = channel_id
-        self.progress.setValue(0)
-        self.status_label.setText("Starting upload…")
+        self.status_label.setText("")
+        self.progress_card.start("Uploading to YouTube", "Starting upload…")
         self._set_busy(True)
         log.info("Uploading %s to channel %s", self.file, channel_id)
         QThreadPool.globalInstance().start(task)
@@ -425,11 +425,13 @@ class UploadDialog(QDialog):
     def cancel_upload(self) -> None:
         if self._task is not None:
             self._task.cancel()
-            self.status_label.setText("Cancelling…")
+            self.progress_card.title_label.setText("Cancelling…")
 
     def _on_progress(self, fraction: float, message: str) -> None:
-        self.progress.setValue(int(fraction * 1000))
-        self.status_label.setText(message)
+        title = "Uploading to YouTube" if fraction < 1.0 else "Finishing on YouTube"
+        if self.progress_card.title_label.text() != title:
+            self.progress_card.title_label.setText(title)
+        self.progress_card.set_progress(fraction, message)
 
     def _finish(self) -> None:
         self._task = None

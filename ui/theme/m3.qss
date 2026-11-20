@@ -430,3 +430,17 @@ QLabel#previewTitle { font-size: 15px; font-weight: 600; }
 QFrame#guidePanel { background: @LAYER@; border-left: 1px solid @DIVIDER@; }
 QFrame#guidePanel QTextBrowser { background: @LAYER@; }
 QFrame#guidePanel QLabel { background: transparent; }
+
+/* ---- long jobs: M3 Expressive progress card (ui/widgets/m3_progress.py) ---- */
+QFrame#progressCard { background: @LAYER@; border: 1px solid @CARD_STROKE@; border-radius: 20px; }
+QFrame#progressCard QLabel { background: transparent; }
+QFrame#progressCard QLabel#progressPercent { color: @ACCENT_TEXT@; font-size: 30px; font-weight: 800; }
+QFrame#progressCard QLabel#progressTitle { color: @TEXT@; font-size: 15px; font-weight: 700; }
+QFrame#progressCard QLabel#progressChip {
+    background: @CONTROL@; color: @TEXT_SECONDARY@; border-radius: 10px; padding: 3px 10px;
+    font-size: 9pt; font-weight: 600;
+}
+QLabel#doneChip {
+    background: @ACCENT_CONTAINER@; color: @ON_ACCENT_CONTAINER@; border-radius: 10px; padding: 3px 10px;
+    font-weight: 700;
+}

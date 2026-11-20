@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 from core.twitch.clip import ClipLink, TwitchClip, parse_clip_url
 from core.twitch.download import download_clip, fetch_info
 from core.workers import CancellableTask
+from ui.widgets.m3_progress import WavyProgressBar
 
 
 def default_folder() -> Path:
@@ -80,7 +80,7 @@ class TwitchImportDialog(QDialog):
         for box in (self.autofill_check, self.library_check, self.info_only_check):
             layout.addWidget(box)
 
-        self.progress = QProgressBar()
+        self.progress = WavyProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.hide()
         layout.addWidget(self.progress)

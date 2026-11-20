@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
-    QProgressBar,
     QPushButton,
     QWidget,
 )
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 from core.social import tiktok
 from core.social.errors import PostCancelled
 from core.workers import CancellableTask, Worker
+from ui.widgets.m3_progress import WavyProgressBar
 from ui.social.guide_panel import INSTAGRAM, TIKTOK
 from ui.widgets.card import Card
 
@@ -121,7 +121,7 @@ class CrossPostPanel(Card):
         self.post_button.setObjectName("primary")
         self.cancel_button = QPushButton("Cancel", self)
         self.cancel_button.hide()
-        self.progress = QProgressBar(self)
+        self.progress = WavyProgressBar(self)
         self.progress.setRange(0, 1000)
         self.progress.hide()
         self.result_label = QLabel(self)

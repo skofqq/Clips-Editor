@@ -116,6 +116,9 @@ def _draw_text(painter: QPainter, canvas: QRectF, text: str, design: ThumbnailDe
         top = canvas.bottom() - margin - total
     else:
         top = canvas.center().y() - total / 2
+    # The Up / down slider, kept so the text stays on the picture.
+    top += canvas.height() * design.offset / 100
+    top = max(canvas.top() + margin * 0.3, min(canvas.bottom() - margin * 0.3 - total, top))
 
     if design.shade:
         band = QRectF(canvas.left(), top - margin, canvas.width(), total + 2 * margin)
