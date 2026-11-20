@@ -203,6 +203,14 @@ SEED_TEMPLATES = (
     Template("tpl-clip-first", "Clip | streamer", "{clip_title} | {streamer} #shorts", DEFAULT_DESCRIPTION,
              ("twitch", "shorts"), ("shorts",), "20"),
 )
+# skof's own format (2026-11-20): "<clip> | #sasavot on #Twitch", description = hashtags, then the
+# participants' Twitch channels one per line.
+SASAVOT_TEMPLATE = Template(
+    "tpl-sasavot", "Clip | #sasavot on #Twitch", "{clip_title} | #sasavot on #Twitch",
+    "{hashtags}[[\n\n{participants_twitch}]]", ("sasavot", "twitch", "shorts", "twitch clips"),
+    ("shorts", "sasavot", "twitch"), "20", True,
+)
+
 SEED_STREAM_TYPES = tuple(
     StreamType(f"st-{i}", name, tags) for i, (name, tags) in enumerate((
         ("Just Chatting", ("just chatting",)),
@@ -240,7 +248,22 @@ def _migration_2(db: sqlite3.Connection) -> None:
             )
 
 
-MIGRATIONS = (_migration_1, _migration_2)
+def _migration_3(db: sqlite3.Connection) -> None:
+    """Add skof's template and make it the default."""
+    table = TABLES[TEMPLATE]
+    for (entity_id, data) in db.execute(f"SELECT id, data FROM {table}").fetchall():
+        values = json.loads(data)
+        if values.get("is_default"):
+            values["is_default"] = False
+            db.execute(f"UPDATE {table} SET data = ? WHERE id = ?", (json.dumps(values, ensure_ascii=False), entity_id))
+    t = SASAVOT_TEMPLATE
+    db.execute(
+        f"INSERT OR REPLACE INTO {table}(id, name, key, data) VALUES (?, ?, ?, ?)",
+        (t.id, t.name, t.key, json.dumps(entity_to_dict(t), ensure_ascii=False)),
+    )
+
+
+MIGRATIONS = (_migration_1, _migration_2, _migration_3)
 
 
 # ---------------------------------------------------------------- library

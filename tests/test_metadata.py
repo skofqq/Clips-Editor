@@ -55,9 +55,9 @@ def _people(lib):
 def test_library_migrates_seeds_and_persists(tmp_path):
     path = tmp_path / "lib.sqlite"
     lib = Library(path)
-    assert lib.version == 2
+    assert lib.version == 3
     assert {t.name for t in lib.all(TEMPLATE)} >= {"Streamer — clip #shorts"}
-    assert lib.default_template().id == "tpl-shorts"
+    assert lib.default_template().id == "tpl-sasavot"
     assert [s.name for s in lib.all(STREAM_TYPE)][:2] == ["Challenge", "Gaming"]  # sorted by name
     assert lib.find(GAME, "gta 6").name == "GTA VI"  # alias, any case
     s = lib.create(STREAMER, "Sasavot", username="@sasavot")
@@ -65,12 +65,12 @@ def test_library_migrates_seeds_and_persists(tmp_path):
     lib.close()
 
     again = Library(path)  # reopening does not reseed or migrate twice
-    assert again.version == 2
+    assert again.version == 3
     assert again.find(STREAMER, "SASAVOT").id == s.id
-    assert len(again.all(TEMPLATE)) == 3
+    assert len(again.all(TEMPLATE)) == 4
     again.close()
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_library_duplicates_defaults_and_delete(lib):
@@ -122,6 +122,7 @@ def test_generate_full_metadata(lib):
         streamer_id=streamer.id, participant_ids=(helin.id, ice.id), game_id=game.id,
         stream_type_ids=("st-2",), clip_title="Угнал танк", date="01.02.2026",
         custom=(("promo", "https://t.me/x"),), project_tags=("tank", "SASAVOT"), extra_hashtags=("GTA VI",),
+        template_id="tpl-shorts",
     )
     result = generate(lib, sel)
     assert result.title == "sasavot — Угнал танк #shorts" and result.template_id == "tpl-shorts"
@@ -141,11 +142,38 @@ def test_generate_full_metadata(lib):
     assert any("{unknown}" in w for w in out.warnings) and any("clip_title" in w for w in out.warnings)
 
 
+def test_default_sasavot_format(lib):
+    streamer, helin, ice = _people(lib)
+    nick = lib.create(PARTICIPANT, "nick", twitch_url="https://www.twitch.tv/nick")
+    sel = MetadataSelection(streamer_id=streamer.id, participant_ids=(helin.id, ice.id, nick.id),
+                            clip_title="КОНСТРУКТИВНАЯ ОХОТА", extra_hashtags=("GTA VI",))
+    result = generate(lib, sel)
+    assert result.template_id == "tpl-sasavot"
+    assert result.title == "КОНСТРУКТИВНАЯ ОХОТА | #sasavot on #Twitch"
+    assert result.description == ("#shorts #sasavot #twitch #GTAVI\n\n"
+                                  "https://www.twitch.tv/helin139\nhttps://www.twitch.tv/nick")
+    alone = generate(lib, replace(sel, participant_ids=()))
+    assert alone.description == "#shorts #sasavot #twitch #GTAVI"
+
+
+def test_old_library_gets_the_new_default(tmp_path):
+    path = tmp_path / "old.sqlite"
+    with sqlite3.connect(path) as db:
+        from core.metadata.library import _migration_1, _migration_2
+        _migration_1(db)
+        _migration_2(db)
+        db.execute("PRAGMA user_version = 2")
+    lib = Library(path)
+    assert lib.version == 3 and lib.default_template().id == "tpl-sasavot"
+    assert [t.id for t in lib.all(TEMPLATE) if t.is_default] == ["tpl-sasavot"]
+    lib.close()
+
+
 def test_template_choice_order(lib):
     streamer, _, _ = _people(lib)
     game = lib.find(GAME, "CS2")
     sel = MetadataSelection(streamer_id=streamer.id, game_id=game.id)
-    assert choose_template(lib, sel).id == "tpl-shorts"  # library default
+    assert choose_template(lib, sel).id == "tpl-sasavot"  # library default
     lib.save(replace(game, template_id="tpl-plays"))
     assert choose_template(lib, sel).id == "tpl-plays"
     lib.save(replace(lib.get(STREAMER, streamer.id), template_id="tpl-clip-first"))
@@ -213,6 +241,7 @@ def test_chip_input(qapp):
 def test_metadata_panel_generates_and_keeps_edits(qapp, lib):
     from ui.metadata.metadata_panel import MetadataPanel
 
+    lib.set_default_template("tpl-shorts")  # the long description format these checks read
     panel = MetadataPanel(lib)
     emitted = []
     panel.metadata_changed.connect(emitted.append)
@@ -293,7 +322,7 @@ def test_library_dialog_edits_profiles_and_templates(qapp, lib, monkeypatch):
     assert "Unknown variable {nope}" in tpl_page.preview_label.text()
     dialog.accept()  # autosaves the template being edited
     assert lib.get(TEMPLATE, "tpl-plays").title == "{streamer} в {game} — {clip_title}"
-    assert len(lib.all(TEMPLATE)) == 3  # the preview never wrote to the real library
+    assert len(lib.all(TEMPLATE)) == 4  # the preview never wrote to the real library
 
     dialog = LibraryDialog(lib)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
@@ -332,14 +361,14 @@ def test_window_stores_metadata_and_prefills_upload(qapp, data_dir, ffmpeg_paths
     panel.clip_title_edit.setText("Танк")
     assert w._dirty
     assert panel.generate_metadata()
-    assert w.project.metadata.title == "sasavot — Танк #shorts"
+    assert w.project.metadata.title == "Танк | #sasavot on #Twitch"
 
     w.project_path = tmp_path / "m.tssproj"
     assert w.save()
     w.new_project()
     assert panel.metadata().title == "" and panel.streamer_chips.items() == []
     w.open_project(tmp_path / "m.tssproj")
-    assert panel.title_edit.text() == "sasavot — Танк #shorts" and not w._dirty
+    assert panel.title_edit.text() == "Танк | #sasavot on #Twitch" and not w._dirty
 
     shown = {}
 
@@ -358,7 +387,7 @@ def test_window_stores_metadata_and_prefills_upload(qapp, data_dir, ffmpeg_paths
     rendered = tmp_path / "out.mp4"
     rendered.write_bytes(Path(sample_clips["mp4"]).read_bytes())
     w.upload_to_youtube(rendered)
-    assert shown["metadata"].title == "sasavot — Танк #shorts"
+    assert shown["metadata"].title == "Танк | #sasavot on #Twitch"
     assert upload_mod  # module imported fine
     w._dirty = False
     w.close()

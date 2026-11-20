@@ -177,6 +177,8 @@ def variables(library: Library, selection: MetadataSelection, template: Template
         "stream_type": ", ".join(s.name for s in stream_types),
         "participants": ", ".join(p.name for p in participants),
         "participants_links": "\n".join(_person_line(p) for p in participants),
+        # Bare Twitch channel links, one per line (participants without a Twitch link are left out).
+        "participants_twitch": "\n".join(p.twitch_url for p in participants if p.twitch_url),
         "stream_url": selection.stream_url or (streamer.twitch_url if streamer else ""),
         "clip_title": selection.clip_title.strip(),
         "date": selection.date.strip() or _date.today().strftime("%d.%m.%Y"),
