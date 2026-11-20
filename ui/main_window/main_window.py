@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QScrollArea,
     QSizePolicy,
@@ -80,6 +81,7 @@ from ui.theme import icon, palette, windows
 from ui.twitch.import_dialog import TwitchImportDialog
 from core.twitch.autofill import autofill
 from core.twitch.clip import parse_clip_url
+from ui.widgets.card import Card
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.analytics_panel import AnalyticsPanel
 from ui.youtube.upload_dialog import UploadDialog, _upload
@@ -450,6 +452,70 @@ class MainWindow(QMainWindow):
         dock.topLevelChanged.connect(lambda _floating: self._update_dock_titles())
         return dock
 
+    # ------------------------------------------------------------ blocks
+    def _block_groups(self) -> list[tuple[str, list]]:
+        """The blocks (cards) the user can turn off, grouped by panel or page."""
+        groups = []
+        for dock in (self.properties_dock, self.subtitles_dock, self.transcript_dock, self.censor_dock,
+                     self.highlights_dock, self.media_dock):
+            cards = [c for c in dock.widget().findChildren(Card) if c.title_label.text()]
+            if cards:
+                groups.append((dock.windowTitle(), cards))
+        groups.append(("Data page", [self.youtube_preview, self.thumbnail_editor]))
+        groups.append(("Render page", [self.queue_panel]))
+        groups.append(("Publish page", [self.analytics_panel]))
+        return groups
+
+    @staticmethod
+    def _block_key(group: str, card) -> str:
+        return f"{group}/{card.title_label.text()}"
+
+    def _build_blocks_menu(self) -> None:
+        """View → Blocks: a check per block; unticked blocks stay hidden, also after a restart."""
+        menu = self.blocks_menu
+        menu.clear()
+        hidden = set(self.config.hidden_blocks)
+        self.block_actions: dict[str, QAction] = {}
+        for group, cards in self._block_groups():
+            menu.addSection(group)
+            for card in cards:
+                key = self._block_key(group, card)
+                action = QAction(card.title_label.text(), menu)
+                action.setCheckable(True)
+                action.setChecked(key not in hidden)
+                action.toggled.connect(lambda on, k=key, c=card: self._set_block_shown(k, c, on))
+                menu.addAction(action)
+                self.block_actions[key] = action
+                card.set_user_hidden(key in hidden)
+                card.title_label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                card.title_label.customContextMenuRequested.connect(
+                    lambda pos, c=card, a=action: self._block_context_menu(c, a, pos))
+        menu.addSeparator()
+        show_all = menu.addAction("Show all blocks")
+        show_all.triggered.connect(self._show_all_blocks)
+
+    def _set_block_shown(self, key: str, card, shown: bool) -> None:
+        card.set_user_hidden(not shown)
+        hidden = [k for k in self.config.hidden_blocks if k != key] + ([] if shown else [key])
+        if hidden != self.config.hidden_blocks:
+            self.config.hidden_blocks = hidden
+            try:
+                self.config.save()
+            except OSError:
+                pass
+
+    def _block_context_menu(self, card, action: QAction, pos) -> None:
+        """Right-click on a block's title: hide it (View → Blocks shows it again)."""
+        menu = QMenu(self)
+        hide = menu.addAction(f"Hide “{card.title_label.text()}”")
+        hide.setToolTip("Bring it back with View → Blocks")
+        if menu.exec(card.title_label.mapToGlobal(pos)) is hide:
+            action.setChecked(False)
+
+    def _show_all_blocks(self) -> None:
+        for action in self.block_actions.values():
+            action.setChecked(True)
+
     def _docks(self) -> list[QDockWidget]:
         return self.findChildren(QDockWidget)
 
@@ -565,6 +631,9 @@ class MainWindow(QMainWindow):
         for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.highlights_dock, self.subtitles_dock,
                      self.censor_dock, self.timeline_dock):
             view.addAction(dock.toggleViewAction())
+        self.blocks_menu = view.addMenu("Blocks")
+        self.blocks_menu.setToolTipsVisible(True)
+        self._build_blocks_menu()
         view.addSeparator()
         zoom = view.addMenu("Timeline Zoom")
         zoom.addActions([self.act_zoom_in, self.act_zoom_out, self.act_zoom_fit, self.act_zoom_selection])
@@ -1149,7 +1218,8 @@ class MainWindow(QMainWindow):
             defaults = RenderSettings(width=composition.output_w, height=composition.output_h)
             settings = (RenderSettings.from_dict(self.config.export_settings) if self.config.export_settings
                         else defaults)
-            output = default_output_path(Path(media.path), self.config.export_dir, settings.extension)
+            output = default_output_path(Path(media.path), self.config.export_dir, settings.extension,
+                                         self.metadata_panel.metadata().title)
             form = ExportDialog(media, composition, timeline, self.ffmpeg, settings, output, self.encoders, None,
                                 upload=self.upload_to_youtube, captions=self.captions, subtitle_style=style)
             form.embed()
@@ -1165,6 +1235,9 @@ class MainWindow(QMainWindow):
             self.export_widget = self._export_dialog = form
         else:
             form.set_inputs(self.main_layout, timeline, self.captions, style)
+            form.set_default_name(default_output_path(
+                Path(media.path), form.folder_edit.text().strip(), form.settings().extension,
+                self.metadata_panel.metadata().title).stem)
 
     def _save_export_settings(self) -> None:
         form = self.export_widget

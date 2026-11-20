@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.14"
+APP_VERSION = "0.9.15"
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ class AppConfig:
     window_geometry: str = ""  # base64 of QMainWindow.saveGeometry()
     window_state: str = ""  # base64 of QMainWindow.saveState()
     timeline_view: dict = field(default_factory=dict)  # track heights and waveform zoom
+    hidden_blocks: list = field(default_factory=list)  # "Panel/Block" names turned off in View → Blocks
     theme: str = "dark"  # dark | light | system (follows Windows)
     mica: bool = False  # Windows 11 Mica backdrop behind the command bar
     transcribe_vocabulary: str = ""  # nicknames / slang, comma separated
@@ -141,6 +142,9 @@ class AppConfig:
         accounts = raw.get("youtube_accounts")
         if isinstance(accounts, list):
             config.youtube_accounts = [a for a in accounts if isinstance(a, dict) and a.get("id")]
+        hidden = raw.get("hidden_blocks")
+        if isinstance(hidden, list):
+            config.hidden_blocks = [item for item in hidden if isinstance(item, str)]
         recent = raw.get("recent_files")
         if isinstance(recent, list):
             config.recent_files = [item for item in recent if isinstance(item, str)]

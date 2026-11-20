@@ -100,3 +100,102 @@ def test_data_page_thumbnail(qapp, data_dir, ffmpeg_paths, sample_clips, tmp_pat
     finally:
         window._set_dirty(False)
         window.close()
+
+
+def test_candidate_times():
+    from core.thumbnails.draw import candidate_times
+
+    times = candidate_times(12_000_000, lambda out: out + 5_000_000, peaks=[9_000_000, 9_500_000, 15_000_000])
+    assert 9_000_000 in times and 15_000_000 in times and 9_500_000 not in times  # peaks first, 1 s apart
+    assert len(times) == 6 and times == sorted(times)
+    assert all(abs(a - b) >= 1_000_000 for a, b in zip(times, times[1:]))
+    assert candidate_times(0, lambda out: out) == [0]
+
+
+def test_thumbnail_frame_choices(qapp, data_dir, ffmpeg_paths, sample_clips):
+    from tests.test_steps import _wait, _window
+    from ui.main_window.pages import DATA
+
+    window = _window(data_dir, ffmpeg_paths)
+    try:
+        window.import_files([str(sample_clips["mp4"])])
+        assert _wait(lambda: window.timeline.timeline is not None)
+        window.set_page(DATA)
+        editor = window.thumbnail_editor
+        assert _wait(lambda: len(editor.frame_buttons) >= 2)
+        second = editor.frame_buttons[1]
+        second.click()
+        assert window.project.thumbnail.source_us == second.property("source_us") and second.isChecked()
+        assert editor.scrub.maximum() == 2000  # the Short is 2 s
+        editor.scrub.setValue(1500)
+        assert _wait(lambda: window.project.thumbnail.source_us == 1_500_000)
+        assert not any(b.isChecked() for b in editor.frame_buttons)
+    finally:
+        window._set_dirty(False)
+        window.close()
+
+
+def test_file_name_from_clip_title(tmp_path):
+    from ui.export.export_dialog import default_output_path, title_file_name
+
+    assert title_file_name("ОГРАБЛЕНИЕ/САСЫЧА | #sasavot on #Twitch") == "ОГРАБЛЕНИЕ-САСЫЧА"
+    assert title_file_name('Что?! "да" : нет') == "Что! да нет"
+    source = tmp_path / "clip.mp4"
+    assert default_output_path(source, str(tmp_path), ".mp4", "Охота | #sasavot").name == "Охота.mp4"
+    (tmp_path / "Охота.mp4").write_bytes(b"x")
+    assert default_output_path(source, str(tmp_path), ".mp4", "Охота | x").name == "Охота_2.mp4"
+    assert default_output_path(source, str(tmp_path), ".mp4", "").name == "clip_short.mp4"
+
+
+def test_render_page_name_follows_title(qapp, data_dir, ffmpeg_paths, sample_clips, tmp_path):
+    from tests.test_steps import _wait, _window
+    from ui.main_window.pages import DATA, RENDER
+
+    w = _window(data_dir, ffmpeg_paths)
+    try:
+        w.import_files([str(sample_clips["mp4"])])
+        assert _wait(lambda: w.timeline.timeline is not None)
+        w.set_page(RENDER)
+        form = w.export_widget
+        assert form.name_edit.text() == "stream clip_short"
+        w.set_page(DATA)
+        w.metadata_panel.title_edit.setText("ОГРАБЛЕНИЕ/САСЫЧА | #sasavot on #Twitch")
+        w.set_page(RENDER)
+        assert form.name_edit.text() == "ОГРАБЛЕНИЕ-САСЫЧА"
+        form.name_edit.setText("моё имя")
+        w.set_page(DATA)
+        w.metadata_panel.title_edit.setText("Другое | x")
+        w.set_page(RENDER)
+        assert form.name_edit.text() == "моё имя"  # a typed name stays
+    finally:
+        w._set_dirty(False)
+        w.close()
+
+
+def test_blocks_can_be_turned_off(qapp, data_dir, ffmpeg_paths):
+    from app.config import AppConfig
+    from tests.test_steps import _window
+
+    w = _window(data_dir, ffmpeg_paths)
+    key = next(k for k in w.block_actions if k.endswith("/Zoom & pan"))
+    card = w.composition_panel.zoom_card
+    assert not card.isHidden()
+    w.block_actions[key].setChecked(False)
+    assert card.isHidden() and key in AppConfig.load(data_dir).hidden_blocks
+    w.composition_panel.refresh()  # the panel's own show/hide does not bring it back
+    face = w.composition_panel.face_card
+    face_key = next(k for k in w.block_actions if k.endswith("/Face"))
+    w.block_actions[face_key].setChecked(False)
+    w.composition.update_region("webcam", enabled=True)
+    assert face.isHidden()
+    assert "Data page/Thumbnail" in w.block_actions
+    w._set_dirty(False)
+    w.close()
+
+    again = _window(data_dir, ffmpeg_paths)
+    assert again.composition_panel.zoom_card.isHidden()
+    assert not again.block_actions[key].isChecked()
+    again._show_all_blocks()
+    assert not again.composition_panel.zoom_card.isHidden() and AppConfig.load(data_dir).hidden_blocks == []
+    again._set_dirty(False)
+    again.close()

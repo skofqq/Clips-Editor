@@ -190,3 +190,39 @@ def make_thumbnail(frame_png: bytes, composition: Composition, src_w: int, src_h
     """Source frame (PNG data) → the finished thumbnail."""
     source = QImage.fromData(frame_png)
     return draw_thumbnail(compose_frame(source, composition, src_w, src_h), design, title)
+
+
+def candidate_frames(ffmpeg: Path, video: Path, items, src_w: int, src_h: int,
+                     height: int = 160, cancel=None) -> list[tuple[int, QImage]]:
+    """Small composed frames for picking a cover: ``items`` are (source_us, composition)."""
+    from core.thumbnails.frame import grab_frame
+
+    result: list[tuple[int, QImage]] = []
+    for us, composition in items:
+        if cancel is not None and cancel.is_set():
+            break
+        try:
+            png = grab_frame(ffmpeg, video, us)
+        except Exception:  # noqa: BLE001 - a frame that cannot be read is skipped
+            continue
+        frame = compose_frame(QImage.fromData(png), composition, src_w, src_h)
+        result.append((int(us), frame.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)))
+    return result
+
+
+def candidate_times(output_us: int, to_source, peaks=(), count: int = 6, min_gap_us: int = 1_000_000) -> list[int]:
+    """Source times worth offering as covers: the loudest moments first (``peaks``,
+    source times), then evenly over the Short (``to_source`` maps output → source)."""
+    chosen: list[int] = []
+    for us in peaks:
+        if len(chosen) >= count // 2:
+            break
+        if all(abs(us - c) >= min_gap_us for c in chosen):
+            chosen.append(int(us))
+    for i in range(count):
+        if len(chosen) >= count:
+            break
+        us = int(to_source(int(output_us * (i + 0.5) / count)))
+        if all(abs(us - c) >= min_gap_us for c in chosen):
+            chosen.append(us)
+    return sorted(chosen)

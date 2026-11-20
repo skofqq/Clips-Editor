@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, QThreadPool
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from core.thumbnails.draw import jpeg_bytes, make_thumbnail, save_thumbnail
+from core.thumbnails.draw import candidate_frames, candidate_times, jpeg_bytes, make_thumbnail, save_thumbnail
 from core.thumbnails.frame import grab_frame
 from core.workers import Worker
 
@@ -30,26 +30,43 @@ class ThumbnailKeeper(QObject):
         self.image: QImage | None = None  # the finished thumbnail shown now
         editor.design_changed.connect(self._design_changed)
         editor.frame_requested.connect(self.use_playhead)
+        editor.frame_chosen.connect(self.use_frame)
+        editor.scrub_moved.connect(self._scrubbed)
+        self._candidates_key: tuple | None = None  # what the suggested frames were made for
         editor.save_requested.connect(self.save_as)
 
     # ------------------------------------------------------------ source
+    def _composition_at(self, us: int):
+        timeline = self.w.timeline.timeline
+        layout = None
+        if timeline is not None and timeline.segments:
+            layout = timeline.segments[timeline.layout_index_at(us)].layout
+        return (layout or self.w.main_layout).at(us)
+
+    def _length_us(self) -> int:
+        timeline, media = self.w.timeline.timeline, self.w.preview.media
+        if timeline is not None:
+            return timeline.output_us
+        return int(media.duration_s * 1e6) if media is not None else 0
+
+    def _to_source(self, out_us: int) -> int:
+        timeline = self.w.timeline.timeline
+        return timeline.output_to_source(out_us) if timeline is not None else int(out_us)
+
+    def _to_output(self, us: int) -> int:
+        timeline = self.w.timeline.timeline
+        return timeline.source_to_output(us) if timeline is not None else int(us)
+
     def source(self):
         """(video, source_us, composition, src_w, src_h) of the chosen frame, or None."""
         media = self.w.preview.media
         if media is None or not media.has_video or self.w.ffmpeg is None:
             return None
         design = self.w.project.thumbnail
-        timeline = self.w.timeline.timeline
         us = design.source_us
         if us is None:
-            if timeline is not None:
-                us = timeline.output_to_source(timeline.output_us // 4)
-            else:
-                us = int(media.duration_s * 1e6 / 4)
-        layout = None
-        if timeline is not None and timeline.segments:
-            layout = timeline.segments[timeline.layout_index_at(us)].layout
-        composition = (layout or self.w.main_layout).at(us)
+            us = self._to_source(self._length_us() // 4)
+        composition = self._composition_at(us)
         src_w, src_h = self.w.composition.source_size
         return media.path, int(us), composition, src_w, src_h
 
@@ -71,6 +88,9 @@ class ThumbnailKeeper(QObject):
             self.editor.set_image(None, "Open a clip first")
             return
         video, us, composition, sw, sh = src
+        self.editor.set_scrub(self._length_us(), self._to_output(us))
+        self.editor.mark_candidate(us)
+        self._refresh_candidates(video, sw, sh)
         key = (str(video), us)
         if self._frame is not None and self._frame[0] == key:
             self.image = make_thumbnail(self._frame[1], composition, sw, sh, self.w.project.thumbnail, title)
@@ -115,6 +135,42 @@ class ThumbnailKeeper(QObject):
             self.w._set_dirty(True)
         self.refresh()
         self.w._update_youtube_preview()
+
+    # ------------------------------------------------------------ suggested frames
+    def _refresh_candidates(self, video, sw: int, sh: int) -> None:
+        timeline = self.w.timeline.timeline
+        peaks = [h.peak_us for h in sorted(self.w.project.highlights_for(str(video)) or (), key=lambda h: -h.score)
+                 if timeline is None or timeline.segment_index_at(h.peak_us) is not None]
+        times = candidate_times(self._length_us(), self._to_source, peaks)
+        items = [(us, self._composition_at(us)) for us in times]
+        key = (str(video), tuple(items), sw, sh)
+        if key == self._candidates_key:
+            return
+        self._candidates_key = key
+        self.editor.set_candidates([])
+        self.editor.frames_hint.setText("Looking for good frames…")
+        worker = Worker(candidate_frames, self.w.ffmpeg.ffmpeg, video, items, sw, sh)
+        worker.signals.finished.connect(
+            lambda frames, k=key, t=worker: (self._running.discard(t), self._candidates_ready(k, frames)))
+        worker.signals.failed.connect(lambda _e, t=worker: self._running.discard(t))
+        self._running.add(worker)
+        QThreadPool.globalInstance().start(worker)
+
+    def _candidates_ready(self, key: tuple, frames) -> None:
+        if key == self._candidates_key:
+            src = self.source()
+            self.editor.set_candidates(frames, src[1] if src else None)
+
+    def use_frame(self, source_us: int) -> None:
+        design = replace(self.w.project.thumbnail, source_us=int(source_us))
+        self.editor.set_design(design)
+        self._design_changed(design)
+
+    def _scrubbed(self, output_us: int) -> None:
+        src = self.source()
+        if src is not None and self._to_output(src[1]) // 1000 == output_us // 1000:
+            return  # the slider only shows the frame already chosen
+        self.use_frame(self._to_source(output_us))
 
     def use_playhead(self) -> None:
         design = replace(self.w.project.thumbnail, source_us=int(self.w.composition.time_us))

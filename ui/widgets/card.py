@@ -14,6 +14,8 @@ class Card(QFrame):
     def __init__(self, title: str = "", subtitle: str = "", parent: QWidget | None = None,
                  label_width: int = 0) -> None:
         super().__init__(parent)
+        self._wanted = True  # what the app asks for (some cards come and go with the edit)
+        self._user_hidden = False  # the user turned this block off (View → Blocks)
         self.label_width = label_width  # equal label columns across several cards
         self.setObjectName("card")
         self.body = QVBoxLayout(self)
@@ -35,6 +37,19 @@ class Card(QFrame):
         self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.form.setLabelAlignment(self.form.labelAlignment())
         self.body.addLayout(self.form)
+
+    def setVisible(self, visible: bool) -> None:  # noqa: N802 - Qt override
+        self._wanted = bool(visible)
+        super().setVisible(self._wanted and not self._user_hidden)
+
+    def set_user_hidden(self, hidden: bool) -> None:
+        """Hide the block whatever the app wants; showing it again restores the app's choice."""
+        self._user_hidden = bool(hidden)
+        super().setVisible(self._wanted and not self._user_hidden)
+
+    @property
+    def user_hidden(self) -> bool:
+        return self._user_hidden
 
     def add_row(self, label, field=None) -> None:
         if field is None:

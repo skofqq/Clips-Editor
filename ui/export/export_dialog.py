@@ -63,13 +63,25 @@ log = logging.getLogger(__name__)
 AUDIO_BITRATES = (128, 160, 192, 256, 320)
 
 
-def default_output_path(source: Path, folder: str, extension: str) -> Path:
-    """``<folder>/<source name>_short.mp4``, numbered if the file exists."""
+def title_file_name(title: str) -> str:
+    """A file name from the clip title: everything before "|", without the
+    characters Windows refuses ("ОГРАБЛЕНИЕ/САСЫЧА | #sasavot" → "ОГРАБЛЕНИЕ-САСЫЧА")."""
+    name = (title or "").split("|")[0]
+    name = re.sub(r"[/\\]", "-", name)
+    name = re.sub(r'[<>:"|?*\x00-\x1f]', "", name)
+    name = re.sub(r"\s+", " ", name).strip().rstrip(".").strip()
+    return name[:120].rstrip()
+
+
+def default_output_path(source: Path, folder: str, extension: str, title: str = "") -> Path:
+    """``<folder>/<clip title>.mp4`` (or ``<source name>_short.mp4`` without a title),
+    numbered if the file exists."""
     base = Path(folder) if folder and Path(folder).is_dir() else source.parent
-    candidate = base / f"{source.stem}_short{extension}"
+    stem = title_file_name(title) or f"{source.stem}_short"
+    candidate = base / f"{stem}{extension}"
     number = 2
     while candidate.exists():
-        candidate = base / f"{source.stem}_short_{number}{extension}"
+        candidate = base / f"{stem}_{number}{extension}"
         number += 1
     return candidate
 
@@ -162,6 +174,7 @@ class ExportDialog(QDialog):
         self.folder_edit = QLineEdit(str(output.parent) if str(output) else "", self)
         self.folder_edit.setPlaceholderText("Folder")
         self.name_edit = QLineEdit(output.stem, self)
+        self._auto_name = output.stem  # the suggested name; replaced while the user has not typed their own
         self.name_edit.setPlaceholderText("File name")
         self.extension_label = QLabel(self)
         self.extension_label.setObjectName("muted")
@@ -575,6 +588,14 @@ class ExportDialog(QDialog):
     @property
     def busy(self) -> bool:
         return self._task is not None
+
+    def set_default_name(self, stem: str) -> None:
+        """A new suggested name (the clip title changed); kept out when the user typed a name."""
+        if self.busy or not stem:
+            return
+        if self.name_edit.text() == self._auto_name and stem != self._auto_name:
+            self.name_edit.setText(stem)
+        self._auto_name = stem if self.name_edit.text() == stem else self._auto_name
 
     def set_inputs(self, composition, timeline, captions=None, subtitle_style=None) -> None:
         """The edit changed while the page is open (same source clip)."""
