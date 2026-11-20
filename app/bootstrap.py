@@ -22,7 +22,7 @@ def load_theme() -> str:
 
 
 def create_application(argv: list[str], theme: str = "dark", mica: bool = False) -> QApplication:
-    """QApplication with the Fluent look. The theme must be chosen before any
+    """QApplication with the Twitch-coloured Material 3 look. The theme must be chosen before any
     other UI module is imported, because widgets read the colours then."""
     from ui.theme import palette
 

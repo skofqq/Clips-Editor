@@ -1,4 +1,4 @@
-"""Theme assets: the Fluent stylesheet (dark.qss), palette tokens and line icons.
+"""Theme assets: the Material 3 stylesheet in Twitch colours (m3.qss), palette tokens and line icons.
 
 Icons in ``icons/`` use ``currentColor`` so one file serves every tint.
 Glyphs the stylesheet needs (chevrons, check marks) are written to a small
@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 THEME_DIR = Path(__file__).resolve().parent
 ICON_DIR = THEME_DIR / "icons"
-STYLESHEET = THEME_DIR / "dark.qss"
+STYLESHEET = THEME_DIR / "m3.qss"
 ICON_SIZES = (16, 20, 24, 32, 40, 48)
 
 
@@ -79,7 +79,7 @@ _GLYPHS = {
                              'stroke-linecap="round" stroke-linejoin="round"/>',
     "check": '<path d="M3.5 8.4l2.9 2.9 6.1-6.6" fill="none" stroke="{a}" stroke-width="1.5" '
              'stroke-linecap="round" stroke-linejoin="round"/>',
-    "dot": '<circle cx="8" cy="8" r="3.6" fill="{a}"/>',
+    "dot": '<circle cx="8" cy="8" r="4" fill="{p}"/>',
 }
 
 
@@ -93,7 +93,7 @@ def glyph_dir() -> Path:
         for name, body in _GLYPHS.items():
             path = folder / f"{name}.svg"
             if not path.exists():
-                svg = body.format(c=palette.TEXT_SECONDARY, d=palette.TEXT_DISABLED, a=accent.on_fill)
+                svg = body.format(c=palette.TEXT_SECONDARY, d=palette.TEXT_DISABLED, a=accent.on_fill, p=accent.fill)
                 path.write_text(
                     f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">{svg}</svg>',
                     encoding="utf-8",
@@ -109,7 +109,6 @@ def stylesheet() -> str:
     except OSError as exc:
         log.warning("Theme not loaded: %s", exc)
         return ""
-    text = palette.theme_qss(text)
     for token, value in palette.tokens().items():
         text = text.replace(token, value)
     # Qt wants forward slashes in url(); the folder may contain spaces, so urls are quoted.

@@ -1,4 +1,4 @@
-"""Fluent "card": a rounded, slightly raised group with a title.
+"""M3 "card": a rounded surface (16px corners) with a title.
 
 Long forms are split into cards so the eye can find a section at a glance.
 ``card.form`` is a ready QFormLayout; ``card.body`` is the plain column it

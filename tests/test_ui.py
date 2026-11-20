@@ -308,15 +308,18 @@ def test_light_theme_translates_colours():
 
     try:
         assert palette.set_theme("light") == "light"
-        assert palette.is_light() and palette.BASE == "#f3f3f3" and palette.TEXT == "#1b1b1b"
-        assert palette.themed("#2d2d2d") == "#fdfdfd" and palette.themed("#ff4d9d") == "#ff4d9d"
+        assert palette.is_light() and palette.BASE == "#f7f7f8" and palette.TEXT == "#0e0e10"
+        # role colours and the older hard-coded greys both get their light twin
+        assert palette.themed("#2e2e35") == "#e6e6ea" and palette.themed("#2d2d2d") == "#e6e6ea"
+        assert palette.themed("#ff4d9d") == "#ff4d9d"
         qss = stylesheet()
-        assert "#202020" not in qss and "#f3f3f3" in qss and "@" not in qss.replace("@media", "")
-        assert palette.accent().on_fill in ("#ffffff", "#000000")
+        assert "#0e0e10" in qss and "#f7f7f8" in qss and "@" not in qss.replace("@media", "")
+        assert palette.accent().fill == palette.TWITCH_PURPLE and palette.accent().on_fill == "#ffffff"
         assert palette.resolve_theme("system") in ("dark", "light")
     finally:
         palette.set_theme("dark")
-    assert palette.BASE == "#202020" and "#202020" in stylesheet()
+    assert palette.BASE == "#0e0e10" and "#f7f7f8" not in stylesheet()
+    assert palette.themed("#202020") == "#0e0e10"
 
 
 def test_appearance_setting_is_saved(qapp, data_dir):

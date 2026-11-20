@@ -1,15 +1,14 @@
-"""Fluent Design (Windows 11) palette, light or dark, and the user's accent colour.
+"""Twitch-coloured Material 3 Expressive palette, dark or light.
 
-The constants below are the dark values. :func:`set_theme` switches the
-module to the light theme (WinUI light resources) before the UI is built;
-:func:`themed` and :func:`theme_qss` translate any dark colour used in a
-stylesheet or in painting code to its light counterpart.
+The app wears Twitch's brand colours so it feels at home next to the
+stream: the purple #9146FF as the primary colour and Twitch's near-black
+(dark) or soft-grey (light) surfaces. Shapes, buttons and states follow
+Material 3 Expressive in compact (desktop) density; see ``m3.qss``.
 
-The tokens follow WinUI's dark theme resources (solid equivalents of the
-semi-transparent fills over the Mica base). The accent comes from Windows
-(Settings → Personalization → Colors): dark mode uses the "Light 2" shade
-of the accent palette, as WinUI does. Elsewhere, or if the registry cannot
-be read, the default Windows blue is used. ``TSS_ACCENT=#rrggbb`` overrides it.
+The module constants hold the current theme's colours. :func:`set_theme`
+switches them before the UI is built; :func:`themed` and :func:`theme_qss`
+translate the older hard-coded dark greys still used in a few painting
+spots and small stylesheets. ``TSS_ACCENT=#rrggbb`` overrides the purple.
 """
 
 from __future__ import annotations
@@ -23,63 +22,105 @@ from functools import lru_cache
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------- neutrals
-BASE = "#202020"            # SolidBackgroundFillColorBase (window, Mica fallback)
-BASE_ALT = "#1c1c1c"        # SolidBackgroundFillColorSecondary
-LAYER = "#272727"           # LayerFillColorDefault over the base: panels / cards
-LAYER_ALT = "#2b2b2b"       # CardBackgroundFillColorDefault
-CONTROL = "#2d2d2d"         # ControlFillColorDefault
-CONTROL_HOVER = "#323232"   # ControlFillColorSecondary
-CONTROL_PRESSED = "#272727"  # ControlFillColorTertiary
-CONTROL_DISABLED = "#262626"
-INPUT_FOCUSED = "#1f1f1f"   # TextControlBackgroundFocused
-SUBTLE_HOVER = "#2a2a2a"    # SubtleFillColorSecondary over the base
-SUBTLE_PRESSED = "#262626"
-STROKE = "#363636"          # ControlStrokeColorDefault
-STROKE_STRONG = "#8a8a8a"   # ControlStrongStrokeColorDefault (unchecked boxes, input underline)
-DIVIDER = "#2f2f2f"         # DividerStrokeColorDefault
-CARD_STROKE = "#1d1d1d"     # CardStrokeColorDefault (darker edge)
-FLYOUT = "#2c2c2c"          # AcrylicInAppFillColorDefault (menus, popups)
-FLYOUT_STROKE = "#3b3b3b"
+TWITCH_PURPLE = "#9146ff"
+DEFAULT_ACCENT = TWITCH_PURPLE
 
-TEXT = "#ffffff"
-TEXT_SECONDARY = "#c5c5c5"
-TEXT_TERTIARY = "#9d9d9d"
-TEXT_DISABLED = "#5d5d5d"
-
-CRITICAL = "#ff99a4"        # SystemFillColorCritical (dark)
-CAUTION = "#fce100"
-SUCCESS = "#6ccb5f"
-
-DEFAULT_ACCENT = "#60cdff"  # Windows default blue, "Light 2" shade used in dark mode
-DEFAULT_ACCENT_BASE = "#0078d4"
-DEFAULT_ACCENT_LIGHT = "#005fb8"  # "Dark 1" shade used in light mode
+# Role → colour, dark (Twitch dark mode) and light (Twitch light mode).
+_ROLES = {
+    "dark": {
+        "BASE": "#0e0e10",            # window background
+        "BASE_ALT": "#09090b",        # recessed areas: timeline, page bar
+        "LAYER": "#18181b",           # panels, cards
+        "LAYER_ALT": "#1f1f23",       # raised cards, dialogs
+        "CONTROL": "#2e2e35",         # tonal buttons, chips
+        "CONTROL_HOVER": "#3a3a42",
+        "CONTROL_PRESSED": "#26262c",
+        "CONTROL_DISABLED": "#1f1f23",
+        "INPUT": "#1f1f23",           # text fields
+        "INPUT_FOCUSED": "#0e0e10",
+        "SUBTLE_HOVER": "#26262c",    # state layer on surfaces
+        "SUBTLE_PRESSED": "#1f1f23",
+        "STROKE": "#35353b",          # outline-variant
+        "STROKE_STRONG": "#6b6b78",   # outline: unchecked boxes, field borders
+        "DIVIDER": "#26262c",
+        "CARD_STROKE": "#232328",
+        "FLYOUT": "#1f1f23",          # menus, popups
+        "FLYOUT_STROKE": "#35353b",
+        "TEXT": "#efeff1",
+        "TEXT_SECONDARY": "#adadb8",
+        "TEXT_TERTIARY": "#848494",
+        "TEXT_DISABLED": "#53535f",
+        "INVERSE": "#efeff1",         # tooltips
+        "ON_INVERSE": "#0e0e10",
+        "CRITICAL": "#ff8280",
+        "CAUTION": "#ffca5f",
+        "SUCCESS": "#00f593",
+    },
+    "light": {
+        "BASE": "#f7f7f8",
+        "BASE_ALT": "#efeff1",
+        "LAYER": "#ffffff",
+        "LAYER_ALT": "#ffffff",
+        "CONTROL": "#e6e6ea",
+        "CONTROL_HOVER": "#dcdce1",
+        "CONTROL_PRESSED": "#d2d2d8",
+        "CONTROL_DISABLED": "#efeff1",
+        "INPUT": "#f2f2f4",
+        "INPUT_FOCUSED": "#ffffff",
+        "SUBTLE_HOVER": "#ececef",
+        "SUBTLE_PRESSED": "#e3e3e7",
+        "STROKE": "#dedee3",
+        "STROKE_STRONG": "#9a9aa6",
+        "DIVIDER": "#e6e6ea",
+        "CARD_STROKE": "#e6e6ea",
+        "FLYOUT": "#ffffff",
+        "FLYOUT_STROKE": "#dedee3",
+        "TEXT": "#0e0e10",
+        "TEXT_SECONDARY": "#53535f",
+        "TEXT_TERTIARY": "#6e6e7a",
+        "TEXT_DISABLED": "#aeaeb8",
+        "INVERSE": "#18181b",
+        "ON_INVERSE": "#efeff1",
+        "CRITICAL": "#d20000",
+        "CAUTION": "#9d5d00",
+        "SUCCESS": "#00824f",
+    },
+}
+_NAMES = tuple(_ROLES["dark"])
+globals().update(_ROLES["dark"])
 
 DARK, LIGHT, SYSTEM = "dark", "light", "system"
 THEMES = (SYSTEM, DARK, LIGHT)
 
-# Every dark colour used by the stylesheet or painting code → its light twin.
-_LIGHT = {
-    "#202020": "#f3f3f3", "#1c1c1c": "#eeeeee", "#1d1d1d": "#e5e5e5", "#1f1f1f": "#ffffff",
-    "#222222": "#f6f6f6", "#252525": "#fbfbfb", "#262626": "#f5f5f5", "#272727": "#f9f9f9",
-    "#2a2a2a": "#e8e8e8", "#2b2b2b": "#fbfbfb", "#2c2c2c": "#fcfcfc", "#2d2d2d": "#fdfdfd",
-    "#2f2f2f": "#e1e1e1", "#303030": "#e0e0e0", "#323232": "#f6f6f6", "#333333": "#ededed",
-    "#363636": "#e5e5e5", "#383838": "#e8e8e8", "#3a3a3a": "#e6e6e6", "#3b3b3b": "#dedede",
-    "#3d3d3d": "#d6d6d6", "#414141": "#dcdcdc", "#444444": "#cfcfcf", "#454545": "#ffffff",
-    "#5d5d5d": "#a3a3a3", "#6a6a6a": "#a8a8a8", "#8a8a8a": "#868686", "#9a9a9a": "#b0b0b0",
-    "#9d9d9d": "#707070", "#c5c5c5": "#5d5d5d", "#ffffff": "#1b1b1b",
-    "#ff99a4": "#c42b1c", "#fce100": "#9d5d00", "#6ccb5f": "#0f7b0f",
-    "#2f5a3f": "#cfe8d6", "#dfffee": "#0d3b1e",
+# Older hard-coded dark greys (Fluent era) → the role that replaced them.
+_LEGACY = {
+    "#202020": "BASE", "#1c1c1c": "BASE_ALT", "#1d1d1d": "CARD_STROKE", "#1f1f1f": "INPUT_FOCUSED",
+    "#222222": "LAYER", "#252525": "LAYER", "#262626": "CONTROL_DISABLED", "#272727": "LAYER",
+    "#2a2a2a": "SUBTLE_HOVER", "#2b2b2b": "LAYER_ALT", "#2c2c2c": "FLYOUT", "#2d2d2d": "CONTROL",
+    "#2f2f2f": "DIVIDER", "#303030": "STROKE", "#323232": "CONTROL_HOVER", "#333333": "STROKE",
+    "#363636": "STROKE", "#383838": "CONTROL_HOVER", "#3a3a3a": "STROKE", "#3b3b3b": "FLYOUT_STROKE",
+    "#3d3d3d": "STROKE", "#414141": "CONTROL_HOVER", "#444444": "STROKE", "#454545": "CONTROL_HOVER",
+    "#5d5d5d": "TEXT_DISABLED", "#6a6a6a": "STROKE_STRONG", "#8a8a8a": "STROKE_STRONG",
+    "#9a9a9a": "TEXT_TERTIARY", "#9d9d9d": "TEXT_TERTIARY", "#c5c5c5": "TEXT_SECONDARY",
+    "#ffffff": "TEXT", "#ff99a4": "CRITICAL", "#fce100": "CAUTION", "#6ccb5f": "SUCCESS",
 }
-_NAMES = (
-    "BASE", "BASE_ALT", "LAYER", "LAYER_ALT", "CONTROL", "CONTROL_HOVER", "CONTROL_PRESSED",
-    "CONTROL_DISABLED", "INPUT_FOCUSED", "SUBTLE_HOVER", "SUBTLE_PRESSED", "STROKE", "STROKE_STRONG",
-    "DIVIDER", "CARD_STROKE", "FLYOUT", "FLYOUT_STROKE", "TEXT", "TEXT_SECONDARY", "TEXT_TERTIARY",
-    "TEXT_DISABLED", "CRITICAL", "CAUTION", "SUCCESS",
-)
-_DARK_VALUES = {name: globals()[name] for name in _NAMES}
+# Non-role colours that still need a light twin.
+_LIGHT_EXTRA = {"#2f5a3f": "#c8f0dc", "#dfffee": "#0d3b1e"}
+
 _current = DARK
 _HEX = re.compile(r"#[0-9a-fA-F]{6}\b")
+
+
+def _theme_map(theme: str) -> dict[str, str]:
+    roles = _ROLES[theme]
+    result = {old: roles[name] for old, name in _LEGACY.items()}
+    if theme == LIGHT:
+        result.update({value: roles[name] for name, value in _ROLES[DARK].items() if value not in result})
+        result.update(_LIGHT_EXTRA)
+    return result
+
+
+_MAPS = {DARK: _theme_map(DARK), LIGHT: _theme_map(LIGHT)}
 
 
 def windows_prefers_light() -> bool:
@@ -109,8 +150,7 @@ def set_theme(name: str) -> str:
     before the UI is created: widgets read the colours when they are built."""
     global _current
     _current = resolve_theme(name)
-    for key, value in _DARK_VALUES.items():
-        globals()[key] = themed(value)
+    globals().update(_ROLES[_current])
     accent.cache_clear()
     return _current
 
@@ -124,17 +164,15 @@ def is_light() -> bool:
 
 
 def themed(color: str) -> str:
-    """The colour to use for dark-theme ``color`` in the current theme."""
-    if _current != LIGHT:
-        return color
-    return _LIGHT.get(color.lower(), color)
+    """The current-theme colour for a dark-theme ``color`` (role colours and
+    the older hard-coded greys are translated; anything else is kept)."""
+    return _MAPS[_current].get(color.lower(), color)
 
 
 def theme_qss(text: str) -> str:
-    """Translate every dark colour in a stylesheet to the current theme."""
-    if _current != LIGHT:
-        return text
-    return _HEX.sub(lambda m: _LIGHT.get(m.group(0).lower(), m.group(0)), text)
+    """Translate every known dark colour in a stylesheet to the current theme."""
+    table = _MAPS[_current]
+    return _HEX.sub(lambda m: table.get(m.group(0).lower(), m.group(0)), text)
 
 
 def _hex(r: int, g: int, b: int) -> str:
@@ -161,63 +199,47 @@ def luminance(color: str) -> float:
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
-def _windows_accent(light: bool = False) -> str | None:
-    """Light 2 (dark theme) or Dark 1 (light theme) shade of the Windows accent."""
-    if sys.platform != "win32":
-        return None
-    try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent") as key:
-            palette, _ = winreg.QueryValueEx(key, "AccentPalette")
-        if isinstance(palette, (bytes, bytearray)) and len(palette) >= 8:
-            i = 16 if light else 4  # RGBA entries: Light3, Light2, Light1, Base, Dark1, ...
-            if len(palette) >= i + 3:
-                return _hex(palette[i], palette[i + 1], palette[i + 2])
-    except OSError as exc:
-        log.debug("No accent palette: %s", exc)
-    try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\DWM") as key:
-            value, _ = winreg.QueryValueEx(key, "AccentColor")  # 0xAABBGGRR
-        r, g, b = value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF
-        return mix(_hex(r, g, b), "#000000", 0.25) if light else mix(_hex(r, g, b), "#ffffff", 0.45)
-    except OSError as exc:
-        log.debug("No accent colour: %s", exc)
-    return None
-
-
 @dataclass(frozen=True)
 class Accent:
-    fill: str          # accent buttons, checked boxes, slider, selection indicator
+    fill: str          # filled buttons, checked boxes, slider, selection indicator
     hover: str
     pressed: str
-    on_fill: str       # text / glyphs on the accent fill
-    text: str          # accent used as text or lines on the dark base
-    soft: str          # faint accent tint for selections on canvases
+    on_fill: str       # text / glyphs on the fill
+    text: str          # the accent used as text or lines on the surfaces
+    soft: str          # faint tint for selections on canvases
+    container: str     # M3 primary container: selected chips, active nav item
+    on_container: str
 
     def tokens(self) -> dict[str, str]:
         return {
             "@ACCENT@": self.fill, "@ACCENT_HOVER@": self.hover, "@ACCENT_PRESSED@": self.pressed,
             "@ON_ACCENT@": self.on_fill, "@ACCENT_TEXT@": self.text, "@ACCENT_SOFT@": self.soft,
+            "@ACCENT_CONTAINER@": self.container, "@ON_ACCENT_CONTAINER@": self.on_container,
         }
 
 
 def make_accent(fill: str) -> Accent:
     dark_text = luminance(fill) > 0.35
+    on_fill = "#000000" if dark_text else "#ffffff"
     if is_light():
-        text = fill if luminance(fill) < 0.25 else mix(fill, "#000000", 0.35)
+        text = fill if luminance(fill) < 0.12 else mix(fill, "#000000", 0.3)
+        container = mix("#ffffff", fill, 0.16)
+        on_container = mix(fill, "#000000", 0.55)
     else:
         text = fill if luminance(fill) > 0.18 else mix(fill, "#ffffff", 0.45)
+        container = mix(LAYER, fill, 0.32)
+        on_container = mix(fill, "#ffffff", 0.75)
+    # Like Twitch: a darker shade on hover and press (lighter for pale accents).
+    shade = "#ffffff" if dark_text and not is_light() else "#000000"
     return Accent(
         fill=fill,
-        hover=mix(fill, BASE, 0.10),     # WinUI: AccentFillColorSecondary (90 % opacity)
-        pressed=mix(fill, BASE, 0.20),   # AccentFillColorTertiary (80 %)
-        on_fill="#000000" if dark_text else "#ffffff",
+        hover=mix(fill, shade, 0.16),
+        pressed=mix(fill, shade, 0.30),
+        on_fill=on_fill,
         text=text,
-        soft=mix(BASE, fill, 0.22 if not is_light() else 0.16),
+        soft=mix(BASE, fill, 0.16 if is_light() else 0.24),
+        container=container,
+        on_container=on_container,
     )
 
 
@@ -226,14 +248,15 @@ def accent() -> Accent:
     override = os.environ.get("TSS_ACCENT", "").strip()
     if re.fullmatch(r"#?[0-9a-fA-F]{6}", override):
         return make_accent("#" + override.lstrip("#").lower())
-    if is_light():
-        return make_accent(_windows_accent(light=True) or DEFAULT_ACCENT_LIGHT)
-    return make_accent(_windows_accent() or DEFAULT_ACCENT)
+    return make_accent(TWITCH_PURPLE)
 
 
 def tokens() -> dict[str, str]:
-    """Placeholders used in the stylesheet."""
-    return accent().tokens()
+    """Placeholders used in the stylesheet: ``@ROLE@`` for every palette role
+    plus the accent tokens."""
+    result = {f"@{name}@": globals()[name] for name in _NAMES}
+    result.update(accent().tokens())
+    return result
 
 
 # One colour per speaker (Find speakers). Mid tones that keep dark word text
