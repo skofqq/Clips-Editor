@@ -152,6 +152,9 @@ class MainWindow(QMainWindow):
         self._edit_layout: QByteArray | None = None  # the Edit page's docks while another page is shown
         self._rendered: tuple | None = None  # (path, edit state) of the last export
         self._published: str = ""  # path of the last uploaded export
+        self.export_widget: ExportDialog | None = None  # the Render page's form
+        self._export_dialog: ExportDialog | None = None
+        self.upload_widget: UploadDialog | None = None  # the Publish page's form
 
         self.media_panel = MediaPanel(self)
         self.properties_panel = PropertiesPanel(self)  # media info
@@ -177,12 +180,14 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self.data_page)
         self.render_page = StepPage(
             "Render", "Export the edited Short to a video file: format, quality, loudness, subtitles.",
-            "Export video…", "export", self)
-        self.page_stack.addWidget(page_scroll(self.render_page, self, 720))
+            "", "export", self)
+        self.render_page.action_button.hide()  # the form below has the Render button
+        self.page_stack.addWidget(page_scroll(self.render_page, self, 820))
         self.publish_page = StepPage(
             "Publish", "Upload the exported video to YouTube with the title, description and tags from Data.",
-            "Upload to YouTube…", "youtube", self)
-        self.page_stack.addWidget(page_scroll(self.publish_page, self, 720))
+            "Choose another file…", "folder", self)
+        self.publish_page.action_button.setObjectName("")
+        self.page_stack.addWidget(page_scroll(self.publish_page, self, 820))
 
         composition_scroll = QScrollArea(self)
         composition_scroll.setWidgetResizable(True)
@@ -321,8 +326,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _=False, i=index: self.set_page(i))
             self.addAction(action)
             self.page_actions.append(action)
-        self.render_page.action_requested.connect(self.act_export.trigger)
-        self.publish_page.action_requested.connect(self._publish_latest)
+        self.publish_page.action_requested.connect(self._choose_and_upload)
 
     # --------------------------------------------------------------- pages
     @property
@@ -339,7 +343,13 @@ class MainWindow(QMainWindow):
                 self._edit_layout = self.saveState(LAYOUT_VERSION)
                 for dock in self._docks():
                     dock.hide()
+            if self._page == RENDER:
+                self._save_export_settings()
+            if self._page == PUBLISH:
+                self._save_upload_defaults()
             self.page_stack.setCurrentIndex(index)
+            if index == PUBLISH:
+                self._sync_publish_page()
             if index == EDIT and self._edit_layout is not None:
                 self.restoreState(self._edit_layout, LAYOUT_VERSION)
                 self._edit_layout = None
@@ -373,23 +383,26 @@ class MainWindow(QMainWindow):
         self.page_bar.set_done(PUBLISH, rendered is not None and self._published == str(rendered))
         if timeline is None:
             self.render_page.set_status("Import a clip and edit it on the Edit page first.", False)
+        elif self.ffmpeg is None:
+            self.render_page.set_status("FFmpeg was not found: run tools\\setup_ffmpeg.py, then restart.", False)
         else:
             text = f"Length of the Short: <b>{format_timecode(timeline.output_us)}</b>"
             if rendered is not None:
-                text += f"<br>Exported: {rendered}"
+                text += f" · <span style='color:{palette.SUCCESS}'>✓ exported</span>: {rendered}"
             elif self._rendered is not None:
-                text += "<br>The edit changed since the last export: export again."
-            self.render_page.set_status(text, self.ffmpeg is not None and self.preview.media is not None)
+                text += " · the edit changed since the last export: render again."
+            self.render_page.set_status(text, True)
+        if self._page == RENDER:
+            self._sync_render_page()
         title = metadata.title.strip() or "<i>no title yet: fill it in on the Data page</i>"
-        if rendered is None:
-            self.publish_page.set_status(f"Title: {title}<br>Export the video on the Render page first, "
-                                         "or pick a file to upload.", True)
+        if rendered is not None and self._published == str(rendered):
+            self.publish_page.set_status(f"<span style='color:{palette.SUCCESS}'>✓ Uploaded</span>: {rendered}")
+        elif rendered is not None:
+            self.publish_page.set_status(f"Ready to upload: {rendered}<br>Title: {title}")
+        elif self.upload_widget is not None:
+            self.publish_page.set_status(f"File: {self.upload_widget.file}<br>Title: {title}")
         else:
-            done = "<br><b>Uploaded.</b>" if self._published == str(rendered) else ""
-            self.publish_page.set_status(f"Title: {title}<br>File: {rendered}{done}", True)
-
-    def _publish_latest(self) -> None:
-        self.upload_to_youtube(self._rendered_path())
+            self.publish_page.set_status("Export the video on the Render page first, or choose a file to upload.")
 
     def _add_dock(self, title: str, name: str, widget: QWidget, area: Qt.DockWidgetArea) -> QDockWidget:
         dock = QDockWidget(title, self)
@@ -1077,31 +1090,55 @@ class MainWindow(QMainWindow):
             dialog.set_encoders(self.encoders)
 
     def export_video(self) -> None:
+        """Ctrl+E: the Render page, where the export settings live."""
         media, timeline = self.preview.media, self.timeline.timeline
-        composition = self.main_layout
         if media is None or media.video is None or timeline is None or self.ffmpeg is None:
             return
-        if self.preview.is_playing:
-            self.preview.pause()
-        defaults = RenderSettings(width=composition.output_w, height=composition.output_h)
-        settings = RenderSettings.from_dict(self.config.export_settings) if self.config.export_settings else defaults
-        output = default_output_path(Path(media.path), self.config.export_dir, settings.extension)
+        self.set_page(RENDER)
+
+    def _sync_render_page(self) -> None:
+        """Keep the export form on the Render page in step with the current clip and edit."""
+        media, timeline = self.preview.media, self.timeline.timeline
+        form = self.export_widget
+        if media is None or media.video is None or timeline is None or self.ffmpeg is None:
+            if form is not None and not form.busy:
+                self._save_export_settings()
+                self.render_page.set_content(None)
+                self.export_widget = self._export_dialog = None
+            return
         self._refresh_subtitles()
-        dialog = ExportDialog(
-            media, composition, timeline, self.ffmpeg, settings, output, self.encoders, self,
-            upload=self.upload_to_youtube,
-            captions=self.captions, subtitle_style=self.subtitles_panel.style(),
-        )
-        self._export_dialog = dialog
-        try:
-            dialog.exec()
-        finally:
-            self._export_dialog = None
-        self.config.export_settings = dialog.settings().to_dict()
-        self.config.export_dir = str(dialog.output_path().parent)
-        if dialog.result_path is not None:
-            self._rendered = (Path(dialog.result_path), self._render_state())
-            self.statusBar().showMessage(f"Exported {dialog.result_path}", 8000)
+        style = self.subtitles_panel.style()
+        if form is not None and not form.busy and Path(form.source.path) != Path(media.path):
+            self._save_export_settings()
+            self.render_page.set_content(None)
+            form = None
+        if form is None:
+            composition = self.main_layout
+            defaults = RenderSettings(width=composition.output_w, height=composition.output_h)
+            settings = (RenderSettings.from_dict(self.config.export_settings) if self.config.export_settings
+                        else defaults)
+            output = default_output_path(Path(media.path), self.config.export_dir, settings.extension)
+            form = ExportDialog(media, composition, timeline, self.ffmpeg, settings, output, self.encoders, None,
+                                upload=self.upload_to_youtube, captions=self.captions, subtitle_style=style)
+            form.embed()
+            form.rendered.connect(self._export_finished)
+            self.render_page.set_content(form)
+            self.export_widget = self._export_dialog = form
+        else:
+            form.set_inputs(self.main_layout, timeline, self.captions, style)
+
+    def _save_export_settings(self) -> None:
+        form = self.export_widget
+        if form is not None:
+            self.config.export_settings = form.settings().to_dict()
+            folder = form.folder_edit.text().strip()
+            if folder:
+                self.config.export_dir = folder
+
+    def _export_finished(self, path) -> None:
+        self._save_export_settings()
+        self._rendered = (Path(path), self._render_state())
+        self.statusBar().showMessage(f"Exported {path}", 8000)
         self._refresh_steps()
 
     # -------------------------------------------------------------- youtube
@@ -1111,14 +1148,13 @@ class MainWindow(QMainWindow):
         self.config.save()  # account list (no secrets) and the active channel
 
     def upload_to_youtube(self, path: Path | None = None) -> None:
+        """The Publish page with the upload form for ``path`` (the last export when None)."""
         if path is None:
-            start = self.config.export_dir or self.config.last_import_dir
-            file, _ = QFileDialog.getOpenFileName(
-                self, "Upload to YouTube", start, "Rendered video (*.mp4 *.mkv *.mov *.webm);;All files (*)"
-            )
-            if not file:
+            path = self._rendered_path()
+        if path is None:
+            path = self._choose_upload_file()
+            if path is None:
                 return
-            path = Path(file)
         sources = {str(Path(m.path)).casefold() for m in self.project.media}
         if str(Path(path)).casefold() in sources:
             QMessageBox.warning(
@@ -1126,18 +1162,58 @@ class MainWindow(QMainWindow):
                 "This is a source clip of the project. Export the edited video first (Ctrl+E) and upload that.",
             )
             return
-        dialog = UploadDialog(
-            self.youtube, self.upload_history, Path(path), self.ffmpeg.ffprobe if self.ffmpeg else None,
-            self.config.youtube_defaults, self.manage_youtube_accounts, self,
+        self._show_upload_form(Path(path))
+        self.set_page(PUBLISH)
+
+    def _choose_upload_file(self) -> Path | None:
+        start = self.config.export_dir or self.config.last_import_dir
+        file, _ = QFileDialog.getOpenFileName(
+            self, "Upload to YouTube", start, "Rendered video (*.mp4 *.mkv *.mov *.webm);;All files (*)"
+        )
+        return Path(file) if file else None
+
+    def _choose_and_upload(self) -> None:
+        path = self._choose_upload_file()
+        if path is not None:
+            self.upload_to_youtube(path)
+
+    def _show_upload_form(self, path: Path, fresh: bool = False) -> None:
+        form = self.upload_widget
+        if form is not None and (form.busy or (form.file == path and not fresh)):
+            return
+        self._save_upload_defaults()
+        form = UploadDialog(
+            self.youtube, self.upload_history, path, self.ffmpeg.ffprobe if self.ffmpeg else None,
+            self.config.youtube_defaults, self.manage_youtube_accounts, None,
             metadata=self.project.metadata,
             captions=self.captions,
             captions_language=getattr(self.transcript.transcript, "language", "") or "",
         )
-        dialog.exec()
-        self.config.youtube_defaults = dialog.defaults()
-        if dialog.result is not None:
-            self._published = str(Path(path))
-            self.statusBar().showMessage(f"Uploaded to YouTube: {dialog.result.url}", 10000)
+        form.embed()
+        form.uploaded.connect(lambda result, f=form: self._upload_finished(f, result))
+        for combo in (form.category_combo, form.privacy_combo, form.language_combo):
+            combo.currentIndexChanged.connect(lambda _i: self._save_upload_defaults())
+        self.publish_page.set_content(form)
+        self.upload_widget = form
+
+    def _sync_publish_page(self) -> None:
+        """Fill the upload form with the latest export and the Data page's metadata."""
+        form = self.upload_widget
+        if form is not None and (form.busy or form.result is not None):
+            return  # uploading, or showing what was uploaded
+        rendered = self._rendered_path()
+        path = rendered or (form.file if form is not None else None)
+        if path is not None:
+            self._show_upload_form(Path(path), fresh=True)
+
+    def _save_upload_defaults(self) -> None:
+        if self.upload_widget is not None:
+            self.config.youtube_defaults = self.upload_widget.defaults()
+
+    def _upload_finished(self, form, result) -> None:
+        self._save_upload_defaults()
+        self._published = str(form.file)
+        self.statusBar().showMessage(f"Uploaded to YouTube: {result.url}", 10000)
         self._refresh_steps()
 
     # --------------------------------------------------------------- twitch
@@ -1695,9 +1771,21 @@ class MainWindow(QMainWindow):
             self.import_files(videos)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        running = [name for name, form in (("rendering", self.export_widget), ("uploading", self.upload_widget))
+                   if form is not None and form.busy]
+        if running:
+            answer = QMessageBox.question(self, APP_NAME, f"Still {' and '.join(running)}. Stop and quit?")
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         if not self._confirm_discard():
             event.ignore()
             return
+        for form, stop in ((self.export_widget, "cancel_render"), (self.upload_widget, "cancel_upload")):
+            if form is not None and form.busy:
+                getattr(form, stop)()
+        self._save_export_settings()
+        self._save_upload_defaults()
         if self._transcribe_task is not None:
             self._transcribe_task.cancel()
         self.edit_playback.shutdown()

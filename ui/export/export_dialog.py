@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, Qt, QUrl
+from PySide6.QtCore import QThreadPool, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -75,6 +75,11 @@ def default_output_path(source: Path, folder: str, extension: str) -> Path:
 
 
 class ExportDialog(QDialog):
+    """Export settings, progress and result. Shown inside the Render page
+    (:meth:`embed`) or, for scripts and tests, as a dialog."""
+
+    rendered = Signal(object)  # Path of a finished export
+
     def __init__(
         self,
         source: MediaInfo,
@@ -531,6 +536,27 @@ class ExportDialog(QDialog):
         if self._close_when_stopped:
             super().reject()
 
+    def embed(self) -> None:
+        """Live inside a page instead of a window: no title bar, no Close."""
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setMinimumWidth(0)
+        self.close_button.hide()
+
+    @property
+    def busy(self) -> bool:
+        return self._task is not None
+
+    def set_inputs(self, composition, timeline, captions=None, subtitle_style=None) -> None:
+        """The edit changed while the page is open (same source clip)."""
+        if self.busy:
+            return
+        self.composition, self.timeline = composition, timeline
+        self.captions = list(captions or [])
+        self.subtitle_style = subtitle_style
+        if hasattr(self, "subtitles_check"):
+            self.subtitles_check.setEnabled(bool(self.captions))
+        self._update_summary()
+
     def _on_finished(self, result) -> None:
         self.result_path = result.path
         size_mb = result.size_bytes / 1_048_576
@@ -544,6 +570,7 @@ class ExportDialog(QDialog):
         self.open_button.setVisible(True)
         self.upload_button.setVisible(self.upload is not None)
         self._finish()
+        self.rendered.emit(result.path)
 
     def _on_failed(self, error) -> None:
         message = str(error) if isinstance(error, RenderError) else f"Unexpected error: {error}"

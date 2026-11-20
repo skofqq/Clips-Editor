@@ -398,25 +398,19 @@ def test_window_stores_metadata_and_prefills_upload(qapp, data_dir, ffmpeg_paths
     w.open_project(tmp_path / "m.tssproj")
     assert panel.title_edit.text() == "Танк | #sasavot on #Twitch" and not w._dirty
 
-    shown = {}
-
-    class FakeDialog:
-        def __init__(self, *args, metadata=None, **kwargs):
-            shown["metadata"] = metadata
-            self.result = None
-
-        def exec(self):
-            return 0
-
-        def defaults(self):
-            return {}
-
-    monkeypatch.setattr("ui.main_window.main_window.UploadDialog", FakeDialog)
     rendered = tmp_path / "out.mp4"
     rendered.write_bytes(Path(sample_clips["mp4"]).read_bytes())
-    w.upload_to_youtube(rendered)
-    assert shown["metadata"].title == "Танк | #sasavot on #Twitch"
-    assert upload_mod  # module imported fine
+    w.upload_to_youtube(rendered)  # the Publish page with the form filled from Data
+    from ui.main_window.pages import PUBLISH
+
+    form = w.upload_widget
+    assert w.page == PUBLISH and isinstance(form, upload_mod.UploadDialog) and not form.isWindow()
+    assert form.title_edit.text() == "Танк | #sasavot on #Twitch"
+    # The chosen category is kept for the next upload, over the template's one.
+    form.category_combo.setCurrentIndex(form.category_combo.findData("24"))
+    assert w.config.youtube_defaults["category"] == "24"
+    w._show_upload_form(rendered, fresh=True)
+    assert w.upload_widget.category_combo.currentData() == "24"
     w._dirty = False
     w.close()
 
@@ -436,8 +430,9 @@ def test_upload_dialog_uses_project_metadata(qapp, data_dir, tmp_path, ffmpeg_pa
     dialog = UploadDialog(service, UploadHistory(tmp_path / "h.json"), rendered, ffmpeg_paths.ffprobe,
                           {"tags": "old", "category": "20"}, metadata=meta)
     m = dialog.metadata()
-    assert (m.title, m.description, m.tags, m.category_id) == ("Мой заголовок", "Описание", ("twitch", "gta vi"), "24")
-    assert "Metadata tab" in dialog.note_label.text()
+    # The category chosen last time wins over the template's one.
+    assert (m.title, m.description, m.tags, m.category_id) == ("Мой заголовок", "Описание", ("twitch", "gta vi"), "20")
+    assert "Data page" in dialog.note_label.text()
     assert dialog.defaults()["tags"] == "old"  # project tags do not leak into the global defaults
     dialog.close()
 

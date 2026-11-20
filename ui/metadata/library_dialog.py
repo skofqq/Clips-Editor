@@ -56,7 +56,7 @@ ROLE_ID = Qt.ItemDataRole.UserRole + 1
 
 TEMPLATE_HELP = (
     "Variables: " + " ".join("{" + v + "}" for v in BUILTIN_VARIABLES)
-    + " and your own (set them on the Metadata tab as name = value).\n"
+    + " and your own (set them on the Data page as name = value).\n"
     "[[ … ]] marks an optional part: it is left out when a variable inside is empty. "
     "A line whose variables are all empty is left out too, so “Game: {game}” disappears without a game."
 )

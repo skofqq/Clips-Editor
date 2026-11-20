@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QDateTime, QThreadPool, Qt, QUrl
+from PySide6.QtCore import QDateTime, QThreadPool, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -76,6 +76,10 @@ def _upload(client, path, metadata, progress=None, cancel=None, captions_srt="",
 
 
 class UploadDialog(QDialog):
+    """Upload form. Shown inside the Publish page (:meth:`embed`) or as a dialog."""
+
+    uploaded = Signal(object)  # UploadResult
+
     def __init__(
         self,
         service: YouTubeService,
@@ -220,7 +224,8 @@ class UploadDialog(QDialog):
             self.title_edit.setText(metadata.title)
             self.description_edit.setPlainText(metadata.description)
             self.tags_edit.setText(", ".join(metadata.tags))
-            if metadata.generated is not None and metadata.generated.category_id:
+            # The template's category only when no category was chosen before (the last choice wins).
+            if metadata.generated is not None and metadata.generated.category_id and "category" not in defaults:
                 self._select(self.category_combo, metadata.generated.category_id)
 
         for signal in (self.title_edit.textChanged, self.description_edit.textChanged, self.tags_edit.textChanged,
@@ -328,7 +333,7 @@ class UploadDialog(QDialog):
         self.problems_label.setVisible(bool(issues))
         notes = list(getattr(self, "_file_notes", []))
         if getattr(self, "from_metadata", False):
-            notes.append("Title, description and tags come from the project's Metadata tab; changes here "
+            notes.append("Title, description and tags come from the Data page; changes here "
                          "apply to this upload only.")
         if meta.publish_at is not None:
             notes.append("Scheduled videos stay private until the chosen time, then become public.")
@@ -438,6 +443,7 @@ class UploadDialog(QDialog):
         self.copy_button.setVisible(True)
         self._finish()
         self.upload_button.setText("Upload again")
+        self.uploaded.emit(result)
 
     def _on_failed(self, error) -> None:
         message = str(error) if isinstance(error, YouTubeError) else f"Unexpected error: {error}"
@@ -461,6 +467,16 @@ class UploadDialog(QDialog):
     def open_video(self) -> None:
         if self.result is not None:
             QDesktopServices.openUrl(QUrl(self.result.url))
+
+    def embed(self) -> None:
+        """Live inside a page instead of a window: no title bar, no Close."""
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setMinimumWidth(0)
+        self.close_button.hide()
+
+    @property
+    def busy(self) -> bool:
+        return self._task is not None
 
     # ------------------------------------------------------------ closing
     def reject(self) -> None:

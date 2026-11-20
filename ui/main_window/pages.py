@@ -146,9 +146,27 @@ class StepPage(QWidget):
         row.addStretch(1)
         self.card.body.addLayout(row)
         column.addWidget(self.card)
+        self.slot = QVBoxLayout()  # the page's own form (export settings, upload form)
+        self.slot.setContentsMargins(0, 0, 0, 0)
+        column.addLayout(self.slot)
         column.addStretch(1)
+        self.content: QWidget | None = None
         self.action_button.clicked.connect(self.action_requested)
 
     def set_status(self, text: str, can_act: bool = True) -> None:
         self.status.setText(text)
         self.action_button.setEnabled(can_act)
+
+    def set_content(self, widget: QWidget | None) -> None:
+        """Put ``widget`` under the status card, replacing (and deleting) the previous one."""
+        if self.content is widget:
+            return
+        if self.content is not None:
+            self.slot.removeWidget(self.content)
+            self.content.hide()
+            self.content.deleteLater()
+        self.content = widget
+        if widget is not None:
+            widget.setParent(self)
+            self.slot.addWidget(widget)
+            widget.show()

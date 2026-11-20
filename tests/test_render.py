@@ -316,18 +316,28 @@ def test_main_window_export_action(qapp, data_dir, ffmpeg_paths, sample_clips, m
     assert _wait(lambda: w.encoders is not None)
     assert any(e.name == "libx264" for e in w.encoders)
 
-    seen = {}
-
-    def fake_exec(dialog):
-        seen["settings"] = dialog.settings()
-        seen["output"] = dialog.output_path()
-        dialog.set_settings(RenderSettings(width=720, height=1280, quality=22))
-        return 0
-
-    monkeypatch.setattr(ExportDialog, "exec", fake_exec)
+    # Ctrl+E opens the Render page with the export form inside it (no pop-up window).
     w.act_export.trigger()
-    assert seen["settings"].width == 1080 and seen["output"].name == "stream clip_short.mp4"
+    from ui.main_window.pages import EDIT, RENDER
+
+    form = w.export_widget
+    assert w.page == RENDER and isinstance(form, ExportDialog) and not form.isWindow()
+    assert form.settings().width == 1080 and form.output_path().name == "stream clip_short.mp4"
+    assert form.close_button.isHidden()
+    form.set_settings(RenderSettings(width=720, height=1280, quality=22))
+    w.set_page(EDIT)  # leaving the page keeps the settings
     assert w.config.export_settings["width"] == 720
     assert w.config.export_dir == str(Path(sample_clips["mp4"]).parent)
+
+    # An edit while the page is open updates the form; a finished render marks the step done.
+    w.set_page(RENDER)
+    assert w.export_widget is form
+    w.timeline.set_playhead(500_000)
+    w.act_split.trigger()
+    assert form.timeline is w.timeline.timeline
+    out = Path(sample_clips["mp4"]).parent / "done_short.mp4"
+    out.write_bytes(b"x")
+    form.rendered.emit(out)
+    assert w.page_bar.is_done(RENDER) and "exported" in w.render_page.status.text()
     w._dirty = False
     w.close()
