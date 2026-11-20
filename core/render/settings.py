@@ -42,6 +42,7 @@ class RenderSettings:
     video_bitrate_k: int = 12_000  # used when rate_control == bitrate
     encoder: str = AUTO  # auto, cpu, or an FFmpeg encoder name (h264_nvenc, ...)
     beep_hz: int = 1000
+    loudness_lufs: float = -14.0  # loudness normalisation target; 0 = off
 
     def cleaned(self) -> "RenderSettings":
         even = lambda v: max(2, int(v) // 2 * 2)  # noqa: E731 - yuv420p needs even sizes
@@ -59,6 +60,7 @@ class RenderSettings:
             video_bitrate_k=max(500, min(200_000, int(self.video_bitrate_k))),
             encoder=str(self.encoder or AUTO),
             beep_hz=max(200, min(4000, int(self.beep_hz))),
+            loudness_lufs=0.0 if not self.loudness_lufs else max(-31.0, min(-5.0, float(self.loudness_lufs))),
         )
 
     @property
@@ -95,7 +97,8 @@ def preset_name(settings: RenderSettings) -> str:
     """Name of the preset ``settings`` match (ignoring resolution/fps/encoder), or Custom."""
     for name, preset in PRESETS.items():
         same = replace(settings, width=preset.width, height=preset.height, fps=preset.fps,
-                       encoder=preset.encoder, beep_hz=preset.beep_hz)
+                       encoder=preset.encoder, beep_hz=preset.beep_hz,
+                       loudness_lufs=preset.loudness_lufs)
         if same == preset:
             return name
     return CUSTOM_PRESET

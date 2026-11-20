@@ -32,6 +32,7 @@ from core.media.probe import MediaInfo
 from core.render.encoders import EncoderInfo, choose_encoder, encoder_info
 from core.render.graph import output_fps
 from core.render.job import RenderError, render
+from core.audio.enhance import LOUDNESS_CHOICES, LOUDNESS_OFF
 from core.render.settings import (
     AAC,
     AUTO,
@@ -142,6 +143,13 @@ class ExportDialog(QDialog):
             self.audio_bitrate_combo.addItem(f"{value} kbps", value)
         self.beep_spin = self._spin(200, 4000, 50, " Hz")
         self.beep_spin.setToolTip("Tone used for Mute Regions set to Beep")
+        self.loudness_combo = QComboBox(self)
+        for value, label in LOUDNESS_CHOICES:
+            self.loudness_combo.addItem(label, value)
+        self.loudness_combo.addItem("Off (keep the source level)", LOUDNESS_OFF)
+        self.loudness_combo.setToolTip(
+            "Measures the finished sound and sets one even level for the whole Short, with peaks kept "
+            "under -1 dB. YouTube turns louder videos down to -14 LUFS anyway, quieter ones stay quiet.")
         self.output_edit = QLineEdit(str(output), self)
         self.browse_button = QPushButton("Browse…", self)
 
@@ -197,6 +205,7 @@ class ExportDialog(QDialog):
         audio.addWidget(self.audio_combo, 1)
         audio.addWidget(self.audio_bitrate_combo, 1)
         audio_card.add_row("Track (48 kHz)", audio)
+        audio_card.add_row("Loudness", self.loudness_combo)
         audio_card.add_row("Beep tone", self.beep_spin)
 
         file_card = Card("File", parent=self, label_width=96)
@@ -229,7 +238,7 @@ class ExportDialog(QDialog):
         self.codec_combo.currentIndexChanged.connect(self._codec_changed)
         self.rate_combo.currentIndexChanged.connect(self._update_rate_widgets)
         for widget in (self.fps_combo, self.encoder_combo, self.rate_combo, self.container_combo,
-                       self.audio_combo, self.audio_bitrate_combo):
+                       self.audio_combo, self.audio_bitrate_combo, self.loudness_combo):
             widget.currentIndexChanged.connect(self._edited)
         for spin in (self.width_spin, self.height_spin, self.quality_spin, self.bitrate_spin, self.beep_spin):
             spin.valueChanged.connect(self._edited)
@@ -275,6 +284,7 @@ class ExportDialog(QDialog):
             video_bitrate_k=self.bitrate_spin.value(),
             encoder=self.encoder_combo.currentData() or AUTO,
             beep_hz=self.beep_spin.value(),
+            loudness_lufs=self.loudness_combo.currentData(),
         ).cleaned()
 
     def set_settings(self, settings: RenderSettings) -> None:
@@ -295,6 +305,8 @@ class ExportDialog(QDialog):
             self._select(self.audio_combo, settings.audio_codec)
             self._select(self.audio_bitrate_combo, settings.audio_bitrate_k)
             self.beep_spin.setValue(settings.beep_hz)
+            index = self.loudness_combo.findData(settings.loudness_lufs)
+            self.loudness_combo.setCurrentIndex(index if index >= 0 else 0)
             self._select(self.preset_combo, preset_name(settings))
         finally:
             self._loading = False
@@ -339,7 +351,7 @@ class ExportDialog(QDialog):
         self.set_settings(RenderSettings(
             **{**preset.to_dict(), "width": current.width, "height": current.height, "fps": current.fps,
                "encoder": AUTO if current.encoder not in (AUTO, CPU) else current.encoder,
-               "beep_hz": current.beep_hz}
+               "beep_hz": current.beep_hz, "loudness_lufs": current.loudness_lufs}
         ))
 
     def _resolution_chosen(self) -> None:

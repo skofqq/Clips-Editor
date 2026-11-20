@@ -80,6 +80,7 @@ from ui.panels.properties_panel import PropertiesPanel
 from ui.panels.timeline_panel import TimelinePanel
 from ui.preview.edit_playback import EditPlayback
 from ui.preview.preview_panel import PreviewPanel
+from ui.main_window.listen_preview import ListenPreview
 from ui.main_window.session_keeper import AUTOSAVE_CHOICES, SessionKeeper
 from ui.timeline.timeline_controller import TimelineController
 from ui.transcript.transcript_controller import TranscriptController
@@ -143,6 +144,7 @@ class MainWindow(QMainWindow):
         self.composition_panel = CompositionPanel(self.composition, self.presets, self)
         self.timeline_panel = TimelinePanel(self.timeline, self)
         self.edit_playback = EditPlayback(self.preview, self.timeline, self)
+        self.listen = ListenPreview(self)  # Timeline → Listen (noise reduction + loudness)
         self.transcript_panel = TranscriptPanel(self.transcript, self)
         self.censor_panel = CensorPanel(self.censor, self)
         self.metadata_panel = MetadataPanel(self.metadata_library, self)
@@ -1567,6 +1569,7 @@ class MainWindow(QMainWindow):
         if self._transcribe_task is not None:
             self._transcribe_task.cancel()
         self.edit_playback.shutdown()
+        self.listen.stop()
         player = self.preview.player
         # stop() on a paused player can block inside Qt's FFmpeg backend when
         # there is no audio device; the window is closing, so pausing is enough.

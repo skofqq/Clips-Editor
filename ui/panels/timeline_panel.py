@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.audio.enhance import DENOISE_LEVELS, DENOISE_NAMES
 from core.timeline.model import BEEP, MAX_GAIN_DB, MIN_GAIN_DB, SILENCE
 from core.timeline.timebase import US, format_timecode, us_to_frame
 from ui.theme import icon, palette
@@ -54,6 +55,8 @@ def _label(text: str, parent: QWidget) -> QLabel:
 
 
 class TimelinePanel(QWidget):
+    listen_requested = Signal(bool)  # True = play the cleaned-up sound, False = stop
+
     def __init__(self, controller: TimelineController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.controller = controller
@@ -82,6 +85,15 @@ class TimelinePanel(QWidget):
         self.gain_spin.setSuffix(" dB")
         self.gain_spin.setFixedWidth(92)
         self.gain_spin.setToolTip("Overall volume. Boost above 0 dB is applied on export; the preview cannot exceed 100%.")
+        self.denoise_combo = QComboBox(self)
+        for level in DENOISE_LEVELS:
+            self.denoise_combo.addItem(DENOISE_NAMES[level], level)
+        self.denoise_combo.setToolTip(
+            "Voice noise reduction: removes fan hum, PC noise and hiss from the mic. Applied on export; "
+            "press Listen to hear it.")
+        self.listen_button = self._tool("volume", "Listen: 8 seconds from the playhead with noise reduction "
+                                                  "and loudness as they will be exported")
+        self.listen_button.setCheckable(True)
         self.fade_in_spin = self._fade_spin("Fade In length")
         self.fade_out_spin = self._fade_spin("Fade Out length")
 
@@ -107,6 +119,7 @@ class TimelinePanel(QWidget):
             _separator(self), _label("Gain", self), self.gain_spin,
             _label("Fade in", self), self.fade_in_spin,
             _label("out", self), self.fade_out_spin,
+            _separator(self), _label("Noise", self), self.denoise_combo, self.listen_button,
         ):
             self.toolbar.addWidget(widget)
         self.toolbar.addWidget(self.info_label, 1)
@@ -138,6 +151,9 @@ class TimelinePanel(QWidget):
         self.view.view_changed.connect(self._sync_scrollbar)
         self.mode_combo.activated.connect(lambda _i: controller.set_mute_mode(self.mode_combo.currentData()))
         self.gain_spin.valueChanged.connect(self._on_gain)
+        self.denoise_combo.activated.connect(
+            lambda _i: None if self._updating else controller.set_denoise(self.denoise_combo.currentData()))
+        self.listen_button.toggled.connect(self.listen_requested.emit)
         self.fade_in_spin.valueChanged.connect(self._on_fades)
         self.fade_out_spin.valueChanged.connect(self._on_fades)
         controller.changed.connect(self.refresh)
@@ -213,11 +229,13 @@ class TimelinePanel(QWidget):
         try:
             enabled = t is not None
             for widget in (self.gain_spin, self.fade_in_spin, self.fade_out_spin, self.mode_combo,
+                           self.denoise_combo, self.listen_button,
                            self.zoom_in_button, self.zoom_out_button, self.zoom_fit_button, self.zoom_slider):
                 widget.setEnabled(enabled)
             self.zoom_selection_button.setEnabled(self.view.selection_bounds() is not None)
             if t is not None:
                 self.gain_spin.setValue(t.gain_db)
+                self.denoise_combo.setCurrentIndex(self.denoise_combo.findData(t.denoise))
                 self.fade_in_spin.setValue(t.fade_in_us / US)
                 self.fade_out_spin.setValue(t.fade_out_us / US)
             self.mode_combo.setCurrentIndex(self.mode_combo.findData(self.controller.selected_mute_mode()))

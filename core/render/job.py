@@ -19,7 +19,8 @@ from core.media.errors import MediaError
 from core.media.ffmpeg_locator import no_window_kwargs, tool_version
 from core.media.probe import MediaInfo, probe_media
 from core.render.encoders import SOFTWARE_ENCODER, EncoderInfo, choose_encoder, encoder_info, video_args
-from core.render.graph import RenderGraph, build_graph
+from core.audio.enhance import MeasureCancelled, apply_filter, measure_loudness
+from core.render.graph import RenderGraph, build_graph, loudness_graph
 from core.render.settings import AAC, AUDIO_SAMPLE_RATE, HEVC, MP4, RenderSettings
 from core.timeline.model import Timeline
 
@@ -251,6 +252,28 @@ def layout_divider_at(composition: Composition, timeline: Timeline):
     return at
 
 
+def _loudness(source: MediaInfo, timeline: Timeline, settings: RenderSettings, ffmpeg: Path, workdir: Path,
+              progress: Progress, cancel: threading.Event | None) -> str:
+    """First loudness pass; the filter for the second ("" when off or silent)."""
+    if not settings.loudness_lufs or not source.audio:
+        return ""
+    progress(0.0, "Measuring loudness…")
+    option = "-/filter_complex" if _ffmpeg_major(ffmpeg) >= 7 else "-filter_complex_script"
+    try:
+        measured = measure_loudness(ffmpeg, Path(source.path), loudness_graph(timeline, settings), "aout",
+                                    workdir, cancel, option)
+    except MeasureCancelled as exc:
+        raise RenderCancelled("Render cancelled") from exc
+    if measured is not None and measured.silent:
+        return ""
+    if measured is None:
+        log.warning("Loudness could not be measured; using one-pass normalisation.")
+    else:
+        log.info("Loudness %.1f LUFS, peak %.1f dBTP -> %.1f LUFS", measured.input_i, measured.input_tp,
+                 settings.loudness_lufs)
+    return apply_filter(settings.loudness_lufs, measured)
+
+
 def render(
     source: MediaInfo,
     composition: Composition,
@@ -280,13 +303,15 @@ def render(
         raise RenderError("The output must not overwrite the source video.")
     output.parent.mkdir(parents=True, exist_ok=True)
     burn = bool(captions) and subtitle_style is not None and subtitle_style.enabled
-    graph = build_graph(composition, timeline, source, settings, overlay_input=1 if burn else None)
     encoder = choose_encoder(settings, encoders)
     partial = partial_path(output)
     started = time.monotonic()
     notice = ""
     with tempfile.TemporaryDirectory(prefix="tss-render-") as tmp:
         workdir = Path(tmp)
+        loudnorm = _loudness(source, timeline, settings, ffmpeg, workdir, progress, cancel)
+        graph = build_graph(composition, timeline, source, settings, overlay_input=1 if burn else None,
+                            loudnorm=loudnorm)
         filter_args = _filter_args(graph, ffmpeg, workdir)
         overlay = None
         if burn:
@@ -301,7 +326,7 @@ def render(
             if overlay is None and cancel is not None and cancel.is_set():
                 raise RenderCancelled("Render cancelled")
             if overlay is None:
-                graph = build_graph(composition, timeline, source, settings)
+                graph = build_graph(composition, timeline, source, settings, loudnorm=loudnorm)
                 filter_args = _filter_args(graph, ffmpeg, workdir)
         attempts = [encoder]
         software = SOFTWARE_ENCODER[settings.video_codec]

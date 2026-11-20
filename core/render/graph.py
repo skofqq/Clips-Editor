@@ -19,6 +19,7 @@ from fractions import Fraction
 
 from core.editor.composition import Composition
 from core.media.probe import MediaInfo
+from core.audio.enhance import denoise_filter, measure_filter
 from core.render.settings import AUDIO_SAMPLE_RATE, SOURCE_FPS, RenderSettings
 from core.timeline.model import BEEP, Timeline
 
@@ -108,8 +109,10 @@ def build_graph(
     info: MediaInfo,
     settings: RenderSettings,
     overlay_input: int | None = None,
+    loudnorm: str = "",
 ) -> RenderGraph:
-    """``overlay_input``: index of an extra FFmpeg input (a transparent image
+    """``loudnorm``: loudness filter put at the very end of the audio chain.
+    ``overlay_input``: index of an extra FFmpeg input (a transparent image
     stream the size of the canvas, e.g. burnt-in subtitles) laid over the frame."""
     if info.video is None:
         raise ValueError("The source has no video stream.")
@@ -167,34 +170,7 @@ def build_graph(
     # ---------------------------------------------------------------- audio
     audio_label = None
     if info.audio:
-        chain = (
-            f"[0:a:0]aresample={AUDIO_SAMPLE_RATE},"
-            "aformat=sample_fmts=fltp:channel_layouts=stereo"
-        )
-        expression = _mute_expression(timeline, 2, settings.beep_hz)
-        if expression:
-            chain += f",aeval=exprs='{expression}':channel_layout=stereo"
-            chain += ",aformat=sample_fmts=fltp:channel_layouts=stereo"
-        if n == 1:
-            lines.append(f"{chain}[asrc0]")
-        else:
-            lines.append(f"{chain},asplit={n}" + "".join(f"[asrc{i}]" for i in range(n)))
-        for i, seg in enumerate(segments):
-            lines.append(f"[asrc{i}]atrim=start={_t(seg.start_us)}:end={_t(seg.end_us)},asetpts=PTS-STARTPTS[aseg{i}]")
-        post = []
-        if timeline.gain_db:
-            post.append(f"volume={timeline.gain_db:.2f}dB")
-        out_s = timeline.output_us / 1_000_000
-        if timeline.fade_in_us > 0:
-            post.append(f"afade=t=in:st=0:d={_t(timeline.fade_in_us)}")
-        if timeline.fade_out_us > 0:
-            start = max(0.0, out_s - timeline.fade_out_us / 1_000_000)
-            post.append(f"afade=t=out:st={start:.6f}:d={_t(timeline.fade_out_us)}")
-        tail = ("," + ",".join(post)) if post else ""
-        if n == 1:
-            lines.append(f"[aseg0]anull{tail}[aout]")
-        else:
-            lines.append("".join(f"[aseg{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1{tail}[aout]")
+        lines += audio_lines(timeline, settings, loudnorm)
         audio_label = "aout"
 
     return RenderGraph(
@@ -204,3 +180,51 @@ def build_graph(
         duration_s=timeline.output_us / 1_000_000,
         fps=fps,
     )
+
+
+def audio_lines(timeline: Timeline, settings: RenderSettings, loudnorm: str = "") -> list[str]:
+    """Audio part of the graph, from ``[0:a:0]`` to ``[aout]``: noise
+    reduction, mutes (source time), cuts, then gain, fades and loudness."""
+    lines: list[str] = []
+    segments = timeline.segments
+    n = len(segments)
+    chain = (
+        f"[0:a:0]aresample={AUDIO_SAMPLE_RATE},"
+        "aformat=sample_fmts=fltp:channel_layouts=stereo"
+    )
+    cleanup = denoise_filter(timeline.denoise)
+    if cleanup:
+        chain += f",{cleanup}"
+    expression = _mute_expression(timeline, 2, settings.beep_hz)
+    if expression:
+        chain += f",aeval=exprs='{expression}':channel_layout=stereo"
+        chain += ",aformat=sample_fmts=fltp:channel_layouts=stereo"
+    if n == 1:
+        lines.append(f"{chain}[asrc0]")
+    else:
+        lines.append(f"{chain},asplit={n}" + "".join(f"[asrc{i}]" for i in range(n)))
+    for i, seg in enumerate(segments):
+        lines.append(f"[asrc{i}]atrim=start={_t(seg.start_us)}:end={_t(seg.end_us)},asetpts=PTS-STARTPTS[aseg{i}]")
+    post = []
+    if timeline.gain_db:
+        post.append(f"volume={timeline.gain_db:.2f}dB")
+    if loudnorm:
+        # Normalise before the fades so a fade-out does not lower the measured level.
+        post.append(loudnorm)
+    out_s = timeline.output_us / 1_000_000
+    if timeline.fade_in_us > 0:
+        post.append(f"afade=t=in:st=0:d={_t(timeline.fade_in_us)}")
+    if timeline.fade_out_us > 0:
+        start = max(0.0, out_s - timeline.fade_out_us / 1_000_000)
+        post.append(f"afade=t=out:st={start:.6f}:d={_t(timeline.fade_out_us)}")
+    tail = ("," + ",".join(post)) if post else ""
+    if n == 1:
+        lines.append(f"[aseg0]anull{tail}[aout]")
+    else:
+        lines.append("".join(f"[aseg{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1{tail}[aout]")
+    return lines
+
+
+def loudness_graph(timeline: Timeline, settings: RenderSettings) -> str:
+    """Audio-only graph for the first loudness pass (ends in ``[aout]``)."""
+    return ";\n".join(audio_lines(timeline, settings, measure_filter(settings.loudness_lufs)))

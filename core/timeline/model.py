@@ -68,6 +68,7 @@ class Timeline:
     fade_in_us: int = 0
     fade_out_us: int = 0
     next_id: int = 1
+    denoise: int = 0  # voice noise reduction level, 0 = off (core.audio.enhance)
 
     @classmethod
     def for_source(cls, duration_us: int) -> "Timeline":
@@ -315,6 +316,10 @@ class Timeline:
         gain_db = round(max(MIN_GAIN_DB, min(MAX_GAIN_DB, float(gain_db))), 2)
         return self if gain_db == self.gain_db else replace(self, gain_db=gain_db)
 
+    def with_denoise(self, level: int) -> "Timeline":
+        level = max(0, min(3, int(level)))
+        return self if level == self.denoise else replace(self, denoise=level)
+
     def with_fades(self, fade_in_us: int | None = None, fade_out_us: int | None = None) -> "Timeline":
         limit = self.output_us
         fade_in = self.fade_in_us if fade_in_us is None else _clamp(fade_in_us, 0, limit)
@@ -337,6 +342,7 @@ class Timeline:
             "gain_db": self.gain_db,
             "fade_in_us": self.fade_in_us,
             "fade_out_us": self.fade_out_us,
+            **({"denoise": self.denoise} if self.denoise else {}),
         }
 
     @classmethod
@@ -377,5 +383,5 @@ class Timeline:
             mutes=tuple(mutes),
             next_id=max(seen, default=0) + 1,
         )
-        timeline = timeline.with_gain_db(float(data.get("gain_db", 0.0)))
+        timeline = timeline.with_gain_db(float(data.get("gain_db", 0.0))).with_denoise(int(data.get("denoise", 0)))
         return timeline.with_fades(int(data.get("fade_in_us", 0)), int(data.get("fade_out_us", 0)))

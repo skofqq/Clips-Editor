@@ -172,6 +172,10 @@ class TimelineController(QObject):
         if self._timeline is not None:
             self.set_timeline(self._timeline.with_gain_db(gain_db), key="gain")
 
+    def set_denoise(self, level: int) -> None:
+        if self._timeline is not None:
+            self.set_timeline(self._timeline.with_denoise(level), key="denoise")
+
     def set_fades(self, fade_in_us: int | None = None, fade_out_us: int | None = None) -> None:
         if self._timeline is not None:
             self.set_timeline(self._timeline.with_fades(fade_in_us, fade_out_us), key="fades")
