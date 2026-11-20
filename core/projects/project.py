@@ -14,6 +14,7 @@ from typing import Any
 
 from core.censor.review import CensorState
 from core.editor.composition import Composition
+from core.highlights.finder import Highlight
 from core.metadata.generate import ClipMetadata
 from core.subtitles.model import SubtitleSettings
 from core.timeline.model import Timeline
@@ -57,6 +58,7 @@ class Project:
     censors: dict[str, CensorState] = field(default_factory=dict)  # censor review per media path
     metadata: ClipMetadata = field(default_factory=ClipMetadata)  # YouTube title/description/tags choices
     subtitles: SubtitleSettings = field(default_factory=SubtitleSettings)  # caption style and edits
+    highlights: dict[str, tuple[Highlight, ...]] = field(default_factory=dict)  # found moments per media path
     extra: dict[str, Any] = field(default_factory=dict)
 
     def add_media(self, ref: MediaRef) -> bool:
@@ -70,7 +72,7 @@ class Project:
     def remove_media(self, path: str) -> None:
         key = _norm(path)
         self.media = [m for m in self.media if _norm(m.path) != key]
-        for store in (self.timelines, self.transcripts, self.censors):
+        for store in (self.timelines, self.transcripts, self.censors, self.highlights):
             for stored in [p for p in store if _norm(p) == key]:
                 del store[stored]
 
@@ -88,6 +90,17 @@ class Project:
             del self.transcripts[stored]
         if transcript is not None:
             self.transcripts[path] = transcript
+
+    def highlights_for(self, path: str) -> tuple[Highlight, ...] | None:
+        key = _norm(path)
+        return next((h for p, h in self.highlights.items() if _norm(p) == key), None)
+
+    def set_highlights(self, path: str, highlights) -> None:
+        key = _norm(path)
+        for stored in [p for p in self.highlights if _norm(p) == key]:
+            del self.highlights[stored]
+        if highlights is not None:
+            self.highlights[path] = tuple(highlights)
 
     def censor_for(self, path: str) -> CensorState | None:
         key = _norm(path)
@@ -129,6 +142,10 @@ class Project:
             data["censor"] = [{"media": path, **state.to_dict()} for path, state in self.censors.items()]
         if not self.metadata.empty:
             data["metadata"] = self.metadata.to_dict()
+        if self.highlights:
+            data["highlights"] = [
+                {"media": path, "items": [h.to_dict() for h in items]} for path, items in self.highlights.items()
+            ]
         if self.subtitles != SubtitleSettings():
             data["subtitles"] = self.subtitles.to_dict()
         return data
@@ -144,7 +161,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata", "subtitles"}
+        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata", "subtitles", "highlights"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -170,6 +187,12 @@ class Project:
                 censors[str(entry["media"])] = CensorState.from_dict(entry)
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise ProjectFormatError(f"Invalid censor data: {exc}") from exc
+        highlights: dict[str, tuple[Highlight, ...]] = {}
+        for entry in data.get("highlights") or []:
+            try:
+                highlights[str(entry["media"])] = tuple(Highlight.from_dict(h) for h in entry.get("items") or ())
+            except (KeyError, TypeError, ValueError):
+                continue  # only a search result: drop it rather than refuse the project
         metadata = ClipMetadata()
         if data.get("metadata") is not None:
             try:
@@ -185,6 +208,7 @@ class Project:
             censors=censors,
             metadata=metadata,
             subtitles=SubtitleSettings.from_dict(data.get("subtitles")),
+            highlights=highlights,
             extra=extra,
         )
 

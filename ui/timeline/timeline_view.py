@@ -112,6 +112,8 @@ _ACCENT = palette.accent()
 C_BG = QColor(palette.BASE_ALT)
 C_RULER = QColor(palette.BASE)
 C_TRACK = QColor(palette.LAYER)
+C_HIGHLIGHT = QColor("#ff9f1a")  # found moments (orange, readable on both themes)
+HIGHLIGHT_H = 6
 C_SEGMENT = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.42))
 C_SEGMENT_SEL = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.72))
 C_SEGMENT_EDGE = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.7))
@@ -141,6 +143,7 @@ class TimelineView(QWidget):
     gesture_finished = Signal()  # a drag ended (closes the undo step)
     word_clicked = Signal(int, int)  # start_us, end_us of an exactly timed word
     tracks_changed = Signal()  # a track height or the waveform gain changed
+    highlight_clicked = Signal(int)  # index of a highlight marker on the ruler
 
     def __init__(self, controller: TimelineController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -149,6 +152,7 @@ class TimelineView(QWidget):
         self._transcript: Transcript | None = None
         self._censor: CensorState | None = None
         self._current_suggestion: int | None = None
+        self._highlights: list = []  # core.highlights.finder.Highlight
         self._pps = 100.0
         self._scroll_us = 0
         self._fit_pending = True
@@ -237,6 +241,17 @@ class TimelineView(QWidget):
         self._censor = state
         self._current_suggestion = current
         self.update()
+
+    def set_highlights(self, highlights) -> None:
+        """Found moments, drawn as orange bands on the ruler."""
+        self._highlights = list(highlights or [])
+        self.update()
+
+    def highlight_at(self, x: float) -> int | None:
+        for index, h in enumerate(self._highlights):
+            if self.us_to_x(h.start_us) <= x <= self.us_to_x(h.end_us):
+                return index
+        return None
 
     def speech_item_at(self, x: float):
         """(start_us, end_us, exact) of the word, else segment, under ``x``."""
@@ -397,6 +412,10 @@ class TimelineView(QWidget):
             return {"area": "none"}
         tr = self._tracks
         if y < RULER_H:
+            if y >= RULER_H - HIGHLIGHT_H - 2:
+                index = self.highlight_at(x)
+                if index is not None:
+                    return {"area": "highlight", "index": index}
             return {"area": "ruler"}
         handle = tr.handle_at(y)
         if handle is not None:
@@ -448,6 +467,8 @@ class TimelineView(QWidget):
         self._drag = {"hit": hit, "start_x": pos.x(), "start_us": us, "moved": False}
         if area == "ruler":
             self.seek_requested.emit(self.controller.frame_snap(us))
+        elif area == "highlight":
+            self.highlight_clicked.emit(hit["index"])
         elif area == "track_resize":
             self._drag["start_y"] = pos.y()
             self._drag["start_h"] = getattr(self._tracks, f"{hit['track']}_h")
@@ -629,6 +650,23 @@ class TimelineView(QWidget):
             tick += 1
             if seconds * US > t.duration_us:
                 break
+
+        # Highlights: bands at the bottom of the ruler, a dot at the strongest moment.
+        if self._highlights:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setPen(Qt.PenStyle.NoPen)
+            for moment in self._highlights:
+                x0, x1 = self.us_to_x(moment.start_us), self.us_to_x(moment.end_us)
+                if x1 < 0 or x0 > w:
+                    continue
+                band = QColor(C_HIGHLIGHT)
+                band.setAlpha(90 + int(140 * min(1.0, moment.score)))
+                p.setBrush(band)
+                p.drawRoundedRect(QRectF(x0, RULER_H - HIGHLIGHT_H, max(3.0, x1 - x0), HIGHLIGHT_H), 2, 2)
+                p.setBrush(C_HIGHLIGHT)
+                px = self.us_to_x(moment.peak_us)
+                p.drawEllipse(QPointF(px, RULER_H - HIGHLIGHT_H / 2), 3.5, 3.5)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         # Video segments.
         for index, s in enumerate(t.segments):

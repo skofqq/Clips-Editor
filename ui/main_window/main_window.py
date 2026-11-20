@@ -80,7 +80,9 @@ from ui.panels.properties_panel import PropertiesPanel
 from ui.panels.timeline_panel import TimelinePanel
 from ui.preview.edit_playback import EditPlayback
 from ui.preview.preview_panel import PreviewPanel
+from ui.highlights.highlights_panel import HighlightsPanel
 from ui.main_window.autoframe_runner import AutoframeRunner
+from ui.main_window.highlights_controller import HighlightsController
 from ui.main_window.listen_preview import ListenPreview
 from ui.main_window.session_keeper import AUTOSAVE_CHOICES, SessionKeeper
 from ui.timeline.timeline_controller import TimelineController
@@ -89,7 +91,7 @@ from ui.transcript.transcript_panel import TranscriptPanel
 
 log = logging.getLogger(__name__)
 
-LAYOUT_VERSION = 8  # bump when the dock arrangement changes
+LAYOUT_VERSION = 9  # bump when the dock arrangement changes
 
 _VIDEO_FILTER = "Video files ({});;All files (*)".format(
     " ".join(f"*{ext}" for ext in SUPPORTED_EXTENSIONS)
@@ -151,6 +153,7 @@ class MainWindow(QMainWindow):
         self.censor_panel = CensorPanel(self.censor, self)
         self.metadata_panel = MetadataPanel(self.metadata_library, self)
         self.subtitles_panel = SubtitlesPanel(self)
+        self.highlights_panel = HighlightsPanel(self)
         self.captions: list = []  # current captions (output time)
         metadata_scroll = QScrollArea(self)
         metadata_scroll.setWidgetResizable(True)
@@ -196,6 +199,10 @@ class MainWindow(QMainWindow):
         )
         self.tabifyDockWidget(self.subtitles_dock, self.censor_dock)
         self.tabifyDockWidget(self.censor_dock, self.metadata_dock)
+        self.highlights_dock = self._add_dock(
+            "Highlights", "dock_highlights", self.highlights_panel, Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.tabifyDockWidget(self.transcript_dock, self.highlights_dock)
         self.properties_dock.raise_()
         self.resizeDocks([self.media_dock, self.properties_dock], [240, 360], Qt.Orientation.Horizontal)
         self.resizeDocks([self.timeline_dock], [250], Qt.Orientation.Vertical)
@@ -206,6 +213,7 @@ class MainWindow(QMainWindow):
         self._create_menus()
         self._create_toolbar()
         self._connect()
+        self.highlights = HighlightsController(self)  # Highlights dock ↔ timeline markers
         self._restore_layout()
         self._update_dock_titles()
         self.timeline_panel.view.restore_view_state(self.config.timeline_view)
@@ -397,7 +405,7 @@ class MainWindow(QMainWindow):
         playback.addActions([self.act_back_second, self.act_forward_second, self.act_go_start, self.act_go_end])
 
         view = self.menuBar().addMenu("&View")
-        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.subtitles_dock,
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.highlights_dock, self.subtitles_dock,
                      self.censor_dock, self.metadata_dock, self.timeline_dock):
             view.addAction(dock.toggleViewAction())
         view.addSeparator()
@@ -700,6 +708,8 @@ class MainWindow(QMainWindow):
         self.transcript_panel.set_has_audio(info is not None and info.has_audio)
         self.transcript_panel.rebuild()
         self.history = self.session.history_for(info.path if info is not None else None, self._edit_state())
+        if hasattr(self, "highlights"):
+            self.highlights.show_for_current()
         self._update_edit_actions()
         view = self.timeline_panel.view
         view.set_waveform(None)
@@ -1523,7 +1533,7 @@ class MainWindow(QMainWindow):
         self.session.apply_settings()
 
     def reset_layout(self) -> None:
-        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.subtitles_dock,
+        for dock in (self.media_dock, self.properties_dock, self.transcript_dock, self.highlights_dock, self.subtitles_dock,
                      self.censor_dock, self.metadata_dock, self.timeline_dock):
             dock.setFloating(False)
             dock.show()
