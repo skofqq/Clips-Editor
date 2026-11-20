@@ -260,7 +260,7 @@ def test_cards_in_long_forms(qapp, tmp_path):
 
     panel = CompositionPanel(CompositionController(), PresetStore(tmp_path / "presets.json"))
     titles = [c.title_label.text() for c in panel.findChildren(Card) if not c.isHidden()]  # "Part" shows after Split
-    assert titles == ["Preset", "Region", "Placement in output", "Layout"]
+    assert titles == ["Preset", "Region", "Placement in output", "Layout", "Face"]
 
 
 def test_light_theme_translates_colours():

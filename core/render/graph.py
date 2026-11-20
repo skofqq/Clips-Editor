@@ -15,9 +15,11 @@ see is what you get:
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Callable
 from fractions import Fraction
 
 from core.editor.composition import Composition
+from core.editor.track import piecewise_expression
 from core.media.probe import MediaInfo
 from core.audio.enhance import denoise_filter, measure_filter
 from core.render.settings import AUDIO_SAMPLE_RATE, SOURCE_FPS, RenderSettings
@@ -74,8 +76,11 @@ def _mute_expression(timeline: Timeline, channels: int, beep_hz: int) -> str | N
 
 
 def _place(lines: list[str], source: str, composition: Composition, src_w: int, src_h: int, fps: Fraction,
-           tag: str, out_label: str) -> None:
-    """Crop, scale and place the Stacked Layout regions of ``source`` on a black canvas."""
+           tag: str, out_label: str, to_time: Callable[[int], float] | None = None) -> None:
+    """Crop, scale and place the Stacked Layout regions of ``source`` on a black canvas.
+
+    ``to_time`` maps source microseconds to the filter's ``t`` (seconds);
+    tracked crops (face following) move with an expression of ``t``."""
     canvas_w, canvas_h = composition.output_w, composition.output_h
     placements = composition.layout(src_w, src_h)
     lines.append(f"color=c=black:s={canvas_w}x{canvas_h}:r={_fps_str(fps)},format=yuv420p[{tag}bg]")
@@ -97,10 +102,29 @@ def _place(lines: list[str], source: str, composition: Composition, src_w: int, 
         h = max(2, min(src_h - y, int(round(p.src.h))))
         dw, dh = _even(p.dst.w), _even(p.dst.h)
         dx, dy = int(round(p.dst.x)), int(round(p.dst.y))
-        lines.append(f"[{tag}vp{i}]crop={w}:{h}:{x}:{y},scale={dw}:{dh}:flags=lanczos,setsar=1[{tag}region{i}]")
+        region = composition.region(p.name)
+        if region.track and to_time is not None:
+            x_expr, y_expr = _track_expressions(region, x, y, w, h, src_w, src_h, to_time)
+            crop = f"crop=w={w}:h={h}:x='{x_expr}':y='{y_expr}'"
+        else:
+            crop = f"crop={w}:{h}:{x}:{y}"
+        lines.append(f"[{tag}vp{i}]{crop},scale={dw}:{dh}:flags=lanczos,setsar=1[{tag}region{i}]")
         out = out_label if i == k - 1 else f"{tag}layer{i}"
         lines.append(f"[{current}][{tag}region{i}]overlay=x={dx}:y={dy}:shortest=1[{out}]")
         current = out
+
+
+def _track_expressions(region, x: int, y: int, w: int, h: int, src_w: int, src_h: int,
+                       to_time: Callable[[int], float]) -> tuple[str, str]:
+    xs, ys = [], []
+    for key in region.track:
+        moved = region.at(key.t_us).crop
+        t = to_time(key.t_us)
+        xs.append((t, x + (moved.x - region.crop.x) * src_w))
+        ys.append((t, y + (moved.y - region.crop.y) * src_h))
+    x_expr = f"clip({piecewise_expression(xs)},0,{max(0, src_w - w)})"
+    y_expr = f"clip({piecewise_expression(ys)},0,{max(0, src_h - h)})"
+    return x_expr, y_expr
 
 
 def build_graph(
@@ -137,7 +161,8 @@ def build_graph(
             lines.append(f"[vseg0]fps={_fps_str(fps)}[vcut]")
         else:
             lines.append("".join(f"[vseg{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0,fps={_fps_str(fps)}[vcut]")
-        _place(lines, "vcut", composition, src_w, src_h, fps, "", "canvas")
+        _place(lines, "vcut", composition, src_w, src_h, fps, "", "canvas",
+               lambda us: timeline.source_to_output(us) / 1_000_000)
     else:
         # Parts with their own layout (the webcam moved mid-clip): lay out every
         # part on its own canvas, then join the canvases.
@@ -145,7 +170,8 @@ def build_graph(
             layout = seg.layout if seg.layout is not None else composition
             layout = replace(layout, output_w=canvas_w, output_h=canvas_h)
             lines.append(f"[vseg{i}]fps={_fps_str(fps)}[vfps{i}]")
-            _place(lines, f"vfps{i}", layout, src_w, src_h, fps, f"p{i}_", f"canvas{i}")
+            _place(lines, f"vfps{i}", layout, src_w, src_h, fps, f"p{i}_", f"canvas{i}",
+                   lambda us, start=seg.start_us: (us - start) / 1_000_000)
         if n == 1:
             lines.append("[canvas0]null[canvas]")
         else:

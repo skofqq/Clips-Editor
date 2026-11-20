@@ -85,7 +85,8 @@ class PresetStore:
             raise ValueError("Preset name is empty.")
         if self.is_builtin(name):
             raise ValueError("Built-in presets cannot be replaced.")
-        self._user[name] = composition
+        # Face tracking belongs to one clip; a preset keeps only the framing.
+        self._user[name] = composition.without_tracks()
         self._write()
 
     def delete(self, name: str) -> bool:

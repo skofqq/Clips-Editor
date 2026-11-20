@@ -17,6 +17,7 @@ from enum import Enum
 from typing import Any
 
 from core.editor.geometry import UNIT, Rect, clamp
+from core.editor.track import TrackKey, clean_track, offset_at
 
 WEBCAM = "webcam"
 GAMEPLAY = "gameplay"
@@ -49,11 +50,21 @@ class Region:
     scale: float = 1.0  # extra zoom on top of fit/fill
     offset_x: float = 0.0  # -1..1, position of the content inside its slot
     offset_y: float = 0.0
+    track: tuple[TrackKey, ...] = ()  # crop motion over source time (face following)
+
+    def at(self, t_us: int) -> "Region":
+        """The region with its crop where the track puts it at ``t_us``."""
+        if not self.track:
+            return self
+        dx, dy = offset_at(self.track, t_us)
+        moved = Rect(self.crop.x + dx, self.crop.y + dy, self.crop.w, self.crop.h).moved_inside(UNIT)
+        return replace(self, crop=moved, track=())
 
     def cleaned(self) -> "Region":
         return replace(
             self,
             crop=normalise_crop(self.crop),
+            track=clean_track(self.track),
             fit=FitMode(self.fit),
             scale=round(clamp(self.scale, MIN_SCALE, MAX_SCALE), 4),
             offset_x=round(clamp(self.offset_x, -1.0, 1.0), 4),
@@ -67,6 +78,7 @@ class Region:
             "fit": self.fit.value,
             "scale": self.scale,
             "offset": [self.offset_x, self.offset_y],
+            **({"track": [k.to_list() for k in self.track]} if self.track else {}),
         }
 
     @classmethod
@@ -87,6 +99,7 @@ class Region:
             scale=float(data.get("scale", 1.0)),
             offset_x=float(offset[0]),
             offset_y=float(offset[1]),
+            track=tuple(TrackKey.from_list(k) for k in data.get("track") or ()),
         ).cleaned()
 
 
@@ -130,6 +143,21 @@ class Composition:
 
     def with_swapped(self) -> "Composition":
         return replace(self, swapped=not self.swapped)
+
+    @property
+    def has_tracks(self) -> bool:
+        return bool(self.webcam.track or self.gameplay.track)
+
+    def at(self, t_us: int) -> "Composition":
+        """Static composition for source time ``t_us`` (tracks applied)."""
+        if not self.has_tracks:
+            return self
+        return replace(self, webcam=self.webcam.at(t_us), gameplay=self.gameplay.at(t_us))
+
+    def without_tracks(self) -> "Composition":
+        if not self.has_tracks:
+            return self
+        return replace(self, webcam=replace(self.webcam, track=()), gameplay=replace(self.gameplay, track=()))
 
     @property
     def top_name(self) -> str:

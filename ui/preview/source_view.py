@@ -62,6 +62,7 @@ class SourceView(VideoCanvas):
         self._drag_start = QPointF()
         self._drag_rect: Rect | None = None
         controller.changed.connect(self.update)
+        controller.time_changed.connect(self.update)
         controller.selection_changed.connect(lambda _name: self.update())
 
     # ---------------------------------------------------------- mapping

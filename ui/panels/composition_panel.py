@@ -48,6 +48,8 @@ def _pair(first: str, first_field: QWidget, second: str, second_field: QWidget) 
 
 class CompositionPanel(QWidget):
     apply_all_requested = Signal()  # use the shown layout for every part of the clip
+    autoframe_requested = Signal(bool)  # find the face in the webcam; True = follow it
+    autoframe_cancel_requested = Signal()
 
     def __init__(
         self, controller: CompositionController, presets: PresetStore, parent: QWidget | None = None
@@ -154,10 +156,29 @@ class CompositionPanel(QWidget):
         self.part_card.add_row(self.apply_all_button)
         self.part_card.setVisible(False)
 
+        # ---- face: auto-framing of the webcam
+        self.autoframe_button = QPushButton("Auto-frame face", self)
+        self.autoframe_button.setObjectName("primary")
+        self.autoframe_button.setToolTip("Find the streamer's face and frame the webcam crop around it "
+                                         "(head and shoulders, the slot's shape)")
+        self.follow_check = QCheckBox("Follow the face when it moves", self)
+        self.follow_check.setChecked(True)
+        self.clear_track_button = QPushButton("Stop following", self)
+        self.clear_track_button.setToolTip("Keep the crop where it is now and forget the face motion")
+        self.face_status = QLabel(self)
+        self.face_status.setObjectName("muted")
+        self.face_status.setWordWrap(True)
+        self.face_card = Card("Face", "Frames the webcam automatically. Runs offline on your PC.", self)
+        self.face_card.add_row(self.autoframe_button)
+        self.face_card.add_row(self.follow_check)
+        self.face_card.add_row(self.clear_track_button)
+        self.face_card.add_row(self.face_status)
+        self._autoframe_busy = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-        for card in (self.part_card, preset_card, region_card, placement_card, layout_card):
+        for card in (self.part_card, preset_card, region_card, self.face_card, placement_card, layout_card):
             layout.addWidget(card)
         layout.addStretch(1)
 
@@ -175,6 +196,8 @@ class CompositionPanel(QWidget):
         self.reset_placement_button.clicked.connect(
             lambda: self.controller.reset_placement(self.controller.selected)
         )
+        self.autoframe_button.clicked.connect(self._on_autoframe)
+        self.clear_track_button.clicked.connect(lambda: self.controller.clear_track(WEBCAM))
         self.divider_spin.valueChanged.connect(self._on_divider_edited)
         self.swap_button.clicked.connect(self.controller.swap)
         self.reset_button.clicked.connect(self.controller.reset)
@@ -183,9 +206,28 @@ class CompositionPanel(QWidget):
         self.delete_preset_button.clicked.connect(self._on_delete_preset)
 
         controller.changed.connect(self.refresh)
+        controller.time_changed.connect(self.refresh)
         controller.selection_changed.connect(lambda _name: self.refresh())
         self._reload_presets()
         self.refresh()
+
+    # ------------------------------------------------------------ face
+    def _on_autoframe(self) -> None:
+        if self._autoframe_busy:
+            self.autoframe_cancel_requested.emit()
+        else:
+            self.autoframe_requested.emit(self.follow_check.isChecked())
+
+    def set_autoframe_busy(self, busy: bool, message: str = "") -> None:
+        self._autoframe_busy = busy
+        self.autoframe_button.setText("Cancel" if busy else "Auto-frame face")
+        self.follow_check.setEnabled(not busy)
+        if message or not busy:
+            self.face_status.setText(message)
+        if not busy:
+            self.refresh()
+            if message:
+                self.face_status.setText(message)
 
     # ------------------------------------------------------------ helpers
     def _spin(self, minimum: int = 0) -> QSpinBox:
@@ -243,6 +285,14 @@ class CompositionPanel(QWidget):
             self.scale_spin.setValue(region.scale * 100)
             self.offset_x.setValue(region.offset_x * 100)
             self.offset_y.setValue(region.offset_y * 100)
+
+            tracked = bool(comp.webcam.track)
+            self.clear_track_button.setVisible(tracked)
+            if not self._autoframe_busy:
+                self.face_status.setText(
+                    f"Following the face ({len(comp.webcam.track)} keys). Drag the crop to adjust; "
+                    "the motion is kept." if tracked else "")
+            self.face_card.setVisible(comp.webcam.enabled)
 
             self.divider_spin.setValue(comp.divider * 100)
             both = len(comp.slots()) == 2

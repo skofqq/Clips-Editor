@@ -80,6 +80,7 @@ from ui.panels.properties_panel import PropertiesPanel
 from ui.panels.timeline_panel import TimelinePanel
 from ui.preview.edit_playback import EditPlayback
 from ui.preview.preview_panel import PreviewPanel
+from ui.main_window.autoframe_runner import AutoframeRunner
 from ui.main_window.listen_preview import ListenPreview
 from ui.main_window.session_keeper import AUTOSAVE_CHOICES, SessionKeeper
 from ui.timeline.timeline_controller import TimelineController
@@ -145,6 +146,7 @@ class MainWindow(QMainWindow):
         self.timeline_panel = TimelinePanel(self.timeline, self)
         self.edit_playback = EditPlayback(self.preview, self.timeline, self)
         self.listen = ListenPreview(self)  # Timeline → Listen (noise reduction + loudness)
+        self.autoframe = AutoframeRunner(self)  # Composition → Face → Auto-frame
         self.transcript_panel = TranscriptPanel(self.transcript, self)
         self.censor_panel = CensorPanel(self.censor, self)
         self.metadata_panel = MetadataPanel(self.metadata_library, self)
@@ -498,6 +500,7 @@ class MainWindow(QMainWindow):
         self.timeline_panel.view.gesture_finished.connect(lambda: self.history.break_merge())
         self.composition.changed.connect(self._on_layout_changed)
         self.timeline.playhead_changed.connect(lambda _us: self._refresh_layout())
+        self.timeline.playhead_changed.connect(self.composition.set_time)
         self.timeline.changed.connect(self._refresh_layout)
         self.composition_panel.apply_all_requested.connect(self.apply_layout_to_all_parts)
         self.timeline.changed.connect(lambda: self._on_edit_changed(self.timeline.last_change_key))
@@ -1570,6 +1573,7 @@ class MainWindow(QMainWindow):
             self._transcribe_task.cancel()
         self.edit_playback.shutdown()
         self.listen.stop()
+        self.autoframe.cancel()
         player = self.preview.player
         # stop() on a paused player can block inside Qt's FFmpeg backend when
         # there is no audio device; the window is closing, so pausing is enough.

@@ -41,6 +41,7 @@ class OutputView(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         controller.changed.connect(self.update)
+        controller.time_changed.connect(self.update)
         controller.selection_changed.connect(lambda _name: self.update())
 
     def set_subtitles(self, captions: list, style) -> None:
@@ -194,7 +195,7 @@ class OutputView(QWidget):
             return
         painter.fillRect(canvas, QColor("#000000"))
 
-        comp = self.controller.composition
+        comp = self.controller.shown  # tracked crops at the playhead
         sw, sh = self.controller.source_size
         placements = comp.layout(sw, sh)
         painter.setClipRect(canvas)
