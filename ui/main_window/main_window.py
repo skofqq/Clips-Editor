@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QPushButton,
     QMessageBox,
     QScrollArea,
     QSizePolicy,
@@ -84,6 +85,9 @@ from core.twitch.clip import parse_clip_url
 from ui.widgets.card import Card
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.analytics_panel import AnalyticsPanel
+from ui.social.crosspost_panel import CrossPostPanel
+from ui.social.guide_panel import INSTAGRAM, TIKTOK, YOUTUBE, GuidePanel
+from core.social.service import SocialService
 from ui.youtube.upload_dialog import UploadDialog, _upload
 from ui.panels.composition_panel import CompositionPanel
 from ui.panels.media_panel import MediaPanel
@@ -148,6 +152,7 @@ class MainWindow(QMainWindow):
         self._preview_stop_us: int | None = None
         self.encoders = None  # usable video encoders, detected in the background
         self.youtube = YouTubeService(config)
+        self.social = SocialService(config, self.youtube.store)  # TikTok / Instagram Reels
         self.upload_history = UploadHistory(config.data_dir / "youtube_uploads.json")  # pause here when listening to a suggestion
         self.metadata_library = Library(config.data_dir / "metadata_library.sqlite")
         self.history: History = History(self._edit_state())
@@ -157,7 +162,15 @@ class MainWindow(QMainWindow):
         # Steps as pages (Resolve-style): the editor, then data, render and publish pages.
         self.page_stack = QStackedWidget(self)
         self.page_stack.addWidget(self.preview)
-        self.setCentralWidget(self.page_stack)
+        # The setup guide opens as a side panel next to any page.
+        self.guide_panel = GuidePanel(self.social, self)
+        central = QWidget(self)
+        central_row = QHBoxLayout(central)
+        central_row.setContentsMargins(0, 0, 0, 0)
+        central_row.setSpacing(0)
+        central_row.addWidget(self.page_stack, 1)
+        central_row.addWidget(self.guide_panel)
+        self.setCentralWidget(central)
         self._page = EDIT
         self._edit_layout: QByteArray | None = None  # the Edit page's docks while another page is shown
         self._rendered: tuple | None = None  # (path, edit state) of the last export
@@ -211,6 +224,17 @@ class MainWindow(QMainWindow):
             "Publish", "Upload the exported video to YouTube with the title, description and tags from Data.",
             "Choose another file…", "folder", self)
         self.publish_page.action_button.setObjectName("")
+        youtube_guide = QPushButton("YouTube guide", self.publish_page.card)
+        youtube_guide.setToolTip("How to connect YouTube (opens on the right)")
+        youtube_guide.clicked.connect(lambda: self.guide_panel.toggle_service(YOUTUBE))
+        self.publish_page.card.body.addWidget(youtube_guide, 0, Qt.AlignmentFlag.AlignLeft)
+        self.crosspost_panel = CrossPostPanel(self.social, self.config, self.publish_page)
+        self.crosspost_panel.cover_ms = self._thumbnail_ms
+        self.crosspost_panel.guide_requested.connect(self.guide_panel.toggle_service)
+        self.crosspost_panel.posted.connect(lambda _r: self._save_config_quietly())
+        self.publish_page.footer.addWidget(self.crosspost_panel)
+        self.guide_panel.connections_changed.connect(self._social_connections_changed)
+        self.guide_panel.youtube_accounts_requested.connect(self.manage_youtube_accounts)
         self.analytics_panel = AnalyticsPanel(self.publish_page)
         self.publish_page.footer.addWidget(self.analytics_panel)
         self.analytics_panel.refresh_requested.connect(self.refresh_analytics)
@@ -683,6 +707,10 @@ class MainWindow(QMainWindow):
         integrations.addAction(self.act_youtube_accounts)
 
         help_menu = self.menuBar().addMenu("&Help")
+        guides = help_menu.addMenu("Setup guides")
+        for service, text in ((YOUTUBE, "YouTube"), (TIKTOK, "TikTok"), (INSTAGRAM, "Instagram Reels")):
+            action = guides.addAction(text)
+            action.triggered.connect(lambda _c=False, s=service: self.guide_panel.show_service(s))
         help_menu.addActions([self.act_ffmpeg_info, self.act_about])
         self._rebuild_recent_menu()
 
@@ -1398,8 +1426,33 @@ class MainWindow(QMainWindow):
             return  # uploading, or showing what was uploaded
         rendered = self._rendered_path()
         path = rendered or (form.file if form is not None else None)
+        if not self.crosspost_panel.busy:
+            meta = self.metadata_panel.metadata()
+            self.crosspost_panel.set_caption_source(meta.title, meta.description)
+            self.crosspost_panel.set_file(Path(path) if path is not None else None)
         if path is not None:
             self._show_upload_form(Path(path), fresh=True)
+
+    # ------------------------------------------------------------ TikTok / Reels
+    def _thumbnail_ms(self) -> int | None:
+        """Where the cover frame is in the Short (ms), for the TikTok / Reels cover."""
+        if not self.project.thumbnail.enabled:
+            return None
+        src = self.thumbnails.source()
+        timeline = self.timeline.timeline
+        if src is None or timeline is None:
+            return None
+        return timeline.source_to_output(src[1]) // 1000
+
+    def _social_connections_changed(self) -> None:
+        self._save_config_quietly()
+        self.crosspost_panel.refresh_accounts()
+
+    def _save_config_quietly(self) -> None:
+        try:
+            self.config.save()
+        except OSError:
+            pass
 
     def _save_upload_defaults(self) -> None:
         if self.upload_widget is not None:
@@ -2039,7 +2092,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         running = [name for name, form in (("rendering", self.export_widget), ("uploading", self.upload_widget),
-                                           ("rendering the queue", self.render_queue))
+                                           ("rendering the queue", self.render_queue),
+                                           ("posting to TikTok / Instagram", self.crosspost_panel))
                    if form is not None and form.busy]
         if running:
             answer = QMessageBox.question(self, APP_NAME, f"Still {' and '.join(running)}. Stop and quit?")
@@ -2062,6 +2116,8 @@ class MainWindow(QMainWindow):
         self.autoframe.cancel()
         if self._analytics_task is not None:
             self._analytics_task.cancel()
+        self.crosspost_panel.cancel()
+        self.guide_panel.tiktok_setup.cancel()
         player = self.preview.player
         # stop() on a paused player can block inside Qt's FFmpeg backend when
         # there is no audio device; the window is closing, so pausing is enough.

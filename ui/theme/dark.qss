@@ -399,3 +399,7 @@ QLabel#pageArrow { color: #5d5d5d; font-size: 16px; padding: 0 2px; }
 QLabel#pageTitle { font-size: 24px; font-weight: 600; padding: 4px 0 8px 0; }
 QScrollArea#pageScroll, QScrollArea#pageScroll > QWidget > QWidget { background: #202020; }
 QLabel#previewTitle { font-size: 15px; }
+
+QFrame#guidePanel { background: #202020; border-left: 1px solid #333333; }
+QFrame#guidePanel QTextBrowser { background: #202020; }
+QFrame#guidePanel QLabel { background: transparent; }

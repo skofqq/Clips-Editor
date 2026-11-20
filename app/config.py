@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.15"
+APP_VERSION = "0.9.16"
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,8 @@ class AppConfig:
     window_geometry: str = ""  # base64 of QMainWindow.saveGeometry()
     window_state: str = ""  # base64 of QMainWindow.saveState()
     timeline_view: dict = field(default_factory=dict)  # track heights and waveform zoom
+    social_accounts: dict = field(default_factory=dict)  # TikTok / Instagram names (tokens are in the keychain)
+    social_defaults: dict = field(default_factory=dict)  # last TikTok mode / visibility, Reels share to feed
     hidden_blocks: list = field(default_factory=list)  # "Panel/Block" names turned off in View → Blocks
     theme: str = "dark"  # dark | light | system (follows Windows)
     mica: bool = False  # Windows 11 Mica backdrop behind the command bar
@@ -136,7 +138,7 @@ class AppConfig:
         learned = raw.get("transcribe_learned")
         if isinstance(learned, list):
             config.transcribe_learned = [w for w in learned if isinstance(w, str)][:100]
-        for key in ("export_settings", "youtube_defaults", "timeline_view"):
+        for key in ("export_settings", "youtube_defaults", "timeline_view", "social_accounts", "social_defaults"):
             if isinstance(raw.get(key), dict):
                 setattr(config, key, raw[key])
         accounts = raw.get("youtube_accounts")
