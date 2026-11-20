@@ -178,7 +178,12 @@ def variables(library: Library, selection: MetadataSelection, template: Template
         "participants": ", ".join(p.name for p in participants),
         "participants_links": "\n".join(_person_line(p) for p in participants),
         # Bare Twitch channel links, one per line (participants without a Twitch link are left out).
-        "participants_twitch": "\n".join(p.twitch_url for p in participants if p.twitch_url),
+        "participants_twitch": "\n".join(u for u in map(twitch_link, participants) if u),
+        # The streamer's Twitch channel, then the participants', one per line.
+        "twitch_links": "\n".join(dict.fromkeys(
+            u for u in map(twitch_link, [streamer, *participants]) if u)),
+        # Template and extra hashtags first, then every tag as a hashtag.
+        "all_hashtags": " ".join(all_hashtags(hashtags, collect_tags(library, selection, template))),
         "stream_url": selection.stream_url or (streamer.twitch_url if streamer else ""),
         "clip_title": selection.clip_title.strip(),
         "date": selection.date.strip() or _date.today().strftime("%d.%m.%Y"),
@@ -188,6 +193,27 @@ def variables(library: Library, selection: MetadataSelection, template: Template
         if name not in BUILTIN_VARIABLES:
             values[name] = value
     return values
+
+
+def twitch_link(person: Person | None) -> str:
+    """The profile's Twitch link, else one made from a Twitch-style username."""
+    if person is None:
+        return ""
+    if person.twitch_url:
+        return person.twitch_url
+    login = person.username.strip().lstrip("@").lower()
+    return f"https://www.twitch.tv/{login}" if re.fullmatch(r"[a-z0-9_]{3,25}", login) else ""
+
+
+MAX_HASHTAGS = 60  # YouTube ignores every hashtag of a video that has more
+
+
+def all_hashtags(first: tuple[str, ...], tags: tuple[str, ...]) -> tuple[str, ...]:
+    seen: dict[str, str] = {}
+    for item in (*first, *(hashtag(t) for t in tags)):
+        if item and item.casefold() not in seen:
+            seen[item.casefold()] = item
+    return tuple(seen.values())[:MAX_HASHTAGS]
 
 
 def _hashtags(template: Template | None, selection: MetadataSelection) -> tuple[str, ...]:

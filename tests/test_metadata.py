@@ -55,7 +55,7 @@ def _people(lib):
 def test_library_migrates_seeds_and_persists(tmp_path):
     path = tmp_path / "lib.sqlite"
     lib = Library(path)
-    assert lib.version == 3
+    assert lib.version == 4
     assert {t.name for t in lib.all(TEMPLATE)} >= {"Streamer — clip #shorts"}
     assert lib.default_template().id == "tpl-sasavot"
     assert [s.name for s in lib.all(STREAM_TYPE)][:2] == ["Challenge", "Gaming"]  # sorted by name
@@ -65,12 +65,12 @@ def test_library_migrates_seeds_and_persists(tmp_path):
     lib.close()
 
     again = Library(path)  # reopening does not reseed or migrate twice
-    assert again.version == 3
+    assert again.version == 4
     assert again.find(STREAMER, "SASAVOT").id == s.id
     assert len(again.all(TEMPLATE)) == 4
     again.close()
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_library_duplicates_defaults_and_delete(lib):
@@ -150,10 +150,20 @@ def test_default_sasavot_format(lib):
     result = generate(lib, sel)
     assert result.template_id == "tpl-sasavot"
     assert result.title == "КОНСТРУКТИВНАЯ ОХОТА | #sasavot on #Twitch"
-    assert result.description == ("#shorts #sasavot #twitch #GTAVI\n\n"
-                                  "https://www.twitch.tv/helin139\nhttps://www.twitch.tv/nick")
+    first, links = result.description.split("\n\n")
+    # Template hashtags first, then every tag as a hashtag (no repeats).
+    assert first.startswith("#shorts #sasavot #twitch #GTAVI #sasavotclips")
+    assert "#helin" in first and "#twitchclips" in first and first.count("#sasavot ") == 1
+    assert links == "https://www.twitch.tv/sasavot\nhttps://www.twitch.tv/helin139\nhttps://www.twitch.tv/nick"
     alone = generate(lib, replace(sel, participant_ids=()))
-    assert alone.description == "#shorts #sasavot #twitch #GTAVI"
+    assert alone.description.endswith("\n\nhttps://www.twitch.tv/sasavot")
+    by_name = lib.create(PARTICIPANT, "Гость", username="@Guest_1")  # no link, Twitch-style username
+    assert generate(lib, replace(sel, participant_ids=(by_name.id,))).description.endswith(
+        "https://www.twitch.tv/sasavot\nhttps://www.twitch.tv/guest_1")
+    nobody = generate(lib, MetadataSelection(clip_title="x"))
+    assert "\n" not in nobody.description and nobody.description.startswith("#shorts")
+    from core.metadata.generate import MAX_HASHTAGS, all_hashtags
+    assert len(all_hashtags((), tuple(f"t{i}" for i in range(100)))) == MAX_HASHTAGS
 
 
 def test_old_library_gets_the_new_default(tmp_path):
@@ -164,7 +174,8 @@ def test_old_library_gets_the_new_default(tmp_path):
         _migration_2(db)
         db.execute("PRAGMA user_version = 2")
     lib = Library(path)
-    assert lib.version == 3 and lib.default_template().id == "tpl-sasavot"
+    assert lib.version == 4
+    assert "{all_hashtags}" in lib.get(TEMPLATE, "tpl-sasavot").description and lib.default_template().id == "tpl-sasavot"
     assert [t.id for t in lib.all(TEMPLATE) if t.is_default] == ["tpl-sasavot"]
     lib.close()
 

@@ -207,7 +207,7 @@ SEED_TEMPLATES = (
 # participants' Twitch channels one per line.
 SASAVOT_TEMPLATE = Template(
     "tpl-sasavot", "Clip | #sasavot on #Twitch", "{clip_title} | #sasavot on #Twitch",
-    "{hashtags}[[\n\n{participants_twitch}]]", ("sasavot", "twitch", "shorts", "twitch clips"),
+    "{all_hashtags}[[\n\n{twitch_links}]]", ("sasavot", "twitch", "shorts", "twitch clips"),
     ("shorts", "sasavot", "twitch"), "20", True,
 )
 
@@ -263,7 +263,20 @@ def _migration_3(db: sqlite3.Connection) -> None:
     )
 
 
-MIGRATIONS = (_migration_1, _migration_2, _migration_3)
+def _migration_4(db: sqlite3.Connection) -> None:
+    """skof's template: all tags as hashtags and the streamer's link too (only if not edited by hand)."""
+    table = TABLES[TEMPLATE]
+    row = db.execute(f"SELECT data FROM {table} WHERE id = ?", (SASAVOT_TEMPLATE.id,)).fetchone()
+    if row is None:
+        return
+    values = json.loads(row[0])
+    if values.get("description") == "{hashtags}[[\n\n{participants_twitch}]]":
+        values["description"] = SASAVOT_TEMPLATE.description
+        db.execute(f"UPDATE {table} SET data = ? WHERE id = ?",
+                   (json.dumps(values, ensure_ascii=False), SASAVOT_TEMPLATE.id))
+
+
+MIGRATIONS = (_migration_1, _migration_2, _migration_3, _migration_4)
 
 
 # ---------------------------------------------------------------- library
