@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.2"
+APP_VERSION = "0.9.3"
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,9 @@ class AppConfig:
     youtube_defaults: dict = field(default_factory=dict)  # last category / visibility / language / tags
     autosave_enabled: bool = True  # keep a crash-recovery copy of unsaved work
     autosave_minutes: int = 2
+    twitch_folder: str = ""  # where clips imported by link are saved ("" = Videos/Twitch Clips)
+    twitch_autofill: bool = True
+    twitch_add_to_library: bool = True
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -112,7 +115,7 @@ class AppConfig:
         for key in (
             "ffmpeg_dir", "last_import_dir", "window_geometry", "window_state",
             "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
-            "youtube_active", "transcribe_vad", "transcribe_custom_model", "transcribe_rules",
+            "youtube_active", "transcribe_vad", "transcribe_custom_model", "transcribe_rules", "twitch_folder",
         ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
@@ -122,7 +125,7 @@ class AppConfig:
             config.theme = raw["theme"]
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
                     "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_capitalise",
-                    "autosave_enabled"):
+                    "autosave_enabled", "twitch_autofill", "twitch_add_to_library"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])
         minutes = raw.get("autosave_minutes")

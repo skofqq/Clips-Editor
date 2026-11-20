@@ -69,6 +69,9 @@ from ui.metadata.library_dialog import LibraryDialog
 from ui.metadata.metadata_panel import MetadataPanel
 from ui.subtitles.subtitles_panel import SubtitlesPanel
 from ui.theme import icon, palette, windows
+from ui.twitch.import_dialog import TwitchImportDialog
+from core.twitch.autofill import autofill
+from core.twitch.clip import parse_clip_url
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.upload_dialog import UploadDialog
 from ui.panels.composition_panel import CompositionPanel
@@ -236,7 +239,8 @@ class MainWindow(QMainWindow):
             bar.addWidget(line)
 
         separator()
-        for action, name in ((self.act_import, "import"), (self.act_open, "folder"), (self.act_save, "save")):
+        for action, name in ((self.act_import, "import"), (self.act_twitch, "link"), (self.act_open, "folder"),
+                             (self.act_save, "save")):
             action.setIcon(icon(name))
             bar.addAction(action)
         separator()
@@ -257,6 +261,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
         self.main_toolbar = bar
         self.act_import.setIconText("Import")
+        self.act_twitch.setIconText("Twitch link")
         self.act_open.setIconText("Open")
         self.act_save.setIconText("Save")
         self.act_export.setIconText("Export")
@@ -297,6 +302,8 @@ class MainWindow(QMainWindow):
 
     def _create_actions(self) -> None:
         self.act_import = QAction("&Import Video…", self, shortcut=QKeySequence("Ctrl+I"))
+        self.act_twitch = QAction("Import from &Twitch…", self, shortcut=QKeySequence("Ctrl+Shift+I"))
+        self.act_twitch.setToolTip("Download a Twitch clip by its link and fill in the metadata (Ctrl+Shift+I)")
         self.act_export = QAction("&Export Video…", self, shortcut=QKeySequence("Ctrl+E"))
         self.act_export.setToolTip("Render the Short to MP4 / MKV (Ctrl+E)")
         self.act_upload = QAction("&Upload to YouTube…", self, shortcut=QKeySequence("Ctrl+U"))
@@ -359,6 +366,7 @@ class MainWindow(QMainWindow):
         file_menu.addActions([self.act_new, self.act_open, self.act_save, self.act_save_as])
         file_menu.addSeparator()
         file_menu.addAction(self.act_import)
+        file_menu.addAction(self.act_twitch)
         file_menu.addAction(self.act_export)
         file_menu.addAction(self.act_upload)
         self.recent_menu = file_menu.addMenu("Recent Files")
@@ -442,6 +450,7 @@ class MainWindow(QMainWindow):
 
     def _connect(self) -> None:
         self.act_import.triggered.connect(self.choose_files)
+        self.act_twitch.triggered.connect(lambda: self.import_from_twitch())
         self.act_export.triggered.connect(self.export_video)
         self.act_upload.triggered.connect(lambda: self.upload_to_youtube())
         self.act_youtube_accounts.triggered.connect(self.manage_youtube_accounts)
@@ -999,6 +1008,38 @@ class MainWindow(QMainWindow):
         if dialog.result is not None:
             self.statusBar().showMessage(f"Uploaded to YouTube: {dialog.result.url}", 10000)
 
+    # --------------------------------------------------------------- twitch
+    def import_from_twitch(self, url: str = "", ydl_factory=None) -> bool:
+        dialog = TwitchImportDialog(self.config.twitch_folder, self.config.twitch_autofill,
+                                    self.config.twitch_add_to_library, url, self, ydl_factory=ydl_factory)
+        accepted = dialog.exec() == dialog.DialogCode.Accepted
+        if not dialog.info_only_check.isChecked():
+            self.config.twitch_folder = dialog.folder
+            self.config.twitch_autofill = dialog.autofill_check.isChecked()
+        self.config.twitch_add_to_library = dialog.add_to_library
+        if not accepted or dialog.result is None:
+            return False
+        path, clip = dialog.result
+        self.apply_twitch_result(path, clip, dialog.autofill, dialog.add_to_library)
+        return True
+
+    def apply_twitch_result(self, path, clip, fill: bool, add_to_library: bool) -> None:
+        """Import the downloaded clip and fill the project's metadata."""
+        if path is not None:
+            self.import_files([str(path)])
+        if not fill:
+            return
+        result = autofill(self.project.metadata, clip, self.metadata_library, add_to_library=add_to_library)
+        self.metadata_panel.refresh_library()
+        self.metadata_panel.set_metadata(result.metadata)
+        self._metadata_changed(result.metadata)
+        note = f"Metadata filled from Twitch: {clip.channel or '?'}"
+        if clip.game:
+            note += f" • {clip.game}"
+        if result.added:
+            note += " • added to the library: " + ", ".join(result.added)
+        self.statusBar().showMessage(note, 10000)
+
     # ------------------------------------------------------------- metadata
     def open_metadata_library(self, kind: str = "", entity_id: str = "") -> None:
         dialog = LibraryDialog(self.metadata_library, kind or "streamer", self)
@@ -1499,10 +1540,18 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- events
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
-        if event.mimeData().hasUrls():
+        mime = event.mimeData()
+        if mime.hasUrls() or (mime.hasText() and parse_clip_url(mime.text())):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        mime = event.mimeData()
+        links = [u.toString() for u in mime.urls() if not u.isLocalFile() and parse_clip_url(u.toString())]
+        if not links and mime.hasText() and parse_clip_url(mime.text()):
+            links = [mime.text()]
+        if links:  # a clip link dragged from the browser
+            self.import_from_twitch(links[0])
+            return
         files = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
         projects = [f for f in files if f.lower().endswith(PROJECT_EXTENSION)]
         videos = [f for f in files if Path(f).suffix.lower() in SUPPORTED_EXTENSIONS]
