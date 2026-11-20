@@ -329,6 +329,26 @@ class Library:
     def many(self, kind: str, ids: Iterable[str]) -> list[Entity]:
         return [e for e in (self.get(kind, i) for i in ids) if e is not None]
 
+    def person(self, entity_id: str, kind: str = PARTICIPANT) -> "Person | None":
+        """A streamer or participant by id: ``kind``'s table first, then the other one.
+        A streamer can be a participant in someone else's stream and the other way round."""
+        other = STREAMER if kind == PARTICIPANT else PARTICIPANT
+        return self.get(kind, entity_id) or self.get(other, entity_id)
+
+    def people(self, ids: Iterable[str], kind: str = PARTICIPANT) -> list["Person"]:
+        return [p for p in (self.person(i, kind) for i in ids) if p is not None]
+
+    def person_kind(self, entity_id: str, kind: str = PARTICIPANT) -> str:
+        """Which table the person with this id lives in."""
+        return kind if self.get(kind, entity_id) is not None else (STREAMER if kind == PARTICIPANT else PARTICIPANT)
+
+    def all_people(self, kind: str = PARTICIPANT) -> list["Person"]:
+        """``kind``'s profiles, then the other kind's ones that are not the same person."""
+        own = self.all(kind)
+        seen = {e.key for e in own}
+        other = [e for e in self.all(STREAMER if kind == PARTICIPANT else PARTICIPANT) if e.key not in seen]
+        return own + other
+
     def find(self, kind: str, text: str) -> Entity | None:
         """Profile whose name, username or alias matches ``text``."""
         wanted = normalize(text)

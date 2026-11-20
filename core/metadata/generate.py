@@ -146,7 +146,7 @@ class GeneratedMetadata:
 def choose_template(library: Library, selection: MetadataSelection) -> Template | None:
     """Explicit choice, else the streamer's, game's or stream type's own, else the default."""
     candidates = [selection.template_id]
-    streamer = library.get(STREAMER, selection.streamer_id)
+    streamer = library.person(selection.streamer_id, STREAMER)
     game = library.get(GAME, selection.game_id)
     candidates += [streamer.template_id if streamer else "", game.template_id if game else ""]
     candidates += [s.template_id for s in library.many(STREAM_TYPE, selection.stream_type_ids)]
@@ -163,8 +163,8 @@ def _person_line(person: Person) -> str:
 
 
 def variables(library: Library, selection: MetadataSelection, template: Template | None = None) -> dict[str, str]:
-    streamer = library.get(STREAMER, selection.streamer_id)
-    participants = library.many(PARTICIPANT, selection.participant_ids)
+    streamer = library.person(selection.streamer_id, STREAMER)
+    participants = library.people(selection.participant_ids, PARTICIPANT)
     game = library.get(GAME, selection.game_id)
     stream_types = library.many(STREAM_TYPE, selection.stream_type_ids)
     hashtags = _hashtags(template, selection)
@@ -229,13 +229,13 @@ def _hashtags(template: Template | None, selection: MetadataSelection) -> tuple[
 def collect_tags(library: Library, selection: MetadataSelection, template: Template | None) -> tuple[str, ...]:
     """Streamer first, then game, participants, stream types, template and project tags; no duplicates."""
     tags: list[str] = []
-    streamer = library.get(STREAMER, selection.streamer_id)
+    streamer = library.person(selection.streamer_id, STREAMER)
     if streamer is not None:
         tags += [streamer.name, *streamer.default_tags]
     game = library.get(GAME, selection.game_id)
     if game is not None:
         tags += [game.name, *game.default_tags]
-    for person in library.many(PARTICIPANT, selection.participant_ids):
+    for person in library.people(selection.participant_ids, PARTICIPANT):
         tags += [person.name, *person.default_tags]
     for stream_type in library.many(STREAM_TYPE, selection.stream_type_ids):
         tags += list(stream_type.default_tags)

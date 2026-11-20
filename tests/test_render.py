@@ -282,7 +282,12 @@ def test_export_dialog_settings_and_render(qapp, mp4, ffmpeg_paths, tmp_path):
     dialog.preset_combo.setCurrentIndex(dialog.preset_combo.findData("High Quality · H.265 MKV"))
     s = dialog.settings()
     assert (s.video_codec, s.container, s.audio_codec) == (HEVC, MKV, OPUS)
-    assert dialog.output_edit.text().endswith(".mkv")
+    assert dialog.output_path().suffix == ".mkv" and dialog.extension_label.text() == ".mkv"
+    dialog.folder_edit.setText(str(Path("C:/clips")))
+    dialog.name_edit.setText('Мой клип: "лучший".mp4')
+    assert dialog.output_path() == Path("C:/clips") / "Мой клип лучший.mkv"
+    dialog.folder_edit.setText(str(out.parent))
+    dialog.name_edit.setText(out.stem)
     assert dialog.encoder_combo.currentData() == AUTO and "CPU" in dialog.encoder_combo.currentText()
     dialog.quality_spin.setValue(30)
     assert dialog.preset_combo.currentData() == CUSTOM_PRESET

@@ -132,7 +132,8 @@ class MetadataPanel(QWidget):
                             (self.game_chips, GAME), (self.type_chips, STREAM_TYPE)):
             chips.changed.connect(self._emit)
             chips.create_requested.connect(lambda text, k=kind, c=chips: self._create(k, c, text))
-            chips.edit_requested.connect(lambda entity_id, k=kind: self.library_requested.emit(k, entity_id))
+            chips.edit_requested.connect(lambda entity_id, k=kind: self.library_requested.emit(
+                self.library.person_kind(entity_id, k) if k in (STREAMER, PARTICIPANT) else k, entity_id))
         for chips in (self.extra_tag_chips, self.tag_chips):
             chips.changed.connect(self._emit)
         for edit in (self.clip_title_edit, self.date_edit, self.stream_url_edit, self.title_edit):
@@ -156,10 +157,13 @@ class MetadataPanel(QWidget):
         self.template_combo.setCurrentIndex(max(0, index))
         for chips, kind in ((self.streamer_chips, STREAMER), (self.participant_chips, PARTICIPANT),
                             (self.game_chips, GAME), (self.type_chips, STREAM_TYPE)):
-            entities = self.library.all(kind)
+            # Streamers and participants are offered in both fields.
+            entities = self.library.all_people(kind) if kind in (STREAMER, PARTICIPANT) else self.library.all(kind)
             chips.set_suggestions([(e.id, e.name, e.labels()) for e in entities])
             # Drop chips whose profile was deleted.
             known = {e.id for e in entities}
+            if kind in (STREAMER, PARTICIPANT):
+                known |= {e.id for e in self.library.all(STREAMER) + self.library.all(PARTICIPANT)}
             if any(i not in known for i in chips.ids()):
                 chips.set_items([(i, label) for i, label in chips.items() if i in known])
         self._loading = False
@@ -206,7 +210,8 @@ class MetadataPanel(QWidget):
             lib = self.library
 
             def chips_for(chips, kind, ids):
-                chips.set_items([(e.id, e.name) for e in lib.many(kind, ids)])
+                found = lib.people(ids, kind) if kind in (STREAMER, PARTICIPANT) else lib.many(kind, ids)
+                chips.set_items([(e.id, e.name) for e in found])
 
             chips_for(self.streamer_chips, STREAMER, [s.streamer_id] if s.streamer_id else [])
             chips_for(self.participant_chips, PARTICIPANT, s.participant_ids)

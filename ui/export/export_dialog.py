@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -150,8 +151,16 @@ class ExportDialog(QDialog):
         self.loudness_combo.setToolTip(
             "Measures the finished sound and sets one even level for the whole Short, with peaks kept "
             "under -1 dB. YouTube turns louder videos down to -14 LUFS anyway, quieter ones stay quiet.")
-        self.output_edit = QLineEdit(str(output), self)
+        # Folder and file name are separate fields; the extension follows the container.
+        output = Path(output)
+        self.folder_edit = QLineEdit(str(output.parent) if str(output) else "", self)
+        self.folder_edit.setPlaceholderText("Folder")
+        self.name_edit = QLineEdit(output.stem, self)
+        self.name_edit.setPlaceholderText("File name")
+        self.extension_label = QLabel(self)
+        self.extension_label.setObjectName("muted")
         self.browse_button = QPushButton("Browse…", self)
+        self.browse_button.setToolTip("Choose the folder")
 
         self.summary_label = QLabel(self)
         self.summary_label.setObjectName("muted")
@@ -210,10 +219,14 @@ class ExportDialog(QDialog):
 
         file_card = Card("File", parent=self, label_width=96)
         file_card.add_row("Container", self.container_combo)
-        out = QHBoxLayout()
-        out.addWidget(self.output_edit, 1)
-        out.addWidget(self.browse_button)
-        file_card.add_row("Save to", out)
+        folder = QHBoxLayout()
+        folder.addWidget(self.folder_edit, 1)
+        folder.addWidget(self.browse_button)
+        file_card.add_row("Folder", folder)
+        name = QHBoxLayout()
+        name.addWidget(self.name_edit, 1)
+        name.addWidget(self.extension_label)
+        file_card.add_row("File name", name)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.open_button)
@@ -398,12 +411,7 @@ class ExportDialog(QDialog):
         self._update_summary()
 
     def _fix_extension(self) -> None:
-        text = self.output_edit.text().strip()
-        if text:
-            path = Path(text)
-            wanted = "." + self.container_combo.currentData()
-            if path.suffix.lower() != wanted:
-                self.output_edit.setText(str(path.with_suffix(wanted)))
+        self.extension_label.setText("." + self.container_combo.currentData())
 
     def _update_summary(self) -> None:
         s = self.settings()
@@ -430,20 +438,26 @@ class ExportDialog(QDialog):
         self.summary_label.setText(text)
 
     def _browse(self) -> None:
-        s = self.settings()
-        filters = "MP4 video (*.mp4)" if s.container == MP4 else "Matroska video (*.mkv)"
-        file, _ = QFileDialog.getSaveFileName(self, "Export Video", self.output_edit.text(), filters)
-        if file:
-            self.output_edit.setText(file)
-            self._fix_extension()
+        folder = QFileDialog.getExistingDirectory(self, "Export Video: folder", self.folder_edit.text().strip())
+        if folder:
+            self.folder_edit.setText(str(Path(folder)))
 
     # ------------------------------------------------------------ render
+    def file_name(self) -> str:
+        """The name field without an extension the user may have typed, and without characters
+        Windows does not allow in file names."""
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", self.name_edit.text()).strip().rstrip(".")
+        for ext in (".mp4", ".mkv"):
+            if name.lower().endswith(ext):
+                name = name[: -len(ext)].rstrip()
+        return name
+
     def output_path(self) -> Path:
-        path = Path(self.output_edit.text().strip())
-        return path.with_suffix(self.settings().extension)
+        return Path(self.folder_edit.text().strip()) / (self.file_name() + self.settings().extension)
 
     def _set_busy(self, busy: bool) -> None:
-        for widget in (*self.findChildren(QComboBox), *self.findChildren(QSpinBox), self.output_edit):
+        for widget in (*self.findChildren(QComboBox), *self.findChildren(QSpinBox), self.folder_edit,
+                       self.name_edit):
             widget.setEnabled(not busy)
         self.browse_button.setEnabled(not busy)
         if not busy:
@@ -456,11 +470,18 @@ class ExportDialog(QDialog):
     def start_render(self) -> None:
         if self._task is not None:
             return
-        text = self.output_edit.text().strip()
-        if not text:
-            QMessageBox.warning(self, "Export Video", "Choose where to save the video.")
+        if not self.folder_edit.text().strip():
+            QMessageBox.warning(self, "Export Video", "Choose the folder to save the video in.")
+            return
+        if not self.file_name():
+            QMessageBox.warning(self, "Export Video", "Type a file name.")
             return
         output = self.output_path()
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(self, "Export Video", f"Cannot use this folder: {exc}")
+            return
         if output.resolve() == Path(self.source.path).resolve():
             QMessageBox.warning(self, "Export Video", "Choose a different file: this is the source video.")
             return

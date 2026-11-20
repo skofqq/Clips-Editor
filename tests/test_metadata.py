@@ -166,6 +166,23 @@ def test_default_sasavot_format(lib):
     assert len(all_hashtags((), tuple(f"t{i}" for i in range(100)))) == MAX_HASHTAGS
 
 
+def test_streamer_can_be_a_participant(lib):
+    streamer, helin, _ = _people(lib)
+    other = lib.create(STREAMER, "formixyouknow", username="formixyouknow",
+                       twitch_url="https://twitch.tv/formixyouknow", default_tags=("формикс",))
+    names = [p.name for p in lib.all_people(PARTICIPANT)]
+    assert "formixyouknow" in names and "helin139" in names
+    sel = MetadataSelection(streamer_id=streamer.id, participant_ids=(other.id, helin.id), clip_title="X")
+    result = generate(lib, sel)
+    assert result.description.endswith(
+        "https://www.twitch.tv/sasavot\nhttps://twitch.tv/formixyouknow\nhttps://www.twitch.tv/helin139")
+    assert "формикс" in result.tags
+    # And a participant can be the streamer of another clip.
+    assert generate(lib, MetadataSelection(streamer_id=helin.id, clip_title="Y")).description.endswith(
+        "https://www.twitch.tv/helin139")
+    assert lib.person_kind(other.id) == STREAMER and lib.person_kind(helin.id) == PARTICIPANT
+
+
 def test_old_library_gets_the_new_default(tmp_path):
     path = tmp_path / "old.sqlite"
     with sqlite3.connect(path) as db:
