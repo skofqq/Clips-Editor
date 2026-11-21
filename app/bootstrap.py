@@ -31,6 +31,9 @@ def create_application(argv: list[str], theme: str = "dark", mica: bool = False)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setStyle("Fusion")
+    from ui.theme import icon
+
+    app.setWindowIcon(icon("app"))
     from ui.theme import windows
 
     windows.install(app, mica=mica)
@@ -86,7 +89,8 @@ def restart() -> bool:
     from PySide6.QtCore import QProcess
 
     if getattr(sys, "frozen", False):
-        return QProcess.startDetached(sys.executable, sys.argv[1:])
+        ok, _pid = QProcess.startDetached(sys.executable, sys.argv[1:])
+        return bool(ok)
     root = str(Path(__file__).resolve().parent.parent)
     ok, _pid = QProcess.startDetached(sys.executable, ["-m", "app.main"], root)
     return bool(ok)
