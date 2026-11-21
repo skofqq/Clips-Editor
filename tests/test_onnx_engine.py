@@ -27,6 +27,14 @@ def test_tokens_are_grouped_into_timed_words():
     assert 0.8 < first.probability <= 1.0
 
 
+def test_late_punctuation_does_not_stretch_a_word():
+    tokens = [" так", ",", " вод", "ичка", "."]
+    stamps = [1.7, 1.9, 2.1, 2.4, 9.8]  # the full stop comes at the end of a long pause
+    words = onnx_engine.tokens_to_words(tokens, stamps, None, 0.0, 9.84, 0.04)
+    assert [w.text for w in words] == ["так,", "водичка."]
+    assert words[1].end_us < 3_000_000
+
+
 def test_tokens_without_timestamps_give_no_words():
     assert onnx_engine.tokens_to_words(["a"], None, None, 0, 1, 0.04) == []
 
@@ -120,6 +128,7 @@ def test_add_cross_check_keeps_the_second_models_words(tmp_path, monkeypatch):
 
     class Engine:
         models_dir = tmp_path
+        device_used, notice = "cuda", ""
 
         def transcribe(self, audio, options, progress, cancel):
             assert options.model == "gigaam-v3" and not options.cross_check

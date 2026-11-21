@@ -564,8 +564,10 @@ def add_cross_check(engine: "WhisperEngine", transcript: Transcript, audio: np.n
     def report(fraction: float, message: str) -> None:
         progress(fraction, f"Double check with {check}: {message}")
 
+    device, notice = engine.device_used, engine.notice
     second = engine.transcribe(audio, replace(options, model=check, language=language, cross_check=False),
                                report, cancel)
+    engine.device_used, engine.notice = device, notice  # report the main model's device
     words = [w for w in second.words()]
     if options.refine_timing and second.segments:
         from core.transcription.alignment import refine_segments

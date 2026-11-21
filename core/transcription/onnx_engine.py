@@ -211,11 +211,14 @@ def tokens_to_words(tokens, timestamps, logprobs, offset_s: float, chunk_end_s: 
         else:
             groups[-1].append(i)
     words: list[Word] = []
-    starts = [timestamps[g[0]] for g in groups]
+    # Punctuation is often emitted late (a "." at the end of a long pause),
+    # so only tokens with letters or digits set a word's timing.
+    timed = [[i for i in g if any(ch.isalnum() for ch in tokens[i])] or g for g in groups]
+    starts = [timestamps[t[0]] for t in timed]
     for n, group in enumerate(groups):
         text = "".join(tokens[i] for i in group).strip()
         start = offset_s + starts[n]
-        tail = offset_s + timestamps[group[-1]] + frame_s + 0.12
+        tail = offset_s + timestamps[timed[n][-1]] + frame_s + 0.12
         limit = offset_s + starts[n + 1] - 0.01 if n + 1 < len(groups) else chunk_end_s
         end = max(start + frame_s, min(tail, limit, chunk_end_s))
         prob = math.exp(sum(logprobs[i] for i in group) / len(group)) if group else 1.0
