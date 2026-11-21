@@ -94,12 +94,36 @@ class ClipEntry:
                    str(data.get("updated_at") or ""), str(data.get("file_id") or ""))
 
 
+@dataclass(frozen=True)
+class Stats:
+    """The last numbers read for a published Short (YouTube only for now)."""
+
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    avg_view_pct: float | None = None  # share watched on average, %
+    subscribers: int | None = None
+    fetched_at: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Stats":
+        def num(key, kind):
+            value = data.get(key)
+            try:
+                return kind(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+        return cls(num("views", int) or 0, num("likes", int) or 0, num("comments", int) or 0,
+                   num("avg_view_pct", float), num("subscribers", int), str(data.get("fetched_at") or ""))
+
+
 class ClipMemory:
     def __init__(self, path: Path, covers_dir: Path | None = None) -> None:
         self.path = Path(path)
         self.covers_dir = Path(covers_dir) if covers_dir is not None else self.path.parent / "covers"
         self._clips: dict[str, ClipEntry] = {}
         self._published: list[Publication] = []
+        self._stats: dict[str, Stats] = {}  # video id → last numbers
         self.migrated = False  # old upload log and projects were read in
         self._load()
 
@@ -123,11 +147,15 @@ class ClipMemory:
         for item in raw.get("published") or []:
             if isinstance(item, dict):
                 self._published.append(Publication.from_dict(item))
+        stats = raw.get("stats")
+        if isinstance(stats, dict):
+            self._stats = {str(k): Stats.from_dict(v) for k, v in stats.items() if isinstance(v, dict)}
 
     def save(self) -> None:
         data = {"version": VERSION, "migrated": self.migrated,
                 "clips": [e.to_dict() for e in self._clips.values()],
-                "published": [asdict(p) for p in self._published]}
+                "published": [asdict(p) for p in self._published],
+                "stats": {k: asdict(v) for k, v in self._stats.items()}}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_name(self.path.name + ".tmp")
@@ -216,6 +244,26 @@ class ClipMemory:
 
     def cover_of(self, publication: Publication) -> str:
         return publication.cover if publication.cover and Path(publication.cover).is_file() else ""
+
+    # ------------------------------------------------------------ numbers
+    def video_ids(self, service: str = YOUTUBE) -> list[str]:
+        return [p.video_id for p in self._published if p.service == service and p.video_id]
+
+    def set_stats(self, stats) -> int:
+        """Keep the numbers of the published Shorts among ``stats`` (core.youtube.analytics.VideoStats)."""
+        mine, now, count = set(self.video_ids()), _now(), 0
+        for s in stats:
+            if s.video_id in mine:
+                self._stats[s.video_id] = Stats(s.views, s.likes, s.comments, s.avg_view_pct, s.subscribers, now)
+                count += 1
+        if count:
+            self.save()
+        return count
+
+    def stats_for(self, publication: Publication) -> Stats | None:
+        if publication.service != YOUTUBE or not publication.video_id:
+            return None
+        return self._stats.get(publication.video_id)
 
     # ------------------------------------------------------------ migration
     def import_upload_log(self, records) -> int:

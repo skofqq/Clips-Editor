@@ -27,8 +27,24 @@ COVER = QSize(54, 96)  # a vertical Short
 LOGOS = {YOUTUBE: "logo_youtube", TIKTOK: "logo_tiktok", INSTAGRAM: "logo_instagram"}
 
 
+NEWEST, VIEWS, LIKES, WATCHED = "newest", "views", "likes", "watched"
+SORTS = ((NEWEST, "Newest first"), (VIEWS, "Most views"), (LIKES, "Most likes"), (WATCHED, "Best watched"))
+
+
+def _count(n: int) -> str:
+    """1234 → "1.2K", 2500000 → "2.5M"."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 10_000:
+        return f"{n / 1000:.0f}K"
+    if n >= 1000:
+        return f"{n / 1000:.1f}K".replace(".0K", "K")
+    return str(n)
+
+
 class PublishedPanel(Card):
     open_clip_requested = Signal(str)  # source path
+    refresh_requested = Signal()  # read the YouTube numbers again
 
     def __init__(self, memory: ClipMemory, parent: QWidget | None = None) -> None:
         super().__init__("Published Shorts", "Everything sent from this app, newest first. Double-click to open "
@@ -41,10 +57,21 @@ class PublishedPanel(Card):
         self.service_combo.addItem("All services", "")
         for service in (YOUTUBE, TIKTOK, INSTAGRAM):
             self.service_combo.addItem(icon(LOGOS[service]), SERVICE_TEXT[service], service)
+        self.sort_combo = QComboBox(self)
+        for key, text in SORTS:
+            self.sort_combo.addItem(text, key)
+        self.refresh_button = QPushButton("Refresh numbers", self)
+        self.refresh_button.setToolTip("Read views, likes and watch time from YouTube")
         top = QHBoxLayout()
         top.addWidget(self.search_edit, 1)
         top.addWidget(self.service_combo)
+        top.addWidget(self.sort_combo)
+        top.addWidget(self.refresh_button)
         self.body.addLayout(top)
+        self.summary_label = QLabel(self)
+        self.summary_label.setObjectName("muted")
+        self.summary_label.setWordWrap(True)
+        self.body.addWidget(self.summary_label)
         self.list = QListWidget(self)
         self.list.setObjectName("publishedList")
         self.list.setIconSize(COVER)
@@ -66,6 +93,8 @@ class PublishedPanel(Card):
 
         self.search_edit.textChanged.connect(lambda _t: self.refresh())
         self.service_combo.currentIndexChanged.connect(lambda _i: self.refresh())
+        self.sort_combo.currentIndexChanged.connect(lambda _i: self.refresh())
+        self.refresh_button.clicked.connect(self.refresh_requested)
         self.list.itemDoubleClicked.connect(lambda _item: self.open_video())
         self.list.currentItemChanged.connect(lambda *_a: self._update_buttons())
         self.open_button.clicked.connect(self.open_video)
@@ -80,6 +109,8 @@ class PublishedPanel(Card):
         self.list.clear()
         items = [p for p in self.memory.publications()
                  if (not service or p.service == service) and (not text or text in p.title.casefold())]
+        items = self._sorted(items)
+        self._summarize(items)
         for p in items:
             item = QListWidgetItem(self._cover(p), self._text(p))
             item.setData(ROLE, p)
@@ -92,9 +123,60 @@ class PublishedPanel(Card):
         self.list.setVisible(bool(items))
         self._update_buttons()
 
+    def _sorted(self, items: list[Publication]) -> list[Publication]:
+        key = self.sort_combo.currentData()
+        if key == NEWEST:
+            return items
+        def number(p: Publication) -> float:
+            st = self.memory.stats_for(p)
+            if st is None:
+                return -1.0
+            value = {VIEWS: st.views, LIKES: st.likes, WATCHED: st.avg_view_pct}.get(key)
+            return -1.0 if value is None else float(value)
+        return sorted(items, key=number, reverse=True)  # stable: newest first among equals
+
+    def _summarize(self, items: list[Publication]) -> None:
+        stats = [st for st in (self.memory.stats_for(p) for p in items) if st is not None]
+        if not items:
+            self.summary_label.setText("")
+            return
+        parts = [f"{len(items)} published"]
+        if stats:
+            views = sum(st.views for st in stats)
+            parts.append(f"{_count(views)} views")
+            parts.append(f"{_count(sum(st.likes for st in stats))} likes")
+            watched = [(st.avg_view_pct, st.views) for st in stats if st.avg_view_pct is not None and st.views]
+            if watched:
+                total = sum(v for _pct, v in watched)
+                parts.append(f"{sum(pct * v for pct, v in watched) / total:.0f}% watched on average")
+            fetched = max(st.fetched_at for st in stats)
+            parts.append(f"numbers from {fetched[:16].replace('T', ' ')}")
+        else:
+            parts.append("press Refresh numbers to read views and likes from YouTube")
+        self.summary_label.setText(" · ".join(parts))
+
+    def set_busy(self, busy: bool, message: str = "") -> None:
+        self.refresh_button.setEnabled(not busy)
+        if busy:
+            self.summary_label.setText(message or "Reading the numbers…")
+
+    def set_note(self, text: str) -> None:
+        """A problem reading the numbers; the list stays as it is."""
+        self.refresh_button.setEnabled(True)
+        self.summary_label.setText(text)
+
     def _text(self, p: Publication) -> str:
         where = " · ".join(part for part in (SERVICE_TEXT.get(p.service, p.service), p.channel, p.privacy) if part)
-        return f"{p.title or '(no title)'}\n{p.date_text} · {where}"
+        text = f"{p.title or '(no title)'}\n{p.date_text} · {where}"
+        st = self.memory.stats_for(p)
+        if st is not None:
+            numbers = [f"👁 {_count(st.views)}", f"♥ {_count(st.likes)}", f"💬 {_count(st.comments)}"]
+            if st.avg_view_pct is not None:
+                numbers.append(f"{st.avg_view_pct:.0f}% watched")
+            if st.subscribers:
+                numbers.append(f"+{st.subscribers} subscribers")
+            text += "\n" + "   ".join(numbers)
+        return text
 
     def _cover(self, p: Publication) -> QIcon:
         path = self.memory.cover_of(p)

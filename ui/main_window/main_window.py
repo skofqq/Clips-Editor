@@ -283,6 +283,7 @@ class MainWindow(QMainWindow):
             self.service_tabs.add(panel, name, logo)
         self.published_panel = PublishedPanel(self.clip_memory, self.service_tabs)
         self.published_panel.open_clip_requested.connect(self._open_published_clip)
+        self.published_panel.refresh_requested.connect(self._refresh_published_numbers)
         self.service_tabs.add(self.published_panel, "History", "library")
         self.guide_panel.connections_changed.connect(self._social_connections_changed)
         self.guide_panel.youtube_accounts_requested.connect(self.manage_youtube_accounts)
@@ -1665,6 +1666,7 @@ class MainWindow(QMainWindow):
         if channel is None or not self.youtube.has_token(channel.id) or self._analytics_task is not None:
             return
         app_ids = [r.video_id for r in self.upload_history.records() if r.channel_id == channel.id and r.video_id]
+        app_ids += [v for v in self.clip_memory.video_ids() if v not in app_ids]  # the History tab's too
         task = CancellableTask(collect, self.youtube.client_for(channel.id), app_ids)
         task.signals.progress.connect(lambda _f, message: self.analytics_panel.set_busy(True, message))
         task.signals.finished.connect(lambda result, cid=channel.id: self._analytics_done(cid, result))
@@ -1673,18 +1675,30 @@ class MainWindow(QMainWindow):
         self._analytics_task = task
         self._analytics_loaded = channel.id
         self.analytics_panel.set_busy(True, "Loading…")
+        self.published_panel.set_busy(True)
         QThreadPool.globalInstance().start(task)
+
+    def _refresh_published_numbers(self) -> None:
+        channel = self.youtube.active
+        if channel is None or not self.youtube.has_token(channel.id):
+            self.published_panel.set_note("Connect a YouTube channel (YouTube tab → Accounts…) to read the numbers.")
+            return
+        self.refresh_analytics()
 
     def _analytics_done(self, channel_id: str, result) -> None:
         self._analytics_task = None
         stats, note = result
         self.analytics_panel.set_stats(stats, note)
+        self.clip_memory.set_stats(stats)
+        self.published_panel.set_busy(False)
+        self.published_panel.refresh()
 
     def _analytics_failed(self, error) -> None:
         self._analytics_task = None
         self._analytics_loaded = ""
         message = str(error) if error is not None else "Cancelled."
         self.analytics_panel.set_error(f"Could not load the analytics: {message}")
+        self.published_panel.set_note(f"Could not read the numbers: {message}")
 
     def _upload_finished(self, form, result) -> None:
         self._save_upload_defaults()

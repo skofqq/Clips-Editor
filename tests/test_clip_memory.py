@@ -84,3 +84,30 @@ def test_window_brings_back_title_and_cover(qapp, data_dir, ffmpeg_paths, sample
     finally:
         w._set_dirty(False)
         w.close()
+
+
+def test_history_shows_and_sorts_by_numbers(qapp, tmp_path):
+    from core.youtube.analytics import VideoStats
+    from ui.social.published_panel import VIEWS, WATCHED, PublishedPanel
+
+    memory = ClipMemory(tmp_path / "m.json")
+    for n, vid in enumerate(("a", "b", "c")):
+        memory.add_publication(Publication(YOUTUBE, f"https://youtube.com/shorts/{vid}", f"Short {vid}",
+                                           f"2026-11-2{n}T10:00:00", "", vid, "Skof"))
+    memory.add_publication(Publication(INSTAGRAM, "https://instagram.com/reel/x", "Reel x", "2026-11-23T10:00:00"))
+    stats = [VideoStats("a", "Short a", "", 30, 12500, 900, 40, avg_view_pct=81.0),
+             VideoStats("b", "Short b", "", 30, 300, 20, 1, avg_view_pct=95.5),
+             VideoStats("zz", "not ours", "", 30, 10 ** 6, 1, 1)]
+    assert memory.set_stats(stats) == 2
+    assert ClipMemory(tmp_path / "m.json").stats_for(memory.publications()[-1]).views == 12500  # kept on disk
+
+    panel = PublishedPanel(memory)
+    titles = lambda: [panel.list.item(i).text().split("\n")[0] for i in range(panel.list.count())]  # noqa: E731
+    assert titles() == ["Reel x", "Short c", "Short b", "Short a"]
+    assert "👁 12K" in panel.list.item(3).text() and "81% watched" in panel.list.item(3).text()
+    assert "👁" not in panel.list.item(1).text()  # no numbers read for this one yet
+    panel.sort_combo.setCurrentIndex(panel.sort_combo.findData(VIEWS))
+    assert titles()[:2] == ["Short a", "Short b"]
+    panel.sort_combo.setCurrentIndex(panel.sort_combo.findData(WATCHED))
+    assert titles()[:2] == ["Short b", "Short a"]
+    assert "4 published" in panel.summary_label.text() and "13K views" in panel.summary_label.text()
