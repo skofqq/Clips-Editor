@@ -10,6 +10,10 @@ fc /b requirements.txt .venv\requirements.installed >nul 2>nul
 if errorlevel 1 (
     echo Installing dependencies...
     .venv\Scripts\python -m pip install -r requirements.txt
+    if errorlevel 1 if exist wheels (
+        echo Trying the wheels folder...
+        .venv\Scripts\python -m pip install --no-index --find-links wheels -r requirements.txt
+    )
     if errorlevel 1 (
         echo Dependency installation failed. Check your internet connection.
         pause

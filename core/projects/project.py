@@ -56,6 +56,7 @@ class Project:
     composition: Composition | None = None  # None until the first media sets a default
     timelines: dict[str, Timeline] = field(default_factory=dict)  # edits per media path
     transcripts: dict[str, Transcript] = field(default_factory=dict)  # per media path
+    translations: dict[str, Transcript] = field(default_factory=dict)  # subtitles in the 2nd language, per media
     censors: dict[str, CensorState] = field(default_factory=dict)  # censor review per media path
     metadata: ClipMetadata = field(default_factory=ClipMetadata)  # YouTube title/description/tags choices
     subtitles: SubtitleSettings = field(default_factory=SubtitleSettings)  # caption style and edits
@@ -74,7 +75,7 @@ class Project:
     def remove_media(self, path: str) -> None:
         key = _norm(path)
         self.media = [m for m in self.media if _norm(m.path) != key]
-        for store in (self.timelines, self.transcripts, self.censors, self.highlights):
+        for store in (self.timelines, self.transcripts, self.translations, self.censors, self.highlights):
             for stored in [p for p in store if _norm(p) == key]:
                 del store[stored]
 
@@ -92,6 +93,17 @@ class Project:
             del self.transcripts[stored]
         if transcript is not None:
             self.transcripts[path] = transcript
+
+    def translation_for(self, path: str) -> Transcript | None:
+        key = _norm(path)
+        return next((t for p, t in self.translations.items() if _norm(p) == key), None)
+
+    def set_translation(self, path: str, transcript: Transcript | None) -> None:
+        key = _norm(path)
+        for stored in [p for p in self.translations if _norm(p) == key]:
+            del self.translations[stored]
+        if transcript is not None:
+            self.translations[path] = transcript
 
     def highlights_for(self, path: str) -> tuple[Highlight, ...] | None:
         key = _norm(path)
@@ -140,6 +152,10 @@ class Project:
             data["transcripts"] = [
                 {"media": path, **transcript.to_dict()} for path, transcript in self.transcripts.items()
             ]
+        if self.translations:
+            data["translations"] = [
+                {"media": path, **transcript.to_dict()} for path, transcript in self.translations.items()
+            ]
         if self.censors:
             data["censor"] = [{"media": path, **state.to_dict()} for path, state in self.censors.items()]
         if not self.metadata.empty:
@@ -165,7 +181,7 @@ class Project:
             raise ProjectFormatError(
                 f"Project was saved by a newer version (schema {version})."
             )
-        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "censor", "metadata", "subtitles", "highlights", "thumbnail"}
+        known = {"schema_version", "name", "media", "composition", "timelines", "transcripts", "translations", "censor", "metadata", "subtitles", "highlights", "thumbnail"}
         extra = {k: v for k, v in data.items() if k not in known}
         composition = None
         if data.get("composition") is not None:
@@ -185,6 +201,12 @@ class Project:
                 transcripts[str(entry["media"])] = Transcript.from_dict(entry)
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise ProjectFormatError(f"Invalid transcript: {exc}") from exc
+        translations: dict[str, Transcript] = {}
+        for entry in data.get("translations") or []:
+            try:
+                translations[str(entry["media"])] = Transcript.from_dict(entry)
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue  # can be translated again: drop it rather than refuse the project
         censors: dict[str, CensorState] = {}
         for entry in data.get("censor") or []:
             try:
@@ -209,6 +231,7 @@ class Project:
             composition=composition,
             timelines=timelines,
             transcripts=transcripts,
+            translations=translations,
             censors=censors,
             metadata=metadata,
             subtitles=SubtitleSettings.from_dict(data.get("subtitles")),

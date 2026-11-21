@@ -101,6 +101,9 @@ class SubtitlesPanel(QWidget):
     split_requested = Signal()  # start a caption at the word under the playhead
     export_requested = Signal()
     user_presets_changed = Signal(dict)  # name → SubtitleStyle dict, to keep in the app settings
+    translate_requested = Signal(str)  # direction, "ru-en" / "en-ru"
+    translate_cancelled = Signal()
+    edit_translation_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -132,6 +135,46 @@ class SubtitlesPanel(QWidget):
         preset_row.addStretch(1)
         preset_row.addWidget(self.save_preset_button)
         main.body.addLayout(preset_row)
+
+        # ---- translation
+        from core.translation.models import MODELS
+        from ui.widgets.m3_progress import WavyProgressBar
+
+        self.direction_combo = QComboBox(self)
+        for key, model in MODELS.items():
+            self.direction_combo.addItem(model.label, key)
+        self.translate_button = QPushButton("Translate", self)
+        self.translate_button.setObjectName("primary")
+        self.translate_button.setToolTip("Translate the subtitles on this computer. The model (~400 MB) is "
+                                         "downloaded the first time.")
+        self.translate_cancel = QPushButton("Cancel", self)
+        self.translate_cancel.hide()
+        self.translate_progress = WavyProgressBar(self)
+        self.translate_progress.setRange(0, 1000)
+        self.translate_progress.setTextVisible(False)
+        self.translate_progress.hide()
+        self.translation_label = QLabel("Make a second version of the Short with subtitles in the other language.",
+                                        self)
+        self.translation_label.setObjectName("muted")
+        self.translation_label.setWordWrap(True)
+        self.use_translation_check = QCheckBox("Show the translation on the video", self)
+        self.use_translation_check.setToolTip("Preview, export, .srt and YouTube captions use the translated text. "
+                                              "Untick to go back to the original.")
+        self.edit_translation_button = QPushButton("Edit translation…", self)
+        translate_row = QHBoxLayout()
+        translate_row.addWidget(self.direction_combo, 1)
+        translate_row.addWidget(self.translate_button)
+        translate_row.addWidget(self.translate_cancel)
+        translation_card = Card("Translation", "Offline, Russian ↔ English.", self)
+        translation_card.body.addLayout(translate_row)
+        translation_card.body.addWidget(self.translate_progress)
+        translation_card.body.addWidget(self.translation_label)
+        use_row = QHBoxLayout()
+        use_row.addWidget(self.use_translation_check)
+        use_row.addStretch(1)
+        use_row.addWidget(self.edit_translation_button)
+        translation_card.body.addLayout(use_row)
+        self._has_translation = False
 
         # ---- look
         self.font_combo = QFontComboBox(self)
@@ -288,7 +331,7 @@ class SubtitlesPanel(QWidget):
         column = QVBoxLayout(content)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(8)
-        for card in (main, look, layout_card, censor_card, captions_card):
+        for card in (main, translation_card, look, layout_card, censor_card, captions_card):
             column.addWidget(card)
         self.stack = QStackedWidget(self)
         self.stack.addWidget(self.empty)
@@ -303,6 +346,10 @@ class SubtitlesPanel(QWidget):
         self.preset_list.itemClicked.connect(self._preset_clicked)
         self.preset_list.customContextMenuRequested.connect(self._preset_menu)
         self.save_preset_button.clicked.connect(self._save_preset)
+        self.translate_button.clicked.connect(lambda: self.translate_requested.emit(self.direction_combo.currentData()))
+        self.translate_cancel.clicked.connect(self.translate_cancelled)
+        self.edit_translation_button.clicked.connect(self.edit_translation_requested)
+        self.use_translation_check.toggled.connect(self._translation_toggled)
         self._fill_emoji_menu()
         self.karaoke_combo.currentIndexChanged.connect(self._edited)
         self.emoji_place_combo.currentIndexChanged.connect(self._edited)
@@ -371,6 +418,7 @@ class SubtitlesPanel(QWidget):
             self.chars_spin.setValue(s.max_chars)
             self.lines_spin.setValue(s.max_lines)
             self.mask_combo.setCurrentIndex(max(0, self.mask_combo.findData(s.mask)))
+            self.use_translation_check.setChecked(settings.translated and self._has_translation)
         finally:
             self._loading = False
         self._update_enabled()
@@ -444,6 +492,59 @@ class SubtitlesPanel(QWidget):
         style = self._read_style()
         if style != self._settings.style:
             self._settings = replace(self._settings, style=style)
+            self.settings_changed.emit(self._settings)
+
+    # -------------------------------------------------------- translation
+    def set_translation(self, translation, source_language: str = "") -> None:
+        """What is translated for this clip (a Transcript or None) and the clip's language."""
+        from core.translation.models import MODELS, direction_for
+
+        self._has_translation = translation is not None
+        if translation is not None:
+            key = translation.model.split(":", 1)[-1]
+            label = MODELS[key].label if key in MODELS else translation.language
+            self.translation_label.setText(f"Translated: {label}. Correct phrases with Edit translation…; "
+                                           "translate again after changing the transcript.")
+            self.translate_button.setText("Translate again")
+        else:
+            self.translation_label.setText("Make a second version of the Short with subtitles in the other "
+                                           "language.")
+            self.translate_button.setText("Translate")
+            if source_language:
+                self.direction_combo.setCurrentIndex(max(0, self.direction_combo.findData(
+                    direction_for(source_language))))
+        self._loading = True
+        try:
+            self.use_translation_check.setChecked(self._settings.translated and self._has_translation)
+        finally:
+            self._loading = False
+        self._update_translation_controls(False)
+
+    def set_translation_busy(self, busy: bool, message: str = "") -> None:
+        self.translate_progress.setVisible(busy)
+        self.translate_cancel.setVisible(busy)
+        self.translate_button.setVisible(not busy)
+        if busy:
+            self.translate_progress.setValue(0)
+        if message:
+            self.translation_label.setText(message)
+        self._update_translation_controls(busy)
+
+    def set_translation_progress(self, fraction: float, message: str = "") -> None:
+        self.translate_progress.setValue(int(max(0.0, min(1.0, fraction)) * 1000))
+        if message:
+            self.translation_label.setText(message)
+
+    def _update_translation_controls(self, busy: bool) -> None:
+        self.direction_combo.setEnabled(not busy)
+        self.use_translation_check.setEnabled(self._has_translation and not busy)
+        self.edit_translation_button.setEnabled(self._has_translation and not busy)
+
+    def _translation_toggled(self, on: bool) -> None:
+        if self._loading:
+            return
+        if on != self._settings.translated:
+            self._settings = replace(self._settings, translated=on)
             self.settings_changed.emit(self._settings)
 
     # ---------------------------------------------------------- presets

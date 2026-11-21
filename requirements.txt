@@ -4,3 +4,4 @@ faster-whisper>=1.1
 onnx-asr==0.12.0  # GigaAM / Parakeet speech models on ONNX Runtime
 keyring>=24
 yt-dlp>=2025.1.15
+sentencepiece>=0.2  # offline subtitle translation (with CTranslate2 from faster-whisper)

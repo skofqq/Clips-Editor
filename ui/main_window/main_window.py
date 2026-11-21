@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self.transcript = TranscriptController(self)
         self.engine = WhisperEngine(config.data_dir / "models")
         self._transcribe_task: CancellableTask | None = None
+        self._translate_task: CancellableTask | None = None
         self._transcribe_path: Path | None = None
         self.censor = CensorController(self)
         self.censor_dictionary_path = config.data_dir / "censor_dictionary.json"
@@ -899,6 +900,9 @@ class MainWindow(QMainWindow):
         self.subtitles_panel.export_requested.connect(self.save_subtitles)
         self.subtitles_panel.set_user_presets(self.config.subtitle_presets)
         self.subtitles_panel.user_presets_changed.connect(self._subtitle_presets_changed)
+        self.subtitles_panel.translate_requested.connect(self.translate_subtitles)
+        self.subtitles_panel.translate_cancelled.connect(self.cancel_translation)
+        self.subtitles_panel.edit_translation_requested.connect(self.edit_translation)
         self.transcript.changed.connect(self._refresh_subtitles)
         self.timeline.changed.connect(self._refresh_subtitles)
         self.composition.changed.connect(self.preview.output_view.update)
@@ -1415,7 +1419,7 @@ class MainWindow(QMainWindow):
         return UploadPlan(
             channel.id, channel.title, video,
             captions_srt=srt,
-            captions_language=getattr(self.transcript.transcript, "language", "") or "",
+            captions_language=self._captions_language(),
             thumbnail=self.thumbnails.job() if defaults.get("thumbnail", True) else None,
             client=self.youtube.client_for(channel.id),
         )
@@ -1503,7 +1507,7 @@ class MainWindow(QMainWindow):
             self.config.youtube_defaults, self.manage_youtube_accounts, None,
             metadata=self.project.metadata,
             captions=self.captions,
-            captions_language=getattr(self.transcript.transcript, "language", "") or "",
+            captions_language=self._captions_language(),
             thumbnail=self.thumbnails.job,
         )
         form.embed()
@@ -2290,10 +2294,89 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
+    def current_translation(self):
+        media = self.preview.media
+        return self.project.translation_for(str(media.path)) if media is not None else None
+
+    def caption_transcript(self):
+        """The transcript the captions are made from: the translation when it is switched on."""
+        translation = self.current_translation()
+        if translation is not None and self.subtitles_panel.settings().translated:
+            return translation
+        return self.transcript.transcript
+
+    def _captions_language(self) -> str:
+        return getattr(self.caption_transcript(), "language", "") or ""
+
+    def translate_subtitles(self, direction: str = "") -> bool:
+        """Translate the transcript into the other language (model downloaded on first use)."""
+        from core.translation.models import direction_for
+        from core.translation.transcript import translate_file
+
+        media, t = self.preview.media, self.transcript.transcript
+        if media is None or t is None or self._translate_task is not None:
+            return False
+        direction = direction or direction_for(t.language)
+        task = CancellableTask(translate_file, self.engine.models_dir, t, direction)
+        task.signals.progress.connect(self.subtitles_panel.set_translation_progress)
+        task.signals.finished.connect(lambda result, p=str(media.path): self._translation_done(p, result))
+        task.signals.failed.connect(self._translation_failed)
+        task.signals.cancelled.connect(lambda: self._translation_failed(None))
+        self._translate_task = task
+        self.subtitles_panel.set_translation_busy(True, "Preparing the translation…")
+        log.info("Translating subtitles of %s (%s)", media.path, direction)
+        self.pool.start(task)
+        return True
+
+    def cancel_translation(self) -> None:
+        if self._translate_task is not None:
+            self._translate_task.cancel()
+
+    def _translation_done(self, path: str, translation) -> None:
+        self._translate_task = None
+        self.project.set_translation(path, translation)
+        self._set_dirty(True)
+        settings = self.subtitles_panel.settings()
+        if not settings.translated:  # show what was just made
+            self.subtitles_panel.set_settings(replace(settings, translated=True))
+            self.project.subtitles = self.subtitles_panel.settings()
+        self.subtitles_panel.set_translation_busy(False)
+        self._refresh_subtitles()
+        self.statusBar().showMessage("Subtitles translated. Untick «Show the translation» for the original.", 8000)
+
+    def _translation_failed(self, exc) -> None:
+        self._translate_task = None
+        if exc is None or type(exc).__name__.endswith("Cancelled"):
+            message = "Translation cancelled."
+        else:
+            log.warning("Translation failed: %s", exc)
+            message = f"Translation failed: {exc}"
+        self.subtitles_panel.set_translation_busy(False)
+        self._refresh_subtitles()
+        self.subtitles_panel.set_translation_busy(False, message)
+
+    def edit_translation(self) -> bool:
+        from ui.subtitles.translation_dialog import TranslationDialog
+
+        media, original, translation = self.preview.media, self.transcript.transcript, self.current_translation()
+        if media is None or original is None or translation is None:
+            return False
+        dialog = TranslationDialog(original, translation, self)
+        if dialog.exec() != TranslationDialog.DialogCode.Accepted or not dialog.changes():
+            return False
+        self.project.set_translation(str(media.path), dialog.edited())
+        self._set_dirty(True)
+        self._refresh_subtitles()
+        return True
+
     def _refresh_subtitles(self) -> None:
         settings = self.subtitles_panel.settings()
-        transcript, timeline = self.transcript.transcript, self.timeline.timeline
-        self.subtitles_panel.set_has_transcript(transcript is not None)
+        timeline = self.timeline.timeline
+        transcript = self.caption_transcript()
+        self.subtitles_panel.set_has_transcript(self.transcript.transcript is not None)
+        if self._translate_task is None:
+            self.subtitles_panel.set_translation(self.current_translation(),
+                                                 getattr(self.transcript.transcript, "language", "") or "")
         self.captions = build_captions(transcript, timeline, settings.style, settings.edits)
         self.subtitles_panel.set_captions(self.captions)
         self.preview.output_view.set_subtitles(self.captions, settings.style)
@@ -2463,6 +2546,8 @@ class MainWindow(QMainWindow):
         self._save_upload_defaults()
         if self._transcribe_task is not None:
             self._transcribe_task.cancel()
+        if self._translate_task is not None:
+            self._translate_task.cancel()
         self.edit_playback.shutdown()
         self.listen.stop()
         self.autoframe.cancel()

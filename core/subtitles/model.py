@@ -218,14 +218,19 @@ class SubtitleSettings:
 
     style: SubtitleStyle = field(default_factory=SubtitleStyle)
     edits: SubtitleEdits = field(default_factory=SubtitleEdits)
+    translated: bool = False  # captions from the translation instead of the transcript
 
     def to_dict(self) -> dict:
-        return {"style": self.style.to_dict(), "edits": self.edits.to_dict()}
+        data = {"style": self.style.to_dict(), "edits": self.edits.to_dict()}
+        if self.translated:
+            data["translated"] = True
+        return data
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "SubtitleSettings":
         data = data if isinstance(data, dict) else {}
-        return cls(SubtitleStyle.from_dict(data.get("style")), SubtitleEdits.from_dict(data.get("edits")))
+        return cls(SubtitleStyle.from_dict(data.get("style")), SubtitleEdits.from_dict(data.get("edits")),
+                   data.get("translated") is True)
 
 
 @dataclass(frozen=True)
@@ -278,6 +283,12 @@ def _muted(timeline: Timeline, start: int, end: int) -> bool:
     return covered * 2 >= length
 
 
+def _is_swear(text: str) -> bool:
+    from core.censor.dictionary import Dictionary
+
+    return Dictionary().match(text) is not None
+
+
 def _kept(timeline: Timeline, start: int, end: int) -> bool:
     middle = (start + end) // 2
     return any(s.start_us <= middle < s.end_us for s in timeline.segments)
@@ -286,10 +297,14 @@ def _kept(timeline: Timeline, start: int, end: int) -> bool:
 def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle) -> list[CaptionWord]:
     """Every kept word in output time, masked where it is muted."""
     result: list[CaptionWord] = []
+    # A translation's word times are estimates: mask its swear words when the phrase was muted.
+    translated = transcript.model.startswith("translate:")
     for segment in transcript.segments:
         words = segment.words
         if not words:
             continue
+        muted_phrase = translated and any(
+            m.start_us < words[-1].end_us and m.end_us > words[0].start_us for m in timeline.mutes)
         for w in words:
             text = w.text.strip()
             if not text or not _kept(timeline, w.start_us, w.end_us):
@@ -299,7 +314,8 @@ def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle
                 from core.transcription.cleanup import strip_punctuation
 
                 text = strip_punctuation(text)
-            masked = _muted(timeline, w.start_us, w.end_us)
+            masked = _muted(timeline, w.start_us, w.end_us) if not translated \
+                else (muted_phrase and _is_swear(text))
             if masked:
                 text = mask_word(text, style.mask)
             if style.uppercase:

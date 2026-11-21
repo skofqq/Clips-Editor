@@ -14,7 +14,7 @@ if not exist .venv (
 )
 echo [1/6] Dependencies...
 .venv\Scripts\python -m pip install --upgrade pip >nul
-.venv\Scripts\python -m pip install -r requirements.txt "pyinstaller>=6.6" || goto :fail
+.venv\Scripts\python -m pip install -r requirements.txt "pyinstaller>=6.6" || .venv\Scripts\python -m pip install --no-index --find-links wheels -r requirements.txt "pyinstaller>=6.6" || goto :fail
 copy /y requirements.txt .venv\requirements.installed >nul
 
 echo [2/6] FFmpeg...
