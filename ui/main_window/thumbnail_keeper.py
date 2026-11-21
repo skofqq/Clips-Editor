@@ -138,6 +138,7 @@ class ThumbnailKeeper(QObject):
         if design != self.w.project.thumbnail:
             self.w.project.thumbnail = design
             self.w._set_dirty(True)
+            self.w._remember_timer.start()  # the clip memory keeps the cover too
         self.refresh()
         self.w._update_youtube_preview()
 

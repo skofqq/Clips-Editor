@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+import html
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QSize, QThreadPool, Qt, Signal
+from PySide6.QtCore import QByteArray, QSize, QThreadPool, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -48,6 +49,7 @@ from core.media.probe import SUPPORTED_EXTENSIONS, MediaInfo, probe_media
 from core.media.thumbnail import make_thumbnail
 from core.subtitles.export import write_subtitles
 from core.subtitles.model import SubtitleSettings, build_captions
+from core.projects import clip_memory as cm
 from core.projects.project import (
     PROJECT_EXTENSION,
     MediaRef,
@@ -86,6 +88,7 @@ from ui.widgets.card import Card
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.analytics_panel import AnalyticsPanel
 from ui.social.crosspost_panel import CrossPostPanel
+from ui.social.published_panel import PublishedPanel
 from ui.social.guide_panel import INSTAGRAM, TIKTOK, YOUTUBE, GuidePanel
 from core.social.service import SocialService
 from ui.youtube.upload_dialog import UploadDialog, _upload
@@ -157,7 +160,13 @@ class MainWindow(QMainWindow):
         self.encoders = None  # usable video encoders, detected in the background
         self.youtube = YouTubeService(config)
         self.social = SocialService(config, self.youtube.store)  # TikTok / Instagram Reels
-        self.upload_history = UploadHistory(config.data_dir / "youtube_uploads.json")  # pause here when listening to a suggestion
+        self.upload_history = UploadHistory(config.data_dir / "youtube_uploads.json")
+        self.clip_memory = cm.ClipMemory(config.data_dir / "clip_memory.json")  # title + cover per clip
+        self._memory_source = ""  # the clip whose title and cover are shown
+        self._remember_timer = QTimer(self)
+        self._remember_timer.setSingleShot(True)
+        self._remember_timer.setInterval(700)
+        self._remember_timer.timeout.connect(self._remember_clip)  # pause here when listening to a suggestion
         self.metadata_library = Library(config.data_dir / "metadata_library.sqlite")
         self.history: History = History(self._edit_state())
         self.session = SessionKeeper(self)  # autosave + undo history kept between runs
@@ -205,6 +214,11 @@ class MainWindow(QMainWindow):
         data_column.setSpacing(14)
         self.data_hero = page_hero(DATA, "Data", "Title, description and tags for YouTube, made from a template, "
                                    "and the cover of the Short.", "document", data)
+        self.clip_published_label = QLabel(self.data_hero)  # "Published: YouTube 21.11 «…»"
+        self.clip_published_label.setWordWrap(True)
+        self.clip_published_label.setOpenExternalLinks(True)
+        self.clip_published_label.hide()
+        self.data_hero.body.addWidget(self.clip_published_label)
         data_column.addWidget(self.data_hero)
         data_row = QHBoxLayout()
         data_row.setSpacing(20)
@@ -219,7 +233,7 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self.data_page)
         self.render_page = StepPage(
             "Render", "Export the edited Short to a video file: format, quality, loudness, subtitles.",
-            "", "export", self, step=RENDER)
+            "", "render", self, step=RENDER)
         self.render_page.action_button.hide()  # the form below has the Render button
         self.render_queue = RenderQueue(ffmpeg, self, uploader=_queued_upload)
         self.queue_panel = QueuePanel(self.render_queue, self.render_page)
@@ -265,7 +279,11 @@ class MainWindow(QMainWindow):
             panel.cover_ms = self._thumbnail_ms
             panel.guide_requested.connect(self.guide_panel.toggle_service)
             panel.posted.connect(lambda _r: self._save_config_quietly())
+            panel.posted.connect(self._social_posted)
             self.service_tabs.add(panel, name, logo)
+        self.published_panel = PublishedPanel(self.clip_memory, self.service_tabs)
+        self.published_panel.open_clip_requested.connect(self._open_published_clip)
+        self.service_tabs.add(self.published_panel, "History", "library")
         self.guide_panel.connections_changed.connect(self._social_connections_changed)
         self.guide_panel.youtube_accounts_requested.connect(self.manage_youtube_accounts)
         self.page_stack.addWidget(page_scroll(self.publish_page, self, 960))
@@ -327,6 +345,7 @@ class MainWindow(QMainWindow):
         self.timeline_panel.view.restore_view_state(self.config.timeline_view)
         self._update_title()
         self._refresh_steps()
+        self._migrate_clip_memory()
 
         if self.ffmpeg is not None:
             self._start_encoder_detection()
@@ -376,7 +395,7 @@ class MainWindow(QMainWindow):
         self.act_upload.setIcon(icon("youtube"))
         bar.addAction(self.act_upload)
         bar.widgetForAction(self.act_upload).setObjectName("youtubeAction")
-        self.act_export.setIcon(icon("export", palette.accent().on_fill))
+        self.act_export.setIcon(icon("render", palette.accent().on_fill))
         bar.addAction(self.act_export)
         bar.widgetForAction(self.act_export).setObjectName("primaryAction")
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
@@ -975,6 +994,7 @@ class MainWindow(QMainWindow):
 
     def _show_timeline(self, info: MediaInfo | None) -> None:
         """Load (or create) the edit of ``info`` and start a fresh undo history."""
+        self._restore_clip_memory(info)
         timeline = None
         if info is not None:
             duration_us = seconds_to_us(info.duration_s)
@@ -1387,6 +1407,11 @@ class MainWindow(QMainWindow):
             publish_at=result.publish_at,
         ))
         self._analytics_loaded = ""
+        source = getattr(job.source, "path", "")
+        self._record_publication(cm.Publication(
+            cm.YOUTUBE, result.url, plan.metadata.title, datetime.now().isoformat(timespec="seconds"),
+            str(source) if source else "", result.video_id, plan.channel_title, result.privacy, str(job.output)),
+            plan.thumbnail)
         if job.tag == self._render_state():
             self._published = str(job.output)
         self.statusBar().showMessage(f"Uploaded to YouTube: {result.url}", 10000)
@@ -1486,6 +1511,125 @@ class MainWindow(QMainWindow):
             return None
         return timeline.source_to_output(src[1]) // 1000
 
+    # ------------------------------------------------------- clip memory
+    def _current_source(self) -> str:
+        media = self.preview.media
+        return str(media.path) if media is not None else ""
+
+    def _remember_clip(self) -> None:
+        """Store the shown clip's title, description, tags and cover in the clip memory."""
+        self._remember_timer.stop()
+        source = self._memory_source
+        if source and source == self._current_source():
+            self.clip_memory.remember(source, self.project.metadata, self.project.thumbnail)
+
+    def _restore_clip_memory(self, info) -> None:
+        """Another clip is shown: bring back its title and cover, or clear the previous clip's."""
+        if self._remember_timer.isActive():
+            self._remember_clip()
+        source = str(info.path) if info is not None else ""
+        if not source or cm.clip_key(source) == cm.clip_key(self._memory_source or "\0"):
+            self._memory_source = source
+            self._show_clip_publications()
+            return
+        entry = self.clip_memory.get(source)
+        previous = self.clip_memory.get(self._memory_source) if self._memory_source else None
+        if entry is not None:
+            metadata, thumbnail = entry.metadata, entry.thumbnail
+        elif previous is not None and self.project.metadata == previous.metadata:
+            metadata, thumbnail = cm.ClipMetadata(), cm.ThumbnailDesign()  # those were the other clip's
+        else:
+            metadata, thumbnail = self.project.metadata, self.project.thumbnail
+        if metadata != self.project.metadata:
+            self.project.metadata = metadata
+            self.metadata_panel.set_metadata(metadata)
+        if thumbnail != self.project.thumbnail:
+            self.project.thumbnail = thumbnail
+            self.thumbnail_editor.set_design(thumbnail)
+        self._memory_source = source
+        if entry is None:
+            self.clip_memory.remember(source, metadata, thumbnail)  # a project's title for this clip
+        self._show_clip_publications()
+
+    def _show_clip_publications(self) -> None:
+        source = self._memory_source
+        items = self.clip_memory.publications(source) if source else []
+        lines = []
+        for p in items[:4]:
+            link = (f" · <a style='color:{palette.accent().text}' href='{html.escape(p.url)}'>open</a>"
+                    if p.url else "")
+            lines.append(f"<b>{cm.SERVICE_TEXT.get(p.service, p.service)}</b> {p.date_text} as "
+                         f"“{html.escape(p.title)}”{link}")
+        if len(items) > 4:
+            lines.append(f"and {len(items) - 4} more on the Publish page (History)")
+        self.clip_published_label.setText(
+            f"<span style='color:{palette.SUCCESS}'>✓ Published</span><br>" + "<br>".join(lines) if lines else "")
+        self.clip_published_label.setVisible(bool(lines))
+
+    def _record_publication(self, publication, cover_job=None) -> None:
+        publication = self.clip_memory.add_publication(publication)
+        if publication.source and publication.source == self._current_source():
+            self.clip_memory.remember(publication.source, self.project.metadata, self.project.thumbnail)
+        self.published_panel.refresh()
+        self._show_clip_publications()
+        if callable(cover_job):
+            worker = Worker(cover_job)
+            worker.signals.finished.connect(lambda data, p=publication, w=worker: self._cover_made(w, p, data))
+            worker.signals.failed.connect(lambda exc, w=worker: (self._pending.discard(w),
+                                                                 log.info("Cover for history: %s", exc)))
+            self._pending.add(worker)
+            self.pool.start(worker)
+
+    def _cover_made(self, worker, publication, data) -> None:
+        self._pending.discard(worker)
+        if isinstance(data, (bytes, bytearray)) and data:
+            self.clip_memory.set_cover(publication, bytes(data))
+            self.published_panel.refresh()
+
+    def _social_posted(self, results) -> None:
+        meta = self.metadata_panel.metadata()
+        for r in results:
+            if not r.ok:
+                continue
+            service = cm.TIKTOK if r.service == TIKTOK else cm.INSTAGRAM
+            panel = self.tiktok_panel if service == cm.TIKTOK else self.reels_panel
+            account = self.social.tiktok_name if service == cm.TIKTOK else self.social.instagram_name
+            self._record_publication(cm.Publication(
+                service, r.url, meta.title or panel.caption_edit.toPlainText().strip(),
+                datetime.now().isoformat(timespec="seconds"), self._current_source(), "", account or "", "",
+                str(panel.file or "")), self.thumbnails.job())
+
+    def _open_published_clip(self, source: str) -> None:
+        media = self.preview.media
+        if media is not None and cm.clip_key(media.path) == cm.clip_key(source):
+            self.set_page(DATA)
+            return
+        self.import_files([source])
+        self.set_page(DATA)
+
+    def _migrate_clip_memory(self) -> None:
+        """First start with the clip memory: read in the old upload log and the saved projects."""
+        memory = self.clip_memory
+        if memory.migrated:
+            return
+        memory.import_upload_log(self.upload_history.records())
+        folders = [Path(f) for f in (self.config.project_dir,) if f]
+        seen = 0
+        for folder in folders:
+            try:
+                files = sorted(folder.glob(f"*{PROJECT_EXTENSION}")) + sorted(folder.glob(f"*/*{PROJECT_EXTENSION}"))
+            except OSError:
+                continue
+            for file in files[:300]:
+                try:
+                    seen += memory.import_project(load_project(file))
+                except Exception as exc:  # noqa: BLE001 - an old or broken project is skipped
+                    log.info("Clip memory: skipped %s (%s)", file, exc)
+        memory.migrated = True
+        memory.save()
+        self.published_panel.refresh()
+        log.info("Clip memory: %d uploads, %d clips from projects", len(memory.publications()), seen)
+
     @property
     def social_panels(self) -> tuple[CrossPostPanel, CrossPostPanel]:
         return self.tiktok_panel, self.reels_panel
@@ -1544,6 +1688,12 @@ class MainWindow(QMainWindow):
 
     def _upload_finished(self, form, result) -> None:
         self._save_upload_defaults()
+        channel = self.youtube.active
+        meta = form.metadata() if hasattr(form, "metadata") else self.metadata_panel.metadata()
+        self._record_publication(cm.Publication(
+            cm.YOUTUBE, result.url, meta.title, datetime.now().isoformat(timespec="seconds"),
+            self._current_source(), result.video_id, channel.title if channel else "", result.privacy,
+            str(form.file)), self.thumbnails.job())
         self._published = str(form.file)
         self.statusBar().showMessage(f"Uploaded to YouTube: {result.url}", 10000)
         self._analytics_loaded = ""  # the new video shows on the next visit
@@ -1594,6 +1744,7 @@ class MainWindow(QMainWindow):
         if metadata != self.project.metadata:
             self.project.metadata = metadata
             self._set_dirty(True)
+            self._remember_timer.start()
         if self._page == DATA:
             self.thumbnails.refresh()  # the default text is the title
         self._update_youtube_preview()
@@ -2177,6 +2328,8 @@ class MainWindow(QMainWindow):
             self._analytics_task.cancel()
         for panel in self.social_panels:
             panel.cancel()
+        if self._remember_timer.isActive():
+            self._remember_clip()
         self.guide_panel.tiktok_setup.cancel()
         player = self.preview.player
         # stop() on a paused player can block inside Qt's FFmpeg backend when

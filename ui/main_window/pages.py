@@ -37,8 +37,8 @@ PAGES = (
     # (title, icon, hint shown as a tooltip)
     ("Edit", "film", "Cut, lay out, subtitles, censor (Ctrl+1)"),
     ("Data", "document", "Title, description, tags (Ctrl+2)"),
-    ("Render", "export", "Export the Short to a video file (Ctrl+3)"),
-    ("Publish", "youtube", "Upload to YouTube, TikTok and Instagram Reels (Ctrl+4)"),
+    ("Render", "render", "Export the Short to a video file (Ctrl+3)"),
+    ("Publish", "export", "Upload to YouTube, TikTok and Instagram Reels (Ctrl+4)"),
 )
 
 

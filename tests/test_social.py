@@ -250,7 +250,7 @@ def test_publish_page_cross_posts(qapp, data_dir, ffmpeg_paths, fake, tmp_path, 
         w.set_page(PUBLISH)
         # One tab per service, each with its logo.
         bar = w.service_tabs.bar
-        assert [bar.tabText(i) for i in range(bar.count())] == ["YouTube", "TikTok", "Instagram Reels"]
+        assert [bar.tabText(i) for i in range(bar.count())] == ["YouTube", "TikTok", "Instagram Reels", "History"]
         assert all(not bar.tabIcon(i).isNull() for i in range(bar.count()))
         tabs = w.service_tabs.pages
         assert not tabs[0].isHidden() and panel.isHidden()
@@ -294,6 +294,10 @@ def test_publish_page_cross_posts(qapp, data_dir, ffmpeg_paths, fake, tmp_path, 
         assert "instagram.com/reel/abc" in reels.result_label.text()
         assert w.config.social_defaults["share_to_feed"] is False
         assert w.config.social_defaults["tiktok_mode"] == tiktok.DIRECT
+        # Both posts are in the History tab, newest first.
+        services = [p.service for p in w.clip_memory.publications()]
+        assert sorted(services) == ["instagram", "tiktok"]
+        assert w.published_panel.list.count() == 2
         w.guide_panel.hide()
     finally:
         w._set_dirty(False)
