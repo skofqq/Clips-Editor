@@ -10,17 +10,20 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QColorDialog,
     QComboBox,
     QFontComboBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -33,7 +36,15 @@ from PySide6.QtWidgets import (
 from core.subtitles.model import (
     ANIM_NONE,
     ANIM_POP,
+    ANIM_REVEAL,
+    ANIM_SLIDE,
     ANIM_WORD,
+    EMOJI_ABOVE,
+    EMOJI_BELOW,
+    EMOJI_INLINE,
+    KARAOKE_FILL,
+    KARAOKE_SWEEP,
+    KARAOKE_WORD,
     MASK_ALL,
     MASK_FIRST,
     MASK_NONE,
@@ -43,12 +54,18 @@ from core.subtitles.model import (
     SubtitleEdits,
     SubtitleSettings,
     SubtitleStyle,
+    style_from_preset,
 )
 from core.timeline.timebase import format_timecode
 from ui.widgets.card import Card
 from ui.widgets.empty_state import EmptyState
 
 ROLE_START = Qt.ItemDataRole.UserRole + 1
+ROLE_PRESET = Qt.ItemDataRole.UserRole + 2  # (built in?, name)
+PREVIEW_SIZE = QSize(150, 64)
+# Emoji offered for a caption, besides the automatic one.
+EMOJI_CHOICES = ("😂", "🔥", "💀", "😱", "🏆", "💰", "❤️", "😡", "😭", "🤔", "👀", "🤡", "🐐", "🎉", "😎", "🙏",
+                 "🤯", "🥶", "😈", "👑", "💯", "⚡", "🎯", "🫡")
 
 
 class ColorButton(QToolButton):
@@ -83,6 +100,7 @@ class SubtitlesPanel(QWidget):
     seek_requested = Signal(int)  # output time (µs)
     split_requested = Signal()  # start a caption at the word under the playhead
     export_requested = Signal()
+    user_presets_changed = Signal(dict)  # name → SubtitleStyle dict, to keep in the app settings
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -93,13 +111,27 @@ class SubtitlesPanel(QWidget):
         # ---- on/off and presets
         self.enabled_check = QCheckBox("Show subtitles on the video", self)
         self.enabled_check.setToolTip("Drawn on the preview and burnt into the exported video")
-        self.preset_combo = QComboBox(self)
-        self.preset_combo.setPlaceholderText("Apply a style…")
-        for name in PRESETS:
-            self.preset_combo.addItem(name)
+        self.preset_list = QListWidget(self)
+        self.preset_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.preset_list.setIconSize(PREVIEW_SIZE)
+        self.preset_list.setGridSize(QSize(PREVIEW_SIZE.width() + 12, PREVIEW_SIZE.height() + 30))
+        self.preset_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.preset_list.setMovement(QListWidget.Movement.Static)
+        self.preset_list.setWrapping(True)
+        self.preset_list.setWordWrap(True)
+        self.preset_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.preset_list.setMinimumHeight(2 * (PREVIEW_SIZE.height() + 30) + 8)
+        self.preset_list.setToolTip("Click a style to apply it. Right-click your own style to delete it.")
+        self.preset_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.save_preset_button = QPushButton("Save as my style…", self)
+        self.save_preset_button.setToolTip("Keep the current look as a style of your own (stays for every project)")
         main = Card("Subtitles", "Built from the transcript. Correct words in the Transcript tab.", self)
         main.add_row(self.enabled_check)
-        main.add_row("Style", self.preset_combo)
+        main.body.addWidget(self.preset_list)
+        preset_row = QHBoxLayout()
+        preset_row.addStretch(1)
+        preset_row.addWidget(self.save_preset_button)
+        main.body.addLayout(preset_row)
 
         # ---- look
         self.font_combo = QFontComboBox(self)
@@ -121,10 +153,26 @@ class SubtitlesPanel(QWidget):
         self.speakers_check.setToolTip("After Find speakers (Transcript tab), every other speaker gets "
                                        "their own colour and a new caption starts when the voice changes.")
         self.animation_combo = QComboBox(self)
-        for label, value in (("None", ANIM_NONE), ("Pop in", ANIM_POP), ("Pop in + word jump", ANIM_WORD)):
+        for label, value in (("None", ANIM_NONE), ("Pop in", ANIM_POP), ("Pop in + word jump", ANIM_WORD),
+                             ("Slide up and fade in", ANIM_SLIDE), ("Word by word", ANIM_REVEAL)):
             self.animation_combo.addItem(label, value)
         self.animation_combo.setToolTip("Pop in: each caption grows in as it appears.\n"
-                                        "Word jump: the spoken word also jumps up and stays a bit bigger.")
+                                        "Word jump: the spoken word also jumps up and stays a bit bigger.\n"
+                                        "Slide up: the caption rises into place and fades in.\n"
+                                        "Word by word: each word pops in when it is spoken.")
+        self.karaoke_combo = QComboBox(self)
+        for label, value in (("Only the spoken word", KARAOKE_WORD), ("Spoken words stay coloured", KARAOKE_FILL),
+                             ("Colour runs through the word (karaoke)", KARAOKE_SWEEP)):
+            self.karaoke_combo.addItem(label, value)
+        self.karaoke_combo.setToolTip("How the Spoken colour moves through the caption")
+        self.dim_check = QCheckBox("Fade words not spoken yet", self)
+        self.emphasis_check = QCheckBox("Colour key words", self)
+        self.emphasis_check.setToolTip("Numbers and words like «жесть», «ахаха», «клатч», money… get their own colour")
+        self.emphasis_button = ColorButton("Key word colour", self)
+        self.emoji_place_combo = QComboBox(self)
+        for label, value in (("Above", EMOJI_ABOVE), ("Below", EMOJI_BELOW), ("After the word", EMOJI_INLINE)):
+            self.emoji_place_combo.addItem(label, value)
+        self.emoji_place_combo.setToolTip("Where the emoji goes. After the word: it pops in when the word is spoken.")
         self.word_box_check = QCheckBox("Box on the spoken word", self)
         self.word_box_check.setToolTip("The spoken word sits on a rounded box in the Spoken colour.")
         self.emoji_check = QCheckBox("Emoji for key words", self)
@@ -152,9 +200,20 @@ class SubtitlesPanel(QWidget):
         look.add_row("Colours", colors)
         look.add_row("Outline", self.outline_spin)
         look.add_row(self.karaoke_check)
+        look.add_row("Spoken", self.karaoke_combo)
+        look.add_row(self.dim_check)
         look.add_row("Animation", self.animation_combo)
         look.add_row(self.word_box_check)
-        look.add_row(self.emoji_check)
+        emphasis_row = QHBoxLayout()
+        emphasis_row.addWidget(self.emphasis_check)
+        emphasis_row.addWidget(self.emphasis_button)
+        emphasis_row.addStretch(1)
+        look.add_row(emphasis_row)
+        emoji_row = QHBoxLayout()
+        emoji_row.addWidget(self.emoji_check)
+        emoji_row.addWidget(self.emoji_place_combo)
+        emoji_row.addStretch(1)
+        look.add_row(emoji_row)
         look.add_row(self.speakers_check)
         look.add_row(self.punct_check)
         effects = QHBoxLayout()
@@ -201,12 +260,16 @@ class SubtitlesPanel(QWidget):
         self.split_button.setToolTip("Start a new caption at the word under the playhead")
         self.merge_button = QPushButton("Merge with next", self)
         self.merge_button.setToolTip("Join the selected caption and the next one")
+        self.emoji_button = QPushButton("Emoji", self)
+        self.emoji_button.setToolTip("Choose the emoji of the selected caption (or none)")
+        self.emoji_menu = QMenu(self.emoji_button)
+        self.emoji_button.setMenu(self.emoji_menu)
         self.reset_button = QPushButton("Reset", self)
-        self.reset_button.setToolTip("Forget your splits and merges")
+        self.reset_button.setToolTip("Forget your splits, merges and chosen emoji")
         self.export_button = QPushButton("Save .srt…", self)
         self.export_button.setToolTip("Subtitle file for YouTube or another editor (times of the edited video)")
         buttons = QHBoxLayout()
-        for button in (self.split_button, self.merge_button, self.reset_button):
+        for button in (self.split_button, self.merge_button, self.emoji_button, self.reset_button):
             buttons.addWidget(button)
         buttons.addStretch(1)
         buttons.addWidget(self.export_button)
@@ -236,13 +299,21 @@ class SubtitlesPanel(QWidget):
 
         # ---- wiring
         self.enabled_check.toggled.connect(self._edited)
-        self.preset_combo.activated.connect(self._apply_preset)
+        self._user_presets: dict[str, SubtitleStyle] = {}
+        self.preset_list.itemClicked.connect(self._preset_clicked)
+        self.preset_list.customContextMenuRequested.connect(self._preset_menu)
+        self.save_preset_button.clicked.connect(self._save_preset)
+        self._fill_emoji_menu()
+        self.karaoke_combo.currentIndexChanged.connect(self._edited)
+        self.emoji_place_combo.currentIndexChanged.connect(self._edited)
+        self.emphasis_button.color_changed.connect(self._edited)
         self.font_combo.currentFontChanged.connect(self._edited)
         for spin in (self.size_spin, self.outline_spin, self.words_spin, self.chars_spin, self.lines_spin):
             spin.valueChanged.connect(self._edited)
         self.animation_combo.currentIndexChanged.connect(self._edited)
         for check in (self.bold_check, self.upper_check, self.karaoke_check, self.shadow_check, self.box_check,
-                      self.speakers_check, self.punct_check, self.word_box_check, self.emoji_check):
+                      self.speakers_check, self.punct_check, self.word_box_check, self.emoji_check,
+                      self.dim_check, self.emphasis_check):
             check.toggled.connect(self._edited)
         for button in (self.color_button, self.highlight_button, self.outline_button):
             button.color_changed.connect(self._edited)
@@ -257,6 +328,7 @@ class SubtitlesPanel(QWidget):
         self.export_button.clicked.connect(self.export_requested)
         self.set_settings(SubtitleSettings())
         self.set_has_transcript(False)
+        self._fill_presets()
 
     # ------------------------------------------------------------ state
     def settings(self) -> SubtitleSettings:
@@ -283,6 +355,11 @@ class SubtitlesPanel(QWidget):
             self.animation_combo.setCurrentIndex(max(0, self.animation_combo.findData(s.animation)))
             self.word_box_check.setChecked(s.highlight_box)
             self.emoji_check.setChecked(s.emoji)
+            self.karaoke_combo.setCurrentIndex(max(0, self.karaoke_combo.findData(s.karaoke_mode)))
+            self.dim_check.setChecked(s.dim_upcoming)
+            self.emphasis_check.setChecked(s.emphasis)
+            self.emphasis_button.set_color(s.emphasis_color)
+            self.emoji_place_combo.setCurrentIndex(max(0, self.emoji_place_combo.findData(s.emoji_place)))
             self.speakers_check.setChecked(s.speaker_colors)
             self.punct_check.setChecked(s.hide_punctuation)
             self.shadow_check.setChecked(s.shadow)
@@ -306,7 +383,10 @@ class SubtitlesPanel(QWidget):
         row = self.list.currentRow()
         self.list.clear()
         for caption in captions:
-            item = QListWidgetItem(f"{format_timecode(caption.start_us)}   {caption.text}")
+            from core.subtitles.raster import caption_emoji
+
+            emoji = caption_emoji(caption) if (self._settings.style.emoji or caption.emoji) else ""
+            item = QListWidgetItem(f"{format_timecode(caption.start_us)}   {caption.text}{'  ' + emoji if emoji else ''}")
             item.setData(ROLE_START, caption.start_us)
             self.list.addItem(item)
         if 0 <= row < self.list.count():
@@ -341,6 +421,11 @@ class SubtitlesPanel(QWidget):
             animation=self.animation_combo.currentData(),
             highlight_box=self.word_box_check.isChecked(),
             emoji=self.emoji_check.isChecked(),
+            karaoke_mode=self.karaoke_combo.currentData(),
+            dim_upcoming=self.dim_check.isChecked(),
+            emphasis=self.emphasis_check.isChecked(),
+            emphasis_color=self.emphasis_button.color(),
+            emoji_place=self.emoji_place_combo.currentData(),
             speaker_colors=self.speakers_check.isChecked(),
             hide_punctuation=self.punct_check.isChecked(),
             shadow=self.shadow_check.isChecked(),
@@ -361,19 +446,104 @@ class SubtitlesPanel(QWidget):
             self._settings = replace(self._settings, style=style)
             self.settings_changed.emit(self._settings)
 
-    def _apply_preset(self, index: int) -> None:
-        preset = PRESETS[self.preset_combo.itemText(index)]
-        # Keep the user's font and where the subtitles sit.
-        current = self._settings.style
-        style = replace(preset, enabled=True, position=current.position, mask=current.mask)
+    # ---------------------------------------------------------- presets
+    def set_user_presets(self, presets: dict) -> None:
+        """The user's own styles (name → SubtitleStyle dict), from the app settings."""
+        self._user_presets = {str(name): SubtitleStyle.from_dict(data) for name, data in (presets or {}).items()
+                              if isinstance(data, dict)}
+        self._fill_presets()
+
+    def user_presets(self) -> dict[str, dict]:
+        return {name: style.to_dict() for name, style in self._user_presets.items()}
+
+    def _fill_presets(self) -> None:
+        from core.subtitles.raster import style_preview
+
+        self.preset_list.clear()
+        entries = [(False, name, style) for name, style in self._user_presets.items()]
+        entries += [(True, name, style) for name, style in PRESETS.items()]
+        for built_in, name, style in entries:
+            image = style_preview(style, PREVIEW_SIZE.width(), PREVIEW_SIZE.height())
+            item = QListWidgetItem(QIcon(QPixmap.fromImage(image)), name if built_in else f"★ {name}")
+            item.setData(ROLE_PRESET, (built_in, name))
+            item.setToolTip(name if built_in else f"{name} — your style (right-click to delete)")
+            self.preset_list.addItem(item)
+
+    def preset_item(self, name: str, built_in: bool = True) -> QListWidgetItem | None:
+        for row in range(self.preset_list.count()):
+            item = self.preset_list.item(row)
+            if item.data(ROLE_PRESET) == (built_in, name):
+                return item
+        return None
+
+    def _preset_clicked(self, item: QListWidgetItem) -> None:
+        built_in, name = item.data(ROLE_PRESET)
+        preset = PRESETS.get(name) if built_in else self._user_presets.get(name)
+        if preset is not None:
+            self.apply_preset(preset)
+
+    def apply_preset(self, preset: SubtitleStyle) -> None:
+        # Keep where the subtitles sit and how muted words are written.
+        style = style_from_preset(preset, self._settings.style)
         self.set_settings(replace(self._settings, style=style))
-        self.preset_combo.setCurrentIndex(-1)
         self.settings_changed.emit(self._settings)
+
+    def _save_preset(self) -> None:
+        name, ok = QInputDialog.getText(self, "Save style", "Name of your style:")
+        name = name.strip()
+        if ok and name:
+            self.save_preset(name)
+
+    def save_preset(self, name: str) -> None:
+        self._user_presets[name] = replace(self._settings.style, enabled=True)
+        self._fill_presets()
+        self.user_presets_changed.emit(self.user_presets())
+
+    def delete_preset(self, name: str) -> None:
+        if self._user_presets.pop(name, None) is not None:
+            self._fill_presets()
+            self.user_presets_changed.emit(self.user_presets())
+
+    def _preset_menu(self, pos: QPoint) -> None:
+        item = self.preset_list.itemAt(pos)
+        if item is None:
+            return
+        built_in, name = item.data(ROLE_PRESET)
+        if built_in:
+            return
+        menu = QMenu(self)
+        delete = menu.addAction(f"Delete «{name}»")
+        if menu.exec(self.preset_list.viewport().mapToGlobal(pos)) is delete:
+            self.delete_preset(name)
+
+    # ------------------------------------------------------------ emoji
+    def _fill_emoji_menu(self) -> None:
+        self.emoji_menu.clear()
+        auto = self.emoji_menu.addAction("Automatic (from the words)")
+        auto.triggered.connect(lambda: self.set_caption_emoji(None))
+        none = self.emoji_menu.addAction("No emoji")
+        none.triggered.connect(lambda: self.set_caption_emoji(""))
+        self.emoji_menu.addSeparator()
+        for emoji in EMOJI_CHOICES:
+            action = self.emoji_menu.addAction(emoji)
+            action.triggered.connect(lambda _checked=False, e=emoji: self.set_caption_emoji(e))
+
+    def set_caption_emoji(self, emoji: str | None, row: int | None = None) -> bool:
+        """The emoji of caption ``row`` (the selected one by default); None = automatic, "" = none."""
+        row = self.list.currentRow() if row is None else row
+        if not 0 <= row < len(self._captions):
+            return False
+        first_word = self._captions[row].words[0].source_us
+        self.set_edits(self._settings.edits.with_emoji(first_word, emoji))
+        return True
 
     def _update_enabled(self) -> None:
         self.position_slider.setEnabled(self.position_combo.currentData() == "custom")
         self.outline_spin.setEnabled(not self.box_check.isChecked())
         self.highlight_button.setEnabled(self.karaoke_check.isChecked() or self.word_box_check.isChecked())
+        self.karaoke_combo.setEnabled(self.karaoke_check.isChecked())
+        self.emphasis_button.setEnabled(self.emphasis_check.isChecked())
+        self.emoji_place_combo.setEnabled(self.emoji_check.isChecked())
 
     def _update_buttons(self) -> None:
         row = self.list.currentRow()
@@ -381,6 +551,7 @@ class SubtitlesPanel(QWidget):
         self.reset_button.setEnabled(not self._settings.edits.empty)
         self.export_button.setEnabled(bool(self._captions))
         self.split_button.setEnabled(bool(self._captions))
+        self.emoji_button.setEnabled(0 <= row < len(self._captions))
 
     def _merge_selected(self) -> None:
         row = self.list.currentRow()

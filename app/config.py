@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.25"
+APP_VERSION = "0.9.26"
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ class AppConfig:
     twitch_folder: str = ""  # where clips imported by link are saved ("" = Videos/Twitch Clips)
     twitch_autofill: bool = True
     twitch_add_to_library: bool = True
+    subtitle_presets: dict = field(default_factory=dict)  # the user's caption styles: name → SubtitleStyle dict
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -139,7 +140,8 @@ class AppConfig:
         learned = raw.get("transcribe_learned")
         if isinstance(learned, list):
             config.transcribe_learned = [w for w in learned if isinstance(w, str)][:100]
-        for key in ("export_settings", "youtube_defaults", "timeline_view", "social_accounts", "social_defaults"):
+        for key in ("export_settings", "youtube_defaults", "timeline_view", "social_accounts", "social_defaults",
+                    "subtitle_presets"):
             if isinstance(raw.get(key), dict):
                 setattr(config, key, raw[key])
         accounts = raw.get("youtube_accounts")

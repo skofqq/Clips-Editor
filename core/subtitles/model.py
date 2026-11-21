@@ -20,9 +20,16 @@ from core.timeline.model import Timeline
 from core.transcription.model import Transcript
 
 MASK_NONE, MASK_FIRST, MASK_ALL = "none", "first", "all"
-# Animation: none; the caption pops in; the caption pops in and every spoken word jumps.
-ANIM_NONE, ANIM_POP, ANIM_WORD = "none", "pop", "word"
-ANIMATIONS = (ANIM_NONE, ANIM_POP, ANIM_WORD)
+# Animation: none; the caption pops in; the caption pops in and every spoken word jumps;
+# the caption slides up and fades in; words appear one by one as they are spoken.
+ANIM_NONE, ANIM_POP, ANIM_WORD, ANIM_SLIDE, ANIM_REVEAL = "none", "pop", "word", "slide", "reveal"
+ANIMATIONS = (ANIM_NONE, ANIM_POP, ANIM_WORD, ANIM_SLIDE, ANIM_REVEAL)
+# Karaoke: only the spoken word is coloured; spoken words stay coloured; the colour
+# runs through each word as it is spoken (classic karaoke).
+KARAOKE_WORD, KARAOKE_FILL, KARAOKE_SWEEP = "word", "fill", "sweep"
+KARAOKE_MODES = (KARAOKE_WORD, KARAOKE_FILL, KARAOKE_SWEEP)
+EMOJI_ABOVE, EMOJI_BELOW, EMOJI_INLINE = "above", "below", "inline"
+EMOJI_PLACES = (EMOJI_ABOVE, EMOJI_BELOW, EMOJI_INLINE)
 POSITION_DIVIDER = -1.0  # sentinel: centre on the webcam/gameplay border
 
 
@@ -53,6 +60,11 @@ class SubtitleStyle:
     animation: str = ANIM_NONE
     highlight_box: bool = False  # the spoken word sits on a box in the highlight colour
     emoji: bool = False  # an emoji above captions with a matching word (laughter, fire, money…)
+    karaoke_mode: str = KARAOKE_WORD
+    dim_upcoming: bool = False  # words not spoken yet are drawn faded
+    emphasis: bool = False  # key words (emoji cues, numbers) get their own colour
+    emphasis_color: str = "#2bd94f"
+    emoji_place: str = EMOJI_ABOVE
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -94,6 +106,8 @@ class SubtitleStyle:
             min_duration_ms=min(3000, max(0, self.min_duration_ms)),
             mask=self.mask if self.mask in (MASK_NONE, MASK_FIRST, MASK_ALL) else MASK_FIRST,
             animation=self.animation if self.animation in ANIMATIONS else ANIM_NONE,
+            karaoke_mode=self.karaoke_mode if self.karaoke_mode in KARAOKE_MODES else KARAOKE_WORD,
+            emoji_place=self.emoji_place if self.emoji_place in EMOJI_PLACES else EMOJI_ABOVE,
             position=position,
         )
 
@@ -110,13 +124,25 @@ def speaker_text_color(style: "SubtitleStyle", speaker: int) -> str:
 
 PRESETS: dict[str, SubtitleStyle] = {
     # Animated Shorts looks.
+    "Karaoke sweep": SubtitleStyle(enabled=True, karaoke_mode=KARAOKE_SWEEP, highlight="#ffd400", max_words=4,
+                                   max_chars=20, animation=ANIM_POP, emoji=True),
+    "Word by word": SubtitleStyle(enabled=True, animation=ANIM_REVEAL, karaoke_mode=KARAOKE_WORD, max_words=4,
+                                  max_chars=20, highlight="#ffd400", emoji=True, emoji_place=EMOJI_INLINE),
+    "Key words": SubtitleStyle(enabled=True, animation=ANIM_WORD, highlight="#ffffff", emphasis=True,
+                               emphasis_color="#2bd94f", max_words=3, size=84, emoji=True),
+    "Fade in, fill": SubtitleStyle(enabled=True, animation=ANIM_SLIDE, karaoke_mode=KARAOKE_FILL,
+                                   highlight="#7fd4ff", dim_upcoming=True, max_words=5, max_chars=22,
+                                   uppercase=False, size=64),
     "Pop yellow": SubtitleStyle(enabled=True, animation=ANIM_WORD, max_words=3, emoji=True),
     "Green box": SubtitleStyle(enabled=True, animation=ANIM_WORD, highlight="#2bd94f", highlight_box=True,
                                max_words=3, emoji=True),
-    "Purple box": SubtitleStyle(enabled=True, animation=ANIM_POP, highlight="#8b5cf6", highlight_box=True,
+    "Purple box": SubtitleStyle(enabled=True, animation=ANIM_POP, highlight="#9146ff", highlight_box=True,
                                 max_words=4, max_chars=22, emoji=True),
+    "Slide box": SubtitleStyle(enabled=True, animation=ANIM_SLIDE, box=True, outline_px=0, uppercase=False,
+                               size=60, max_words=5, max_chars=26, highlight="#ffd400", karaoke_mode=KARAOKE_FILL,
+                               emoji=True, emoji_place=EMOJI_INLINE),
     "One word pop": SubtitleStyle(enabled=True, animation=ANIM_POP, max_words=1, size=104, max_chars=14,
-                                  highlight="#ffffff", emoji=True),
+                                  highlight="#ffffff", emoji=True, emoji_place=EMOJI_BELOW),
     "Red word": SubtitleStyle(enabled=True, animation=ANIM_WORD, highlight="#ff3b3b", max_words=2, size=84),
     # Still looks.
     "Shorts bold": SubtitleStyle(enabled=True),
@@ -129,23 +155,44 @@ PRESETS: dict[str, SubtitleStyle] = {
 }
 
 
+def style_from_preset(preset: SubtitleStyle, current: SubtitleStyle) -> SubtitleStyle:
+    """A preset applied to the project: it keeps where the subtitles sit and how swears are written."""
+    return replace(preset, enabled=True, position=current.position, mask=current.mask).cleaned()
+
+
 @dataclass(frozen=True)
 class SubtitleEdits:
     breaks: frozenset[int] = frozenset()  # word source start → caption starts here
     joins: frozenset[int] = frozenset()  # word source start → never start a caption here
+    # (first word's source start, emoji) — the user's emoji for a caption; "" = no emoji.
+    emoji: tuple[tuple[int, str], ...] = ()
 
     @property
     def empty(self) -> bool:
-        return not self.breaks and not self.joins
+        return not self.breaks and not self.joins and not self.emoji
 
     def split_at(self, word_us: int) -> "SubtitleEdits":
-        return SubtitleEdits(self.breaks | {word_us}, self.joins - {word_us})
+        return replace(self, breaks=self.breaks | {word_us}, joins=self.joins - {word_us})
 
     def join_at(self, word_us: int) -> "SubtitleEdits":
-        return SubtitleEdits(self.breaks - {word_us}, self.joins | {word_us})
+        return replace(self, breaks=self.breaks - {word_us}, joins=self.joins | {word_us})
+
+    def emoji_at(self, word_us: int) -> str | None:
+        """The user's emoji for the caption starting at ``word_us``; None = chosen automatically."""
+        return dict(self.emoji).get(word_us)
+
+    def with_emoji(self, word_us: int, emoji: str | None) -> "SubtitleEdits":
+        """Set (or with None, forget) the emoji of the caption starting at ``word_us``."""
+        chosen = {k: v for k, v in self.emoji if k != word_us}
+        if emoji is not None:
+            chosen[word_us] = emoji
+        return replace(self, emoji=tuple(sorted(chosen.items())))
 
     def to_dict(self) -> dict:
-        return {"breaks": sorted(self.breaks), "joins": sorted(self.joins)}
+        data = {"breaks": sorted(self.breaks), "joins": sorted(self.joins)}
+        if self.emoji:
+            data["emoji"] = {str(k): v for k, v in self.emoji}
+        return data
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "SubtitleEdits":
@@ -156,7 +203,13 @@ class SubtitleEdits:
             values = data.get(key)
             return frozenset(int(v) for v in values if isinstance(v, int)) if isinstance(values, list) else frozenset()
 
-        return cls(ints("breaks"), ints("joins"))
+        emoji = data.get("emoji")
+        chosen: dict[int, str] = {}
+        if isinstance(emoji, dict):
+            for key, value in emoji.items():
+                if isinstance(value, str) and str(key).lstrip("-").isdigit():
+                    chosen[int(key)] = value[:8]
+        return cls(ints("breaks"), ints("joins"), tuple(sorted(chosen.items())))
 
 
 @dataclass(frozen=True)
@@ -191,6 +244,7 @@ class Caption:
     start_us: int  # output time
     end_us: int
     words: tuple[CaptionWord, ...]
+    emoji: str | None = None  # the user's emoji ("" = none); None = from the words
 
     @property
     def text(self) -> str:
@@ -299,7 +353,7 @@ def build_captions(
             end = min(end, next_start)
         if timeline is not None:
             end = min(end, timeline.output_us)
-        captions.append(Caption(start, max(end, start + 1), tuple(group)))
+        captions.append(Caption(start, max(end, start + 1), tuple(group), edits.emoji_at(group[0].source_us)))
     return captions
 
 

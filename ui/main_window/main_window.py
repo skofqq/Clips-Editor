@@ -897,6 +897,8 @@ class MainWindow(QMainWindow):
         self.subtitles_panel.seek_requested.connect(self._seek_output)
         self.subtitles_panel.split_requested.connect(self.split_caption_at_playhead)
         self.subtitles_panel.export_requested.connect(self.save_subtitles)
+        self.subtitles_panel.set_user_presets(self.config.subtitle_presets)
+        self.subtitles_panel.user_presets_changed.connect(self._subtitle_presets_changed)
         self.transcript.changed.connect(self._refresh_subtitles)
         self.timeline.changed.connect(self._refresh_subtitles)
         self.composition.changed.connect(self.preview.output_view.update)
@@ -2280,6 +2282,13 @@ class MainWindow(QMainWindow):
             self.project.subtitles = settings
             self._set_dirty(True)
         self._refresh_subtitles()
+
+    def _subtitle_presets_changed(self, presets: dict) -> None:
+        self.config.subtitle_presets = presets
+        try:
+            self.config.save()
+        except OSError:
+            pass
 
     def _refresh_subtitles(self) -> None:
         settings = self.subtitles_panel.settings()

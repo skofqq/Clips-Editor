@@ -124,6 +124,6 @@ def test_panel_controls(qapp):
     panel.emoji_check.setChecked(True)
     style = seen[-1].style
     assert (style.animation, style.highlight_box, style.emoji) == (ANIM_WORD, True, True)
-    panel.preset_combo.activated.emit(list(PRESETS).index("Purple box"))
+    panel.preset_list.itemClicked.emit(panel.preset_item("Purple box"))
     assert panel.style().highlight_box and panel.animation_combo.currentData() == ANIM_POP
     panel.deleteLater()

@@ -184,7 +184,7 @@ def test_panel_round_trip_and_presets(qapp):
     assert panel.settings() == settings and not seen  # loading is silent
     panel.words_spin.setValue(4)
     assert seen and seen[-1].style.max_words == 4
-    panel.preset_combo.activated.emit(list(PRESETS).index("Boxed"))
+    panel.preset_list.itemClicked.emit(panel.preset_item("Boxed"))
     assert panel.style().box and panel.settings().edits == settings.edits  # a preset keeps the edits
     panel.set_has_transcript(False)
     panel.set_has_transcript(True)

@@ -50,3 +50,28 @@ def emoji_for(words) -> str:
         if pattern.search(text):
             return emoji
     return ""
+
+
+def emoji_match(words) -> tuple[str, int]:
+    """The emoji for a caption and the index of the word that called it, or ("", -1)."""
+    normed = [_norm(w) if w and "*" not in w else "" for w in words]
+    for emoji, pattern in _PATTERNS:
+        for index, word in enumerate(normed):
+            if word and pattern.search(word):
+                return emoji, index
+    # Cues of two words ("no way") only match across the words.
+    emoji = emoji_for(words)
+    return (emoji, len(normed) - 1) if emoji else ("", -1)
+
+
+_NUMBER = re.compile(r"\d")
+
+
+def is_key_word(text: str) -> bool:
+    """A word worth its own colour: an emoji cue (laughter, «жесть», money…) or a number."""
+    if not text or "*" in text:
+        return False
+    if _NUMBER.search(text):
+        return True
+    word = _norm(text)
+    return any(pattern.search(word) for _emoji, pattern in _PATTERNS)
