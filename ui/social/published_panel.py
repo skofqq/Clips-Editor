@@ -149,11 +149,26 @@ class PublishedPanel(Card):
             if watched:
                 total = sum(v for _pct, v in watched)
                 parts.append(f"{sum(pct * v for pct, v in watched) / total:.0f}% watched on average")
+            best = self._best_kind(items)
+            if best:
+                parts.append(best)
             fetched = max(st.fetched_at for st in stats)
             parts.append(f"numbers from {fetched[:16].replace('T', ' ')}")
         else:
             parts.append("press Refresh numbers to read views and likes from YouTube")
         self.summary_label.setText(" · ".join(parts))
+
+    def _best_kind(self, items: list[Publication]) -> str:
+        """The title kind with the most views per Short, when at least two kinds have numbers."""
+        groups: dict[str, list[int]] = {}
+        for p in items:
+            st = self.memory.stats_for(p)
+            if st is not None and p.variant:
+                groups.setdefault(p.variant.split(" · ")[0], []).append(st.views)
+        if len(groups) < 2:
+            return ""
+        kind, views = max(groups.items(), key=lambda kv: sum(kv[1]) / len(kv[1]))
+        return f"best title kind: {kind} ({_count(int(sum(views) / len(views)))} views on average)"
 
     def set_busy(self, busy: bool, message: str = "") -> None:
         self.refresh_button.setEnabled(not busy)
@@ -168,6 +183,8 @@ class PublishedPanel(Card):
     def _text(self, p: Publication) -> str:
         where = " · ".join(part for part in (SERVICE_TEXT.get(p.service, p.service), p.channel, p.privacy) if part)
         text = f"{p.title or '(no title)'}\n{p.date_text} · {where}"
+        if p.variant:
+            text += f" · {p.variant}"
         st = self.memory.stats_for(p)
         if st is not None:
             numbers = [f"👁 {_count(st.views)}", f"♥ {_count(st.likes)}", f"💬 {_count(st.comments)}"]

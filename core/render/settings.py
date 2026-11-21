@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -28,6 +30,17 @@ RESOLUTIONS = (
 )
 
 
+PROGRESS_TOP, PROGRESS_BOTTOM = "top", "bottom"
+PROGRESS_PLACES = (PROGRESS_TOP, PROGRESS_BOTTOM)
+PROGRESS_COLORS = (("Twitch purple", "#9146ff"), ("White", "#ffffff"), ("Red", "#ff3040"), ("Yellow", "#ffe600"))
+_HEX = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def progress_bar_height(canvas_h: int) -> int:
+    """Thickness of the progress line: 12 px on a 1920 px tall Short."""
+    return max(4, round(canvas_h / 160) // 2 * 2)
+
+
 @dataclass(frozen=True)
 class RenderSettings:
     width: int = 1080
@@ -43,6 +56,8 @@ class RenderSettings:
     encoder: str = AUTO  # auto, cpu, or an FFmpeg encoder name (h264_nvenc, ...)
     beep_hz: int = 1000
     loudness_lufs: float = -14.0  # loudness normalisation target; 0 = off
+    progress_bar: str = ""  # "" = none, "top" or "bottom": a line that fills up as the Short plays
+    progress_color: str = "#9146ff"
 
     def cleaned(self) -> "RenderSettings":
         even = lambda v: max(2, int(v) // 2 * 2)  # noqa: E731 - yuv420p needs even sizes
@@ -61,6 +76,8 @@ class RenderSettings:
             encoder=str(self.encoder or AUTO),
             beep_hz=max(200, min(4000, int(self.beep_hz))),
             loudness_lufs=0.0 if not self.loudness_lufs else max(-31.0, min(-5.0, float(self.loudness_lufs))),
+            progress_bar=self.progress_bar if self.progress_bar in PROGRESS_PLACES else "",
+            progress_color=self.progress_color if _HEX.fullmatch(str(self.progress_color or "")) else "#9146ff",
         )
 
     @property
@@ -98,7 +115,8 @@ def preset_name(settings: RenderSettings) -> str:
     for name, preset in PRESETS.items():
         same = replace(settings, width=preset.width, height=preset.height, fps=preset.fps,
                        encoder=preset.encoder, beep_hz=preset.beep_hz,
-                       loudness_lufs=preset.loudness_lufs)
+                       loudness_lufs=preset.loudness_lufs, progress_bar=preset.progress_bar,
+                       progress_color=preset.progress_color)
         if same == preset:
             return name
     return CUSTOM_PRESET

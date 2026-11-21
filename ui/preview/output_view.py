@@ -32,6 +32,7 @@ class OutputView(QWidget):
         self._captions: list = []
         self._subtitle_style = None
         self._subtitle_us: int | None = None
+        self._bar: tuple[str, str, int] = ("", "", 0)  # progress bar: place, colour, Short length (µs)
         self._drag: str | None = None  # "divider" or "pan"
         self._drag_name: str | None = None
         self._drag_start = QPointF()
@@ -53,8 +54,28 @@ class OutputView(QWidget):
     def set_subtitle_time(self, output_us: int | None) -> None:
         if output_us != self._subtitle_us:
             self._subtitle_us = output_us
-            if self._captions:
+            if self._captions or self._bar[0]:
                 self.update()
+
+    def set_progress_bar(self, place: str, color: str, length_us: int) -> None:
+        """The export's progress bar ("" = none), shown as it will be in the video."""
+        bar = (place or "", color or "#9146ff", int(length_us or 0))
+        if bar != self._bar:
+            self._bar = bar
+            self.update()
+
+    def _draw_progress_bar(self, painter: QPainter, canvas: QRectF) -> None:
+        from core.render.settings import PROGRESS_TOP, progress_bar_height
+
+        place, color, length = self._bar
+        if not place or length <= 0 or self._subtitle_us is None:
+            return
+        out_h = self.controller.composition.output_h or 1920
+        h = max(2.0, canvas.height() * progress_bar_height(out_h) / out_h)
+        y = canvas.top() if place == PROGRESS_TOP else canvas.bottom() - h
+        painter.fillRect(QRectF(canvas.left(), y, canvas.width(), h), QColor(0, 0, 0, 90))
+        done = max(0.0, min(1.0, self._subtitle_us / length))
+        painter.fillRect(QRectF(canvas.left(), y, canvas.width() * done, h), QColor(color))
 
     def current_caption(self):
         from core.subtitles.model import caption_at
@@ -239,6 +260,7 @@ class OutputView(QWidget):
             from core.subtitles.raster import draw_caption
 
             draw_caption(painter, canvas, caption, self._subtitle_style, self._subtitle_us, comp.divider)
+        self._draw_progress_bar(painter, QRectF(canvas))
 
         painter.setClipping(False)
         painter.setPen(QPen(QColor(palette.FLYOUT_STROKE), 1))

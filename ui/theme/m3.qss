@@ -482,3 +482,11 @@ QLabel#statValue { color: @ACCENT_TEXT@; font-size: 26px; font-weight: 800; }
 /* Expressive press: pills squeeze into a rounder square while held. */
 QPushButton:pressed { border-radius: 10px; }
 QPushButton#primary:pressed { border-radius: 10px; }
+
+/* Data page title variants: the title reads like text, left to right. */
+QPushButton#variantTitle { text-align: left; padding: 6px 14px; font-weight: 500; border-radius: 16px; }
+QPushButton#variantTitle:checked {
+    background: @ACCENT_CONTAINER@;
+    color: @ON_ACCENT_CONTAINER@;
+    border: 1px solid @ACCENT@;
+}

@@ -34,6 +34,9 @@ from core.render.graph import output_fps
 from core.render.job import RenderError, render
 from core.audio.enhance import LOUDNESS_CHOICES, LOUDNESS_OFF
 from core.render.settings import (
+    PROGRESS_BOTTOM,
+    PROGRESS_COLORS,
+    PROGRESS_TOP,
     AAC,
     AUTO,
     BITRATE,
@@ -233,6 +236,21 @@ class ExportDialog(QDialog):
             else "No subtitles: transcribe the clip and turn them on in the Subtitles tab"
         )
         video_card.add_row("Subtitles", self.subtitles_check)
+        self.progress_bar_combo = QComboBox(self)
+        self.progress_bar_combo.addItem("None", "")
+        self.progress_bar_combo.addItem("Along the top", PROGRESS_TOP)
+        self.progress_bar_combo.addItem("Along the bottom", PROGRESS_BOTTOM)
+        self.progress_bar_combo.setToolTip("A thin line that fills up as the Short plays: viewers see how much is "
+                                           "left, which helps them watch to the end")
+        self.progress_color_combo = QComboBox(self)
+        for label, color in PROGRESS_COLORS:
+            self.progress_color_combo.addItem(label, color)
+        bar_row = QHBoxLayout()
+        bar_row.addWidget(self.progress_bar_combo, 1)
+        bar_row.addWidget(self.progress_color_combo, 1)
+        video_card.add_row("Progress bar", bar_row)
+        self.progress_bar_combo.currentIndexChanged.connect(
+            lambda _i: self.progress_color_combo.setEnabled(bool(self.progress_bar_combo.currentData())))
 
         audio_card = Card("Audio", parent=self, label_width=96)
         audio = QHBoxLayout()
@@ -326,6 +344,8 @@ class ExportDialog(QDialog):
             encoder=self.encoder_combo.currentData() or AUTO,
             beep_hz=self.beep_spin.value(),
             loudness_lufs=self.loudness_combo.currentData(),
+            progress_bar=self.progress_bar_combo.currentData() or "",
+            progress_color=self.progress_color_combo.currentData() or "#9146ff",
         ).cleaned()
 
     def set_settings(self, settings: RenderSettings) -> None:
@@ -348,6 +368,9 @@ class ExportDialog(QDialog):
             self.beep_spin.setValue(settings.beep_hz)
             index = self.loudness_combo.findData(settings.loudness_lufs)
             self.loudness_combo.setCurrentIndex(index if index >= 0 else 0)
+            self._select(self.progress_bar_combo, settings.progress_bar)
+            self._select(self.progress_color_combo, settings.progress_color)
+            self.progress_color_combo.setEnabled(bool(settings.progress_bar))
             self._select(self.preset_combo, preset_name(settings))
         finally:
             self._loading = False
@@ -392,7 +415,8 @@ class ExportDialog(QDialog):
         self.set_settings(RenderSettings(
             **{**preset.to_dict(), "width": current.width, "height": current.height, "fps": current.fps,
                "encoder": AUTO if current.encoder not in (AUTO, CPU) else current.encoder,
-               "beep_hz": current.beep_hz, "loudness_lufs": current.loudness_lufs}
+               "beep_hz": current.beep_hz, "loudness_lufs": current.loudness_lufs,
+               "progress_bar": current.progress_bar, "progress_color": current.progress_color}
         ))
 
     def _resolution_chosen(self) -> None:

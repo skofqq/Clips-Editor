@@ -59,6 +59,7 @@ class Publication:
     privacy: str = ""
     file: str = ""  # the rendered file that was sent
     cover: str = ""  # JPEG of the cover in the covers folder ("" = none)
+    variant: str = ""  # kind of title and cover ("Streamer first · White on red"), to compare in History
 
     @property
     def date_text(self) -> str:

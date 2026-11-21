@@ -24,7 +24,7 @@ from core.editor.composition import Composition
 from core.editor.track import has_zoom, piecewise_expression
 from core.media.probe import MediaInfo
 from core.audio.enhance import denoise_filter, measure_filter
-from core.render.settings import AUDIO_SAMPLE_RATE, SOURCE_FPS, RenderSettings
+from core.render.settings import AUDIO_SAMPLE_RATE, PROGRESS_TOP, SOURCE_FPS, RenderSettings, progress_bar_height
 from core.timeline.model import BEEP, Timeline
 
 BEEP_AMPLITUDE = 0.2  # ≈ -14 dBFS: clearly audible, not painful
@@ -197,6 +197,21 @@ def blur_lines(blurs, src_w: int, src_h: int, source: str, out_label: str) -> li
     return lines
 
 
+def progress_bar_lines(source: str, out_label: str, w: int, h: int, fps: Fraction, duration_s: float,
+                       place: str, color: str) -> list[str]:
+    """A line along the top or bottom edge that fills from left to right over the Short."""
+    bar_h = progress_bar_height(h)
+    y = 0 if place == PROGRESS_TOP else h - bar_h
+    duration = max(0.001, duration_s)
+    hex_color = "0x" + color.lstrip("#")
+    return [
+        f"color=c={hex_color}:s={w}x{bar_h}:r={_fps_str(fps)}[pbar]",
+        f"[{source}]drawbox=x=0:y={y}:w={w}:h={bar_h}:color=black@0.35:t=fill[ptrack]",
+        f"[ptrack][pbar]overlay=x='-w+W*t/{duration:.6f}':y={y}:eval=frame:shortest=1:format=auto,"
+        f"format=yuv420p[{out_label}]",
+    ]
+
+
 def build_graph(
     composition: Composition,
     timeline: Timeline,
@@ -258,6 +273,10 @@ def build_graph(
         canvas_label = "canvas_f"
     else:
         canvas_label = "canvas"
+    if settings.progress_bar:
+        lines += progress_bar_lines(canvas_label, "canvas_p", canvas_w, canvas_h, fps,
+                                    timeline.output_us / 1_000_000, settings.progress_bar, settings.progress_color)
+        canvas_label = "canvas_p"
     if (settings.width, settings.height) == (canvas_w, canvas_h):
         lines.append(f"[{canvas_label}]format=yuv420p[vout]")
     else:

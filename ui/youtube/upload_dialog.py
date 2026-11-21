@@ -212,6 +212,19 @@ class UploadDialog(QDialog):
         visibility.addWidget(self.schedule_check)
         visibility.addWidget(self.schedule_edit, 1)
         publish.add_row("Visibility", visibility)
+        self.best_time_button = QPushButton("Best time", self)
+        self.best_time_button.setToolTip("Schedule for the time of day your Shorts got the most views")
+        self.best_time_label = QLabel("Best time: worked out from your channel's Shorts once Analytics loads.",
+                                      self)
+        self.best_time_label.setObjectName("muted")
+        self.best_time_label.setWordWrap(True)
+        self.best_time_button.setEnabled(False)
+        best = QHBoxLayout()
+        best.addWidget(self.best_time_label, 1)
+        best.addWidget(self.best_time_button)
+        publish.add_row("", best)
+        self.best_time = None
+        self.best_time_button.clicked.connect(self.use_best_time)
         extra = QHBoxLayout()
         extra.addWidget(self.language_combo, 1)
         extra.addWidget(self.kids_check)
@@ -379,12 +392,36 @@ class UploadDialog(QDialog):
             "thumbnail": self.thumbnail_check.isChecked() if self.thumbnail is not None else True,
         }
 
+    # ------------------------------------------------------------ best time
+    def set_best_time(self, best, note: str = "") -> None:
+        """The suggestion from the channel's numbers (core.youtube.best_time.BestTime) or None."""
+        self.best_time = best
+        if best is None:
+            self.best_time_label.setText(note or "Best time: not enough Shorts with views yet (5 needed, "
+                                         "older than two days).")
+        else:
+            views = f"{best.median_views:,}".replace(",", " ")
+            self.best_time_label.setText(
+                f"Best time: {best.window_text}. Shorts that went out then got {views} views "
+                f"(median of {best.shorts}), {best.lift:.1f}× your usual Short.")
+        self.best_time_button.setEnabled(best is not None and self._task is None)
+
+    def use_best_time(self) -> None:
+        if self.best_time is None:
+            return
+        from datetime import datetime
+
+        slot = self.best_time.next_slot(datetime.now())
+        self.schedule_check.setChecked(True)
+        self.schedule_edit.setDateTime(QDateTime(slot))
+
     # ------------------------------------------------------------ upload
     def _set_busy(self, busy: bool) -> None:
         for widget in (self.channel_combo, self.manage_button, self.title_edit, self.description_edit,
                        self.tags_edit, self.category_combo, self.language_combo, self.kids_check,
                        self.schedule_check):
             widget.setEnabled(not busy)
+        self.best_time_button.setEnabled(not busy and self.best_time is not None)
         self.captions_check.setEnabled(not busy and bool(self.captions))
         self.thumbnail_check.setEnabled(not busy and self.thumbnail is not None)
         self.upload_button.setVisible(not busy)

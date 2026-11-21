@@ -89,6 +89,7 @@ from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.analytics_panel import AnalyticsPanel
 from ui.social.crosspost_panel import CrossPostPanel
 from ui.social.published_panel import PublishedPanel
+from ui.metadata.variants_card import VariantsCard
 from ui.social.guide_panel import INSTAGRAM, TIKTOK, YOUTUBE, GuidePanel
 from core.social.service import SocialService
 from ui.youtube.upload_dialog import UploadDialog, _upload
@@ -228,6 +229,12 @@ class MainWindow(QMainWindow):
         data_column.addLayout(data_row)
         self.thumbnail_editor = ThumbnailEditor(data)
         data_column.addWidget(self.thumbnail_editor)
+        self.variants_card = VariantsCard(data)
+        data_column.addWidget(self.variants_card)
+        self.variants_card.title_chosen.connect(self._use_title_variant)
+        self.variants_card.cover_chosen.connect(self._use_cover_variant)
+        self.variants_card.refresh_requested.connect(self._make_variants)
+        self._cover_variants_task: Worker | None = None
         self.thumbnails = ThumbnailKeeper(self, self.thumbnail_editor)
         self.data_page = page_scroll(data, self, 1240)
         self.page_stack.addWidget(self.data_page)
@@ -270,6 +277,7 @@ class MainWindow(QMainWindow):
         self.analytics_panel.refresh_requested.connect(self.refresh_analytics)
         self._analytics_task: CancellableTask | None = None
         self._analytics_loaded = ""  # channel whose numbers are shown
+        self._best_time = None  # when the channel's Shorts did best (core.youtube.best_time)
         self.service_tabs.add(youtube_tab, "YouTube", "logo_youtube")
         # TikTok and Instagram Reels: one posting card each.
         self.tiktok_panel = CrossPostPanel(self.social, self.config, TIKTOK, self.service_tabs)
@@ -460,6 +468,7 @@ class MainWindow(QMainWindow):
                 self._page = DATA
                 self.thumbnails.refresh()
                 self._update_youtube_preview()
+                self._make_title_variants()
             if index == EDIT and self._edit_layout is not None:
                 self.restoreState(self._edit_layout, LAYOUT_VERSION)
                 self._edit_layout = None
@@ -660,6 +669,9 @@ class MainWindow(QMainWindow):
         self.act_mute.setToolTip("Create a Mute Region from the selected range (M)")
         self.act_merge_mutes = QAction("Merge overlapping mutes", self)
         self.act_blur = QAction("Add blur", self, shortcut=QKeySequence(Qt.Key.Key_B))
+        self.act_shortcuts = QAction("&Keyboard shortcuts", self, shortcut=QKeySequence(Qt.Key.Key_F1))
+        self.act_shortcuts.triggered.connect(self.show_shortcuts)
+        self.addAction(self.act_shortcuts)
         self.act_blur.setToolTip("Add a blur box at the playhead or over the selected range (B)")
         self._edit_actions = (
             self.act_undo, self.act_redo, self.act_split, self.act_delete, self.act_trim,
@@ -765,6 +777,8 @@ class MainWindow(QMainWindow):
         integrations.addAction(self.act_youtube_accounts)
 
         help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction(self.act_shortcuts)
+        help_menu.addSeparator()
         guides = help_menu.addMenu("Setup guides")
         for service, text in ((YOUTUBE, "YouTube"), (TIKTOK, "TikTok"), (INSTAGRAM, "Instagram Reels")):
             action = guides.addAction(text)
@@ -1333,6 +1347,7 @@ class MainWindow(QMainWindow):
         form = self.export_widget
         if form is not None:
             self.config.export_settings = form.settings().to_dict()
+            self._update_subtitle_time(self.timeline.playhead_us)  # the preview shows the progress bar
             folder = form.folder_edit.text().strip()
             if folder and Path(folder).is_dir():
                 self._remember_folder("export_dir", Path(folder))
@@ -1411,7 +1426,8 @@ class MainWindow(QMainWindow):
         source = getattr(job.source, "path", "")
         self._record_publication(cm.Publication(
             cm.YOUTUBE, result.url, plan.metadata.title, datetime.now().isoformat(timespec="seconds"),
-            str(source) if source else "", result.video_id, plan.channel_title, result.privacy, str(job.output)),
+            str(source) if source else "", result.video_id, plan.channel_title, result.privacy, str(job.output),
+            variant=self._variant_text() if job.tag == self._render_state() else ""),
             plan.thumbnail)
         if job.tag == self._render_state():
             self._published = str(job.output)
@@ -1485,6 +1501,8 @@ class MainWindow(QMainWindow):
             combo.currentIndexChanged.connect(lambda _i: self._save_upload_defaults())
         self.publish_page.set_content(form)
         self.upload_widget = form
+        form.set_best_time(self._best_time, "" if self._analytics_loaded else
+                           "Best time: connect YouTube; it is worked out from your channel's Shorts.")
 
     def _sync_publish_page(self) -> None:
         """Fill the upload form with the latest export and the Data page's metadata."""
@@ -1511,6 +1529,86 @@ class MainWindow(QMainWindow):
         if src is None or timeline is None:
             return None
         return timeline.source_to_output(src[1]) // 1000
+
+    # ------------------------------------------------------- help
+    def show_shortcuts(self) -> None:
+        from ui.main_window.shortcuts_dialog import ShortcutsDialog, shortcut_rows
+
+        if getattr(self, "shortcuts_dialog", None) is None:
+            self.shortcuts_dialog = ShortcutsDialog(shortcut_rows(self), self)
+        self.shortcuts_dialog.search_edit.clear()
+        self.shortcuts_dialog.show()
+        self.shortcuts_dialog.raise_()
+        self.shortcuts_dialog.activateWindow()
+
+    # ------------------------------------------------------- variants
+    def _make_variants(self) -> None:
+        self._make_title_variants()
+        self._make_cover_variants()
+
+    def _make_title_variants(self) -> None:
+        from core.metadata.variants import title_variants
+
+        meta = self.metadata_panel.metadata()
+        try:
+            variants = title_variants(self.metadata_panel.library, meta.selection)
+        except Exception as exc:  # noqa: BLE001 - variants are a convenience; never block editing
+            log.warning("Title variants: %s", exc)
+            variants = []
+        self.variants_card.set_titles(variants, meta.title)
+
+    def _use_title_variant(self, variant) -> None:
+        meta = self.metadata_panel.metadata().with_generated(variant.metadata)
+        self.metadata_panel.set_metadata(meta)
+        self._metadata_changed(self.metadata_panel.metadata())
+        self.variants_card.mark_title(variant.title)
+
+    def _make_cover_variants(self) -> None:
+        from core.thumbnails.variants import cover_variants, render_variants
+
+        frames = self.thumbnails.candidates
+        design = self.project.thumbnail
+        if not frames or not design.enabled:
+            self.variants_card.set_covers([], [])
+            return
+        variants = cover_variants(design, [us for us, _image in frames])
+        images = {us: image for us, image in frames}
+        title = self.thumbnails.title()
+        worker = Worker(render_variants, variants, images, title, 150)
+        worker.signals.finished.connect(lambda result, w=worker, v=variants: self._cover_variants_done(w, v, result))
+        worker.signals.failed.connect(lambda exc, w=worker: (self._pending.discard(w),
+                                                             log.warning("Cover variants: %s", exc)))
+        self._pending.add(worker)
+        self._cover_variants_task = worker
+        self.pool.start(worker)
+
+    def _cover_variants_done(self, worker, variants, images) -> None:
+        self._pending.discard(worker)
+        if worker is self._cover_variants_task:
+            self._cover_variants_task = None
+            self.variants_card.set_covers(variants, images, self.project.thumbnail)
+
+    def _use_cover_variant(self, variant) -> None:
+        self.thumbnail_editor.set_design(variant.design)
+        self.thumbnails._design_changed(variant.design)
+
+    def _variant_text(self) -> str:
+        """Which kind of title and cover the current Short has ("Streamer first · White on red")."""
+        from core.metadata.variants import title_variants
+        from core.thumbnails.model import STYLES
+
+        meta = self.metadata_panel.metadata()
+        label = ""
+        try:
+            for v in title_variants(self.metadata_panel.library, meta.selection):
+                if v.title == meta.title:
+                    label = v.label
+                    break
+        except Exception:  # noqa: BLE001
+            pass
+        design = self.project.thumbnail
+        cover = design.text_style.name if design.enabled else "no cover"
+        return " · ".join(part for part in (label or "own title", cover if design.style in STYLES else "") if part)
 
     # ------------------------------------------------------- clip memory
     def _current_source(self) -> str:
@@ -1598,7 +1696,7 @@ class MainWindow(QMainWindow):
             self._record_publication(cm.Publication(
                 service, r.url, meta.title or panel.caption_edit.toPlainText().strip(),
                 datetime.now().isoformat(timespec="seconds"), self._current_source(), "", account or "", "",
-                str(panel.file or "")), self.thumbnails.job())
+                str(panel.file or ""), variant=self._variant_text()), self.thumbnails.job())
 
     def _open_published_clip(self, source: str) -> None:
         media = self.preview.media
@@ -1690,6 +1788,11 @@ class MainWindow(QMainWindow):
         stats, note = result
         self.analytics_panel.set_stats(stats, note)
         self.clip_memory.set_stats(stats)
+        from core.youtube.best_time import best_time
+
+        self._best_time = best_time(stats)
+        if self.upload_widget is not None:
+            self.upload_widget.set_best_time(self._best_time)
         self.published_panel.set_busy(False)
         self.published_panel.refresh()
 
@@ -1707,7 +1810,7 @@ class MainWindow(QMainWindow):
         self._record_publication(cm.Publication(
             cm.YOUTUBE, result.url, meta.title, datetime.now().isoformat(timespec="seconds"),
             self._current_source(), result.video_id, channel.title if channel else "", result.privacy,
-            str(form.file)), self.thumbnails.job())
+            str(form.file), variant=self._variant_text()), self.thumbnails.job())
         self._published = str(form.file)
         self.statusBar().showMessage(f"Uploaded to YouTube: {result.url}", 10000)
         self._analytics_loaded = ""  # the new video shows on the next visit
@@ -1756,9 +1859,13 @@ class MainWindow(QMainWindow):
 
     def _metadata_changed(self, metadata) -> None:
         if metadata != self.project.metadata:
+            old = self.project.metadata
             self.project.metadata = metadata
             self._set_dirty(True)
             self._remember_timer.start()
+            if old.selection != metadata.selection or not self.variants_card.title_texts():
+                self._make_title_variants()
+            self.variants_card.mark_title(metadata.title)
         if self._page == DATA:
             self.thumbnails.refresh()  # the default text is the title
         self._update_youtube_preview()
@@ -2176,6 +2283,9 @@ class MainWindow(QMainWindow):
     def _update_subtitle_time(self, source_us: int) -> None:
         timeline = self.timeline.timeline
         out = timeline.source_to_output(source_us) if timeline is not None else None
+        settings = self.config.export_settings or {}
+        self.preview.output_view.set_progress_bar(settings.get("progress_bar", ""), settings.get("progress_color", ""),
+                                                  timeline.output_us if timeline is not None else 0)
         self.preview.output_view.set_subtitle_time(out)
 
     def add_blur(self) -> bool:

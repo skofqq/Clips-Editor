@@ -33,6 +33,7 @@ class ThumbnailKeeper(QObject):
         editor.frame_chosen.connect(self.use_frame)
         editor.scrub_moved.connect(self._scrubbed)
         self._candidates_key: tuple | None = None  # what the suggested frames were made for
+        self.candidates: list = []  # (source µs, small composed frame) of the suggested frames
         editor.save_requested.connect(self.save_as)
 
     # ------------------------------------------------------------ source
@@ -141,6 +142,7 @@ class ThumbnailKeeper(QObject):
             self.w._remember_timer.start()  # the clip memory keeps the cover too
         self.refresh()
         self.w._update_youtube_preview()
+        self.w.variants_card.mark_cover(design)
 
     # ------------------------------------------------------------ suggested frames
     def _refresh_candidates(self, video, sw: int, sh: int) -> None:
@@ -167,6 +169,8 @@ class ThumbnailKeeper(QObject):
         if key == self._candidates_key:
             src = self.source()
             self.editor.set_candidates(frames, src[1] if src else None)
+            self.candidates = list(frames)
+            self.w._make_cover_variants()
 
     def use_frame(self, source_us: int) -> None:
         design = replace(self.w.project.thumbnail, source_us=int(source_us))

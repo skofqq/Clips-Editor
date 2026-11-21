@@ -341,3 +341,27 @@ def test_main_window_export_action(qapp, data_dir, ffmpeg_paths, sample_clips, m
     assert w.page_bar.is_done(RENDER) and "exported" in w.render_page.status.text()
     w._dirty = False
     w.close()
+
+
+def test_render_progress_bar_fills_over_the_short(mp4, ffmpeg_paths, tmp_path):
+    import subprocess
+
+    from PySide6.QtGui import QImage
+
+    from core.render.settings import progress_bar_height
+
+    assert progress_bar_height(1920) == 12
+    settings = RenderSettings(width=270, height=480, progress_bar="bottom", progress_color="#ffffff")
+    out = tmp_path / "bar.mp4"
+    render(mp4, default_composition(1280, 720), Timeline.for_source(2 * S), settings, out,
+           ffmpeg_paths.ffmpeg, ffmpeg_paths.ffprobe)
+    still = tmp_path / "mid.png"
+    subprocess.run([str(ffmpeg_paths.ffmpeg), "-v", "error", "-ss", "1.0", "-i", str(out), "-frames:v", "1",
+                    "-y", str(still)], check=True)
+    image = QImage(str(still))
+    row = image.height() - 2
+    left, right = image.pixelColor(60, row), image.pixelColor(230, row)
+    assert left.lightness() > 200, left.name()  # filled half way …
+    assert right.lightness() < 200, right.name()  # … not yet at the end
+    top = image.pixelColor(60, 1)
+    assert top.name() != "#ffffff" or top.lightness() < 250  # nothing drawn along the top

@@ -344,3 +344,27 @@ def test_view_settings_survive_reload(data_dir):
     cfg.save()
     again = AppConfig.load(data_dir)
     assert (again.theme, again.mica, again.timeline_view) == ("system", True, {"wave_gain": 2.0})
+
+
+def test_keyboard_shortcuts_dialog(qapp, data_dir, ffmpeg_paths):
+    from tests.test_steps import _window
+
+    w = _window(data_dir, ffmpeg_paths)
+    try:
+        w.act_shortcuts.trigger()
+        dialog = w.shortcuts_dialog
+        rows = dialog.visible_rows()
+        keys = dict((what, key) for key, what in rows)
+        assert keys["Cut the clip in two at the playhead"] == "S"
+        assert keys["Add a blur box at the playhead or over the selected range"] == "B"
+        assert keys["Play or pause the preview"] == "Space"
+        assert "Ctrl+1" in keys["Edit page: cut, layout, subtitles, censor"]
+        assert keys["This list of shortcuts"] == "F1"
+        dialog.search_edit.setText("zoom")
+        assert rows != dialog.visible_rows() and all(
+            "zoom" in (k + w_).casefold() or "Timeline" for k, w_ in dialog.visible_rows())
+        assert len(dialog.visible_rows()) >= 4
+        dialog.close()
+    finally:
+        w._set_dirty(False)
+        w.close()
