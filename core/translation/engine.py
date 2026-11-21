@@ -17,7 +17,11 @@ class Translator:
         import ctranslate2
         import sentencepiece as spm
 
+        from core.transcription.engine import add_cuda_dll_dirs
+
+        add_cuda_dll_dirs()  # pip-installed cuBLAS (requirements-gpu.txt) must be findable on Windows
         folder = Path(folder)
+        self.folder = folder
         self.source = spm.SentencePieceProcessor(model_file=str(folder / "src.spm.model"))
         self.target = spm.SentencePieceProcessor(model_file=str(folder / "tgt.spm.model"))
         if device == "auto":
@@ -36,6 +40,12 @@ class Translator:
             self.model = ctranslate2.Translator(str(folder), device="cpu", compute_type="int8")
         self.device = device
 
+    def _use_cpu(self) -> None:
+        import ctranslate2
+
+        self.model = ctranslate2.Translator(str(self.folder), device="cpu", compute_type="int8")
+        self.device = "cpu"
+
     def translate(self, lines: list[str], beam_size: int = 4, progress=None, cancel=None) -> list[str]:
         """One translation per line; empty lines stay empty."""
         result = [""] * len(lines)
@@ -47,7 +57,15 @@ class Translator:
                 raise TranslationCancelled()
             chunk = todo[start:start + BATCH]
             tokens = [self.source.encode(text, out_type=str) for _i, text in chunk]
-            outputs = self.model.translate_batch(tokens, beam_size=beam_size, max_decoding_length=256)
+            try:
+                outputs = self.model.translate_batch(tokens, beam_size=beam_size, max_decoding_length=256)
+            except RuntimeError as exc:
+                if self.device != "cuda":
+                    raise
+                # The GPU loaded the model but a CUDA library is missing at run time: use the CPU.
+                log.info("Translation on the GPU failed (%s); using the CPU", exc)
+                self._use_cpu()
+                outputs = self.model.translate_batch(tokens, beam_size=beam_size, max_decoding_length=256)
             for (i, _text), output in zip(chunk, outputs):
                 result[i] = self.target.decode(output.hypotheses[0]).strip()
             if progress is not None:

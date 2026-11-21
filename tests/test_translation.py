@@ -160,6 +160,20 @@ def test_translator_engine_with_fake_libraries(tmp_path, monkeypatch):
     assert out[0] == "▁ПРИВЕТ ▁МИР".replace("▁", "") or out[0] == "ПРИВЕТ МИР"
     assert out[1] == "" and out[2] == "" and len(out) == len(lines)
     assert batches == [BATCH, 3]
+    # A model that loads on the GPU but fails to run there falls back to the CPU.
+    class LateFail(FakeTranslator):
+        def __init__(self, path, device, compute_type):
+            self.device, self.compute_type = device, compute_type
+
+        def translate_batch(self, tokens, beam_size, max_decoding_length):
+            if self.device == "cuda":
+                raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+            return super().translate_batch(tokens, beam_size, max_decoding_length)
+
+    sys.modules["ctranslate2"].Translator = LateFail
+    late = Translator(tmp_path)
+    assert late.device == "cuda"
+    assert late.translate(["да нет"]) == ["ДА НЕТ"] and late.device == "cpu"
     import threading
 
     stop = threading.Event()
