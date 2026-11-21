@@ -3,7 +3,7 @@
 # build_installer.bat runs this and then Inno Setup.
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata
 
 root = Path(SPECPATH).resolve().parent  # noqa: F821 - SPECPATH is set by PyInstaller
 
@@ -14,6 +14,7 @@ datas = [
 ]
 datas += collect_data_files("faster_whisper")  # the Silero VAD model
 datas += collect_data_files("onnx_asr")  # feature extractors for GigaAM / Parakeet
+datas += copy_metadata("onnx-asr")  # onnx_asr reads its own version when imported
 binaries = collect_dynamic_libs("ctranslate2") + collect_dynamic_libs("onnxruntime")
 ffmpeg = root / "tools" / "ffmpeg" / "bin"
 for exe in ("ffmpeg.exe", "ffprobe.exe"):
