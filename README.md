@@ -243,6 +243,30 @@ Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
    uploads them as a caption track (CC). This needs the "manage your YouTube
    videos" permission: channels connected before 0.8.7 must be reconnected.
 
+### Best moments in a long recording
+
+The **Highlights** panel finds the moments worth a Short. Nothing is cut
+until you decide.
+
+1. Open the long clip or the stream recording. **Length** switches to
+   *Shorts of about 30 s* for clips longer than 3 minutes (20, 45 and
+   60 s are there too; *Short moments* marks just a few seconds).
+2. Optional, but it helps a lot: **Twitch chat → From Twitch…** downloads the
+   chat of the recording (paste the `twitch.tv/videos/…` link; add `?t=1h2m3s`
+   when your file starts later in the stream) or **Open file…** reads a chat
+   saved by TwitchDownloader (JSON/TXT) or a `[0:01:23] nick: text` log.
+   Transcribing the clip adds laughter, shouting and hype words.
+3. **Find highlights** ranks the ranges: loud spikes, chat bursts (with
+   KEKW/LUL-style laughter or Pog-style hype), and words in the transcript.
+   A range starts with the setup, ends after the reaction, and its edges sit
+   on sentence boundaries or quiet points. Each row shows the reasons, the
+   number of chat messages and what is said.
+4. Play the moments, **tick** the ones you like (green on the ruler) and
+   press **Save ticked as clips…**. Every ticked moment becomes its own video
+   in the folder you choose (GPU encoding when available), with its part of
+   the transcript and chat, and opens in Media for editing. The recording
+   itself is not changed.
+
 ### Editing on the timeline
 
 | Action | How |

@@ -119,6 +119,7 @@ C_BG = QColor(palette.BASE_ALT)
 C_RULER = QColor(palette.BASE)
 C_TRACK = QColor(palette.LAYER)
 C_HIGHLIGHT = QColor("#ff9f1a")  # found moments (orange, readable on both themes)
+C_ACCEPTED = QColor("#2fbf71")  # moments the user ticked for a Short (green)
 HIGHLIGHT_H = 6
 C_SEGMENT = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.42))
 C_SEGMENT_SEL = QColor(palette.mix(palette.BASE, _ACCENT.fill, 0.72))
@@ -709,11 +710,12 @@ class TimelineView(QWidget):
                 x0, x1 = self.us_to_x(moment.start_us), self.us_to_x(moment.end_us)
                 if x1 < 0 or x0 > w:
                     continue
-                band = QColor(C_HIGHLIGHT)
+                color = C_ACCEPTED if getattr(moment, "accepted", False) else C_HIGHLIGHT
+                band = QColor(color)
                 band.setAlpha(90 + int(140 * min(1.0, moment.score)))
                 p.setBrush(band)
                 p.drawRoundedRect(QRectF(x0, RULER_H - HIGHLIGHT_H, max(3.0, x1 - x0), HIGHLIGHT_H), 2, 2)
-                p.setBrush(C_HIGHLIGHT)
+                p.setBrush(color)
                 px = self.us_to_x(moment.peak_us)
                 p.drawEllipse(QPointF(px, RULER_H - HIGHLIGHT_H / 2), 3.5, 3.5)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)

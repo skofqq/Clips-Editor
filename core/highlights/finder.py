@@ -34,7 +34,9 @@ LEAD_S = 5.0  # range starts this long before the first event (the setup)
 TAIL_S = 3.0  # and ends this long after the last one (the reaction)
 
 LOUD, LAUGH, SHOUT, HYPE = "loud", "laughter", "shouting", "hype"
-REASON_LABELS = {LOUD: "Loud", LAUGH: "Laughter", SHOUT: "Shouting", HYPE: "Hype words"}
+CHAT, CHAT_LAUGH, CHAT_HYPE = "chat", "chat_laughs", "chat_hype"
+REASON_LABELS = {LOUD: "Loud", LAUGH: "Laughter", SHOUT: "Shouting", HYPE: "Hype words",
+                 CHAT: "Chat burst", CHAT_LAUGH: "Chat laughs", CHAT_HYPE: "Chat hype"}
 
 _LAUGH = re.compile(
     r"(?:\b(?:a?ха){2,}|\b(?:хе){2,}|\b(?:хи){2,}|\bах(?:ах)+|\b(?:a?ha){2,}|\b(?:he){2,}|\bah(?:ah)+|"
@@ -64,14 +66,28 @@ class Highlight:
     peak_us: int
     score: float  # 0..1
     reasons: tuple[str, ...]
+    quote: str = ""  # what is said around the strongest moment
+    accepted: bool = False  # the user ticked it for a Short
+    chat_count: int = 0  # chat messages inside the range (0 = no chat loaded)
 
     @property
     def label(self) -> str:
         return ", ".join(REASON_LABELS.get(r, r) for r in self.reasons)
 
+    @property
+    def length_us(self) -> int:
+        return self.end_us - self.start_us
+
     def to_dict(self) -> dict[str, Any]:
-        return {"start_us": self.start_us, "end_us": self.end_us, "peak_us": self.peak_us,
-                "score": round(self.score, 3), "reasons": list(self.reasons)}
+        data: dict[str, Any] = {"start_us": self.start_us, "end_us": self.end_us, "peak_us": self.peak_us,
+                                "score": round(self.score, 3), "reasons": list(self.reasons)}
+        if self.quote:
+            data["quote"] = self.quote
+        if self.accepted:
+            data["accepted"] = True
+        if self.chat_count:
+            data["chat_count"] = self.chat_count
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> "Highlight":
@@ -81,7 +97,8 @@ class Highlight:
         if end <= start:
             raise ValueError("Highlight range is empty.")
         return cls(start, end, int(data.get("peak_us", start)), float(data.get("score", 0.0)),
-                   tuple(str(r) for r in data.get("reasons") or ()))
+                   tuple(str(r) for r in data.get("reasons") or ()), str(data.get("quote") or ""),
+                   bool(data.get("accepted", False)), int(data.get("chat_count") or 0))
 
 
 # ------------------------------------------------------------------ sound
@@ -120,9 +137,11 @@ def loud_events(peaks: np.ndarray, peaks_per_second: int, sensitivity: str = NOR
     candidates = np.where((excess >= threshold) & (db >= MIN_LEVEL_DB))[0]
     events: list[Event] = []
     min_gap = int(MIN_GAP_S / STEP_S)
+    taken = np.zeros(times.size, dtype=bool)  # near an event already kept (long clips: no O(n²))
     for i in sorted(candidates, key=lambda k: -excess[k]):  # strongest first, keep them apart
-        if any(abs(int(i) - int(round(e.t_us / 1e6 / STEP_S))) < min_gap for e in events):
+        if taken[i]:
             continue
+        taken[max(0, i - min_gap + 1):i + min_gap] = True
         score = float(np.clip(0.45 + (excess[i] - threshold) / 15.0, 0.0, 1.0))
         events.append(Event(int(times[i] * 1_000_000), score, LOUD))
     return sorted(events, key=lambda e: e.t_us)
@@ -205,9 +224,15 @@ def group(events: Iterable[Event], duration_us: int, limit: int = 12) -> list[Hi
 
 
 def find_highlights(waveform, transcript, duration_us: int, sensitivity: str = NORMAL,
-                    limit: int = 12) -> list[Highlight]:
+                    limit: int = 12, chat=None) -> list[Highlight]:
+    """Short moments (a few seconds each). ``chat``: optional chat messages
+    (core.highlights.chat.ChatMessage) adding chat bursts as evidence."""
     events: list[Event] = []
     if waveform is not None and len(waveform.peaks):
         events += loud_events(waveform.peaks, waveform.peaks_per_second, sensitivity)
     events += word_events(transcript)
+    if chat:
+        from core.highlights.chat import chat_events  # noqa: PLC0415
+
+        events += chat_events(chat, duration_us, sensitivity)
     return group(events, duration_us, limit)
