@@ -387,6 +387,10 @@ QTabBar#serviceTabs::tab:selected {
 QLabel { background: transparent; }
 QLabel#sectionTitle { color: @TEXT@; font-weight: 700; padding-top: 10px; }
 QLabel#muted { color: @TEXT_TERTIARY@; }
+QFrame#developerCard { background: @LAYER@; border: 1px solid @CARD_STROKE@; border-radius: 16px; }
+QFrame#developerCard QLabel { background: transparent; }
+QToolButton#versionButton { color: @TEXT_TERTIARY@; border: none; padding: 0 8px; background: transparent; }
+QToolButton#versionButton:hover { color: @ACCENT_TEXT@; }
 QLabel#timecode { font-family: "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace; color: @TEXT@; }
 QLabel#badge {
     background: @ACCENT_CONTAINER@; color: @ON_ACCENT_CONTAINER@; border: none; border-radius: 10px;

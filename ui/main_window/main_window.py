@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QToolButton,
     QTabWidget,
     QToolBar,
     QVBoxLayout,
@@ -358,6 +359,13 @@ class MainWindow(QMainWindow):
 
         if self.ffmpeg is not None:
             self._start_encoder_detection()
+        self.version_button = QToolButton(self)
+        self.version_button.setObjectName("versionButton")
+        self.version_button.setText(f"v{APP_VERSION}")
+        self.version_button.setToolTip(f"About {APP_NAME}")
+        self.version_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.version_button.clicked.connect(self._show_about)
+        self.statusBar().addPermanentWidget(self.version_button)
         if self.ffmpeg is None:
             self.statusBar().showMessage("FFmpeg not found: run tools\\setup_ffmpeg.py, then restart.")
         else:
@@ -2470,12 +2478,10 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- help
     def _show_about(self) -> None:
-        QMessageBox.about(
-            self,
-            f"About {APP_NAME}",
-            f"<b>{APP_NAME}</b> {APP_VERSION}<br>"
-            "Vertical Shorts editor for Twitch clips.<br>Phase 7: YouTube upload.",
-        )
+        from ui.main_window.about_dialog import AboutDialog
+
+        self.about_dialog = AboutDialog(self)
+        self.about_dialog.open()
 
     def _show_ffmpeg_info(self) -> None:
         if self.ffmpeg is None:

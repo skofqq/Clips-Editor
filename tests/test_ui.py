@@ -368,3 +368,22 @@ def test_keyboard_shortcuts_dialog(qapp, data_dir, ffmpeg_paths):
     finally:
         w._set_dirty(False)
         w.close()
+
+
+def test_about_dialog_shows_version_and_developer(qapp, data_dir, ffmpeg_paths):
+    from app.config import APP_VERSION
+    from ui.main_window.about_dialog import AVATAR, GITHUB_URL
+
+    from tests.test_steps import _window
+
+    w = _window(data_dir, ffmpeg_paths)
+    try:
+        assert w.version_button.text() == f"v{APP_VERSION}"
+        w.version_button.click()
+        dialog = w.about_dialog
+        assert APP_VERSION in dialog.version_label.text()
+        assert GITHUB_URL in dialog.github_link.text()
+        assert AVATAR.is_file() and not dialog.avatar.pixmap().isNull()
+        dialog.close()
+    finally:
+        w.close()
