@@ -160,6 +160,10 @@ def test_translator_engine_with_fake_libraries(tmp_path, monkeypatch):
     assert out[0] == "▁ПРИВЕТ ▁МИР".replace("▁", "") or out[0] == "ПРИВЕТ МИР"
     assert out[1] == "" and out[2] == "" and len(out) == len(lines)
     assert batches == [BATCH, 3]
+    # Longer lines go sentence by sentence, so the model never drops the second sentence.
+    batches.clear()
+    assert translator.translate(["Чат, вы видели это? Я в шоке.", "ок"]) == ["ЧАТ, ВЫ ВИДЕЛИ ЭТО? Я В ШОКЕ.", "ОК"]
+    assert batches == [3]
     # A model that loads on the GPU but fails to run there falls back to the CPU.
     class LateFail(FakeTranslator):
         def __init__(self, path, device, compute_type):
