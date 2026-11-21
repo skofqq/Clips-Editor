@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DEFAULT_SPEECH = ("large-v3-russian-int8", "small")
+DEFAULT_SPEECH = ("large-v3-russian-int8", "small", "gigaam-v3", "parakeet-v3")
 EXTRA = ("separation", "speakers", "face")
 
 
@@ -43,9 +43,22 @@ def flatten_cache(models_dir: Path) -> None:
     shutil.rmtree(models_dir / ".locks", ignore_errors=True)
 
 
+def fetch_onnx(out: Path, name: str) -> Path:
+    from core.transcription import onnx_engine
+
+    folder = out / component_name(name)
+    if not onnx_engine.is_downloaded(folder, name):
+        onnx_engine.download(folder, name, lambda value, text: print(f"  {text}", flush=True))
+    shutil.rmtree(onnx_engine.model_dir(folder, name) / ".cache", ignore_errors=True)
+    return folder
+
+
 def fetch_speech(out: Path, name: str) -> Path:
+    from core.transcription import onnx_engine
     from core.transcription.models import REPOS, download_model, is_downloaded
 
+    if onnx_engine.is_onnx_model(name):
+        return fetch_onnx(out, name)
     if name not in REPOS:
         raise SystemExit(f"Unknown speech model {name!r}. Known: {', '.join(REPOS)}")
     folder = out / component_name(name)

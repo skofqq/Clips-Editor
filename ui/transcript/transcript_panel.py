@@ -54,6 +54,9 @@ MODEL_HINTS = {
     "large-v3-turbo": "near large-v3 accuracy, faster (1.6 GB)",
     "large-v3-russian": "large-v3 fine-tuned on Russian speech, best for Russian (3 GB, GPU)",
     "large-v3-russian-int8": "the Russian model compressed: half the size, nearly the same quality (1.6 GB)",
+    "distil-large-v3": "English only: large-v3 quality, several times faster (1.5 GB)",
+    "gigaam-v3": "Sber GigaAM, Russian only: writes swear words as spoken, precise timing, fast on CPU (~250 MB)",
+    "parakeet-v3": "NVIDIA Parakeet, best for English (Russian too): fast and accurate on CPU (~670 MB)",
 }
 CUSTOM_MODEL = "__custom__"
 VAD_OFF = "off"
@@ -114,6 +117,13 @@ class TranscriptPanel(QWidget):
             "Primes the model with uncensored speech so profanity is transcribed literally,\n"
             "which the automatic censor (Phase 5) needs."
         )
+
+        self.cross_check = QCheckBox("Double-check swear words with a second model (slower)", self)
+        self.cross_check.setToolTip(
+            "Recognises the clip again with a model of another kind (GigaAM for Russian, Parakeet for\n"
+            "English; a Whisper model when GigaAM/Parakeet is the main one). A swear word that only\n"
+            "the second model heard is added to the censor list marked '2nd model', so fewer slip through.\n"
+            "Nothing is muted without your OK.")
 
         self.slang_check = QCheckBox("Expect gaming / streaming slang (катка, рофл, клатч, GG, KEKW…)", self)
         self.slang_check.setChecked(True)
@@ -226,6 +236,7 @@ class TranscriptPanel(QWidget):
         box.addLayout(learned)
         box.addWidget(self.rules_button)
         box.addWidget(self.uncensored_check)
+        box.addWidget(self.cross_check)
         box.addWidget(self.slang_check)
         box.addWidget(self.clean_check)
         box.addWidget(self.separate_check)
@@ -312,11 +323,13 @@ class TranscriptPanel(QWidget):
             vad=vad != VAD_OFF,
             vad_threshold=VAD_LEVELS.get(vad, VAD_LEVELS["normal"]),
             accurate=self.accurate_check.isChecked(),
+            cross_check=self.cross_check.isChecked(),
         )
 
     def set_quality_preferences(self, clean: bool, vad: str, accurate: bool, custom_model: str,
-                                separate: bool = False, refine: bool = True) -> None:
+                                separate: bool = False, refine: bool = True, cross_check: bool = False) -> None:
         self.clean_check.setChecked(clean)
+        self.cross_check.setChecked(cross_check)
         self.separate_check.setChecked(separate)
         self.refine_check.setChecked(refine)
         index = self.vad_combo.findData(vad)
@@ -332,6 +345,7 @@ class TranscriptPanel(QWidget):
             "vad": self.vad_combo.currentData(),
             "accurate": self.accurate_check.isChecked(),
             "custom_model": self.custom_model_edit.text().strip(),
+            "cross_check": self.cross_check.isChecked(),
         }
 
     def set_learned(self, words: list[str]) -> None:
@@ -405,7 +419,8 @@ class TranscriptPanel(QWidget):
             self.speakers_combo.setEnabled(not busy)
         for combo in (self.language_combo, self.model_combo, self.device_combo, self.vocabulary_edit,
                       self.uncensored_check, self.slang_check, self.clean_check, self.vad_combo,
-                      self.accurate_check, self.separate_check, self.refine_check, self.custom_model_edit):
+                      self.accurate_check, self.separate_check, self.refine_check, self.custom_model_edit,
+                      self.cross_check):
             combo.setEnabled(not busy)
         self.progress.setVisible(busy)
 

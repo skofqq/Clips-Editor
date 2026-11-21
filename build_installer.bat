@@ -3,11 +3,11 @@ rem Builds the Windows installer: build\installer\TwitchShortsStudio-Setup-<vers
 rem Needs Python 3 and internet on the first run (dependencies, FFmpeg, models, PyInstaller, Inno Setup).
 rem Speech models to put in the installer (each one is a checkbox there):
 rem   build_installer.bat large-v3-russian-int8 small large-v3-turbo
-rem With no names: large-v3-russian-int8 and small. "none" = no models.
+rem With no names: large-v3-russian-int8 small gigaam-v3 parakeet-v3. "none" = no models.
 setlocal
 cd /d "%~dp0"
 set MODELS=%*
-if "%MODELS%"=="" set MODELS=large-v3-russian-int8 small
+if "%MODELS%"=="" set MODELS=large-v3-russian-int8 small gigaam-v3 parakeet-v3
 
 if not exist .venv (
     py -3 -m venv .venv || python -m venv .venv || goto :fail

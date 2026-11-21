@@ -61,6 +61,12 @@ Name: "speech_turbo"; Description: "{cm:CompSpeechTurbo}"; Types: full
 #if DirExists(Models + "speech_large_v3_russian")
 Name: "speech_ru_full"; Description: "{cm:CompSpeechRuFull}"; Types: full
 #endif
+#if DirExists(Models + "speech_gigaam_v3")
+Name: "speech_gigaam"; Description: "{cm:CompSpeechGigaam}"; Types: optimal full
+#endif
+#if DirExists(Models + "speech_parakeet_v3")
+Name: "speech_parakeet"; Description: "{cm:CompSpeechParakeet}"; Types: full
+#endif
 #if DirExists(Models + "separation")
 Name: "separation"; Description: "{cm:CompSeparation}"; Types: optimal full
 #endif
@@ -72,7 +78,7 @@ Name: "face"; Description: "{cm:CompFace}"; Types: optimal full
 #endif
 
 [CustomMessages]
-ru.TypeOptimal=Оптимальный: программа, русская модель речи и мелкие модели
+ru.TypeOptimal=Оптимальный: программа, русские модели речи (Whisper и GigaAM) и мелкие модели
 ru.TypeFull=Полный: программа и все модели из установщика
 ru.TypeMinimal=Минимальный: только программа (модели можно скачать в ней)
 ru.TypeCustom=Выборочный
@@ -81,10 +87,12 @@ ru.CompSpeechRu=Распознавание речи: русская модель
 ru.CompSpeechSmall=Распознавание речи: быстрая модель small (~0,5 ГБ, для процессора)
 ru.CompSpeechTurbo=Распознавание речи: large-v3-turbo (~1,6 ГБ, для видеокарты)
 ru.CompSpeechRuFull=Распознавание речи: large-v3-russian (~3 ГБ, для видеокарты)
+ru.CompSpeechGigaam=Распознавание речи: GigaAM v3, русский, точнее ловит мат (~250 МБ)
+ru.CompSpeechParakeet=Распознавание речи: Parakeet v3, лучше для английского (~670 МБ)
 ru.CompSeparation=Отделение голоса от музыки (64 МБ)
 ru.CompSpeakers=Определение говорящих (28 МБ)
 ru.CompFace=Поиск лиц для слежения за вебкой (2 МБ)
-en.TypeOptimal=Optimal: the program, the Russian speech model and the small models
+en.TypeOptimal=Optimal: the program, the Russian speech models (Whisper and GigaAM) and the small models
 en.TypeFull=Full: the program and every model in the setup
 en.TypeMinimal=Minimal: the program only (models can be downloaded in it)
 en.TypeCustom=Custom
@@ -93,6 +101,8 @@ en.CompSpeechRu=Speech recognition: Russian model (large-v3-russian-int8, ~1.5 G
 en.CompSpeechSmall=Speech recognition: fast small model (~0.5 GB, for the CPU)
 en.CompSpeechTurbo=Speech recognition: large-v3-turbo (~1.6 GB, for a GPU)
 en.CompSpeechRuFull=Speech recognition: large-v3-russian (~3 GB, for a GPU)
+en.CompSpeechGigaam=Speech recognition: GigaAM v3, Russian, catches swearing better (~250 MB)
+en.CompSpeechParakeet=Speech recognition: Parakeet v3, best for English (~670 MB)
 en.CompSeparation=Separating the voice from music (64 MB)
 en.CompSpeakers=Telling speakers apart (28 MB)
 en.CompFace=Finding faces to follow the webcam (2 MB)
@@ -115,6 +125,12 @@ Source: "{#Models}speech_large_v3_turbo\*"; DestDir: "{#ModelsDest}"; Flags: {#M
 #endif
 #if DirExists(Models + "speech_large_v3_russian")
 Source: "{#Models}speech_large_v3_russian\*"; DestDir: "{#ModelsDest}"; Flags: {#ModelFlags}; Components: speech_ru_full
+#endif
+#if DirExists(Models + "speech_gigaam_v3")
+Source: "{#Models}speech_gigaam_v3\*"; DestDir: "{#ModelsDest}"; Flags: {#ModelFlags}; Components: speech_gigaam
+#endif
+#if DirExists(Models + "speech_parakeet_v3")
+Source: "{#Models}speech_parakeet_v3\*"; DestDir: "{#ModelsDest}"; Flags: {#ModelFlags}; Components: speech_parakeet
 #endif
 #if DirExists(Models + "separation")
 Source: "{#Models}separation\*"; DestDir: "{#ModelsDest}\separation"; Flags: {#ModelFlags}; Components: separation

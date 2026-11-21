@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.24"
+APP_VERSION = "0.9.25"
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class AppConfig:
     transcribe_clean_audio: bool = True
     transcribe_separate_voice: bool = False
     transcribe_refine_timing: bool = True
+    transcribe_cross_check: bool = False  # double-check swear words with a second model
     transcribe_rules: str = ""  # replacement rules, one "find = replace" per line
     transcribe_capitalise: bool = True
     transcribe_vad: str = "normal"  # normal | sensitive | off
@@ -128,7 +129,7 @@ class AppConfig:
         if raw.get("theme") in ("dark", "light", "system"):
             config.theme = raw["theme"]
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
-                    "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_capitalise",
+                    "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_cross_check", "transcribe_capitalise",
                     "autosave_enabled", "twitch_autofill", "twitch_add_to_library"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])

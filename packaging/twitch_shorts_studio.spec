@@ -13,6 +13,7 @@ datas = [
     (str(root / "docs"), "docs"),
 ]
 datas += collect_data_files("faster_whisper")  # the Silero VAD model
+datas += collect_data_files("onnx_asr")  # feature extractors for GigaAM / Parakeet
 binaries = collect_dynamic_libs("ctranslate2") + collect_dynamic_libs("onnxruntime")
 ffmpeg = root / "tools" / "ffmpeg" / "bin"
 for exe in ("ffmpeg.exe", "ffprobe.exe"):
@@ -20,7 +21,7 @@ for exe in ("ffmpeg.exe", "ffprobe.exe"):
         binaries.append((str(ffmpeg / exe), "tools/ffmpeg/bin"))
 
 hiddenimports = (collect_submodules("app") + collect_submodules("core") + collect_submodules("ui")
-                 + collect_submodules("keyring.backends") + ["win32ctypes.core"])
+                 + collect_submodules("keyring.backends") + collect_submodules("onnx_asr") + ["win32ctypes.core"])
 
 a = Analysis(
     [str(root / "app" / "main.py")],

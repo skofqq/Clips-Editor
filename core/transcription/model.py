@@ -89,6 +89,9 @@ class Transcript:
     model: str
     segments: tuple[Segment, ...]
     duration_us: int = 0
+    # Double check: what a second model heard (the censor also looks at these words).
+    check_model: str = ""
+    check_words: tuple[Word, ...] = ()
 
     # ------------------------------------------------------------ queries
     @property
@@ -191,6 +194,10 @@ class Transcript:
                 }
                 for s in self.segments
             ],
+            **({"check": {"model": self.check_model,
+                          "words": [[w.start_us, w.end_us, w.text, round(w.probability, 4), w.timing]
+                                    for w in self.check_words]}}
+               if self.check_model else {}),
         }
 
     @classmethod
@@ -215,10 +222,21 @@ class Transcript:
                 Segment(seg_id, start, end, str(item.get("text", "")), tuple(words), bool(item.get("edited")))
             )
         segments.sort(key=lambda s: (s.start_us, s.id))
+        check = data.get("check") if isinstance(data.get("check"), dict) else {}
+        check_words = []
+        for raw in check.get("words") or []:
+            try:
+                w_start, w_end, w_text, prob, timing = raw[:5]
+                if timing in (WORD_TIMING, SEGMENT_TIMING) and int(w_end) >= int(w_start) >= 0:
+                    check_words.append(Word(int(w_start), int(w_end), str(w_text), float(prob), timing))
+            except (TypeError, ValueError):
+                continue
         return cls(
             language=str(data.get("language") or ""),
             language_probability=float(data.get("language_probability") or 0.0),
             model=str(data.get("model") or ""),
             segments=tuple(segments),
             duration_us=int(data.get("duration_us") or 0),
+            check_model=str(check.get("model") or "") if check_words else "",
+            check_words=tuple(check_words),
         )

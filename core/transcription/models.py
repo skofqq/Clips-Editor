@@ -24,6 +24,7 @@ REPOS = {
     "medium": "Systran/faster-whisper-medium",
     "large-v3": "Systran/faster-whisper-large-v3",
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
     "large-v3-russian": "bzikst/faster-whisper-large-v3-russian",
     "large-v3-russian-int8": "bzikst/faster-whisper-large-v3-russian-int8",
 }
@@ -36,6 +37,7 @@ INFO = {
     "medium": (1530, "More accurate, slow on a CPU"),
     "large-v3": (3090, "Most accurate; needs a GPU"),
     "large-v3-turbo": (1620, "Nearly large-v3 quality, much faster; best with a GPU"),
+    "distil-large-v3": (1510, "English only: large-v3 quality, several times faster"),
     "large-v3-russian": (3090, "large-v3 fine-tuned on Russian: fewer errors in Russian; needs a GPU"),
     "large-v3-russian-int8": (1550, "The Russian model, compressed: half the size, almost the same quality"),
 }

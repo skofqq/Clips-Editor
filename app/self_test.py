@@ -14,7 +14,7 @@ from pathlib import Path
 
 MODULES = (
     "PySide6.QtWidgets", "PySide6.QtMultimedia", "PySide6.QtSvg", "numpy", "keyring", "yt_dlp",
-    "faster_whisper", "ctranslate2", "onnxruntime", "av",
+    "faster_whisper", "ctranslate2", "onnxruntime", "onnx_asr", "av",
     "app.bootstrap", "ui.main_window.main_window", "core.render.job", "core.projects.clip_memory",
 )
 
@@ -40,6 +40,18 @@ def run_self_test(report: str = "") -> int:
     except Exception as exc:  # noqa: BLE001
         ok = False
         lines.append(f"FAIL ffmpeg: {exc!r}")
+    try:
+        from importlib.resources import files
+
+        data = files("onnx_asr.preprocessors") / "data"
+        missing = [n for n in ("nemo128.onnx", "gigaam_v3.onnx") if not (data / n).is_file()]
+        assert not missing, f"onnx-asr feature extractors missing: {missing}"
+        import faster_whisper.vad  # noqa: F401 - the chunking VAD for GigaAM / Parakeet
+
+        lines.append("ok   onnx-asr feature extractors and VAD")
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        lines.append(f"FAIL onnx-asr data: {exc!r}")
     try:
         from PySide6.QtWidgets import QApplication
 

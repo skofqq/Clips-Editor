@@ -24,6 +24,9 @@ from core.censor.normalize import language_of
 from core.timeline.model import BEEP, MUTE_MODES, SILENCE, Timeline
 from core.transcription.model import Transcript
 
+CHECK = "check"  # Suggestion.source: found only by the second (double-check) model
+CHECK_SEGMENT = 0  # segment ids start at 1, so 0 marks a double-check word
+CHECK_OVERLAP_US = 250_000  # a check word this close to a transcript suggestion is the same word
 PENDING = "pending"
 ACCEPTED = "accepted"
 REJECTED = "rejected"
@@ -90,6 +93,7 @@ class Suggestion:
     exact: bool  # False when the word only has approximate (segment) timing
     status: str = PENDING
     adjusted: bool = False  # True once the user moved start/end by hand
+    source: str = ""  # "" = the transcript, CHECK = only the double-check model heard it
 
     @property
     def key(self) -> tuple[int, int, int]:
@@ -112,6 +116,7 @@ class Suggestion:
             "exact": self.exact,
             "status": self.status,
             "adjusted": self.adjusted,
+            **({"source": self.source} if self.source else {}),
         }
 
     @classmethod
@@ -135,6 +140,7 @@ class Suggestion:
             exact=bool(data.get("exact", True)),
             status=status if status in STATUSES else PENDING,
             adjusted=bool(data.get("adjusted", False)),
+            source=CHECK if data.get("source") == CHECK else "",
         )
 
 
@@ -358,6 +364,28 @@ def detect(
                     )
                     next_id += 1
                 found.append(item)
+    if transcript is not None and settings.categories and transcript.check_words:
+        covered = [(s.word_start_us - CHECK_OVERLAP_US, s.word_end_us + CHECK_OVERLAP_US) for s in found]
+        for index, word in enumerate(transcript.check_words):
+            match = dictionary.match(word.text, settings.categories)
+            if match is None or any(a < word.end_us and word.start_us < b for a, b in covered):
+                continue
+            key = (CHECK_SEGMENT, index, word.start_us)
+            prior = old.get(key)
+            language = match.language if match.language in ("ru", "en") else language_of(word.text)
+            fields = dict(word_end_us=word.end_us, text=word.text, entry_key=match.entry_key,
+                          category=match.category, language=language, exact=word.exact, source=CHECK)
+            if prior is not None:
+                item = replace(prior, **fields)
+                if not prior.adjusted:
+                    item = replace(item, **_padded(word.start_us, word.end_us, settings, duration_us))
+            else:
+                item = Suggestion(id=next_id, segment_id=CHECK_SEGMENT, word_index=index,
+                                  word_start_us=word.start_us,
+                                  **_padded(word.start_us, word.end_us, settings, duration_us), **fields)
+                next_id += 1
+            found.append(item)
+            covered.append((word.start_us - CHECK_OVERLAP_US, word.end_us + CHECK_OVERLAP_US))
     found.sort(key=lambda s: (s.start_us, s.id))
     applied = previous.applied_mute_ids if previous else ()
     return CensorState(tuple(found), settings, applied, next_id)
@@ -365,6 +393,7 @@ def detect(
 
 __all__ = [
     "ACCEPTED",
+    "CHECK",
     "BEEP",
     "CensorSettings",
     "CensorState",

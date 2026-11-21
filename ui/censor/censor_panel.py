@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.censor.dictionary import CUSTOM, MILD, STRONG
-from core.censor.review import ACCEPTED, PENDING, REJECTED, CensorSettings
+from core.censor.review import ACCEPTED, CHECK, PENDING, REJECTED, CensorSettings
 from core.timeline.model import BEEP, SILENCE
 from core.timeline.timebase import format_timecode
 from ui.theme import palette
@@ -312,9 +312,16 @@ class CensorPanel(QWidget):
                     time_item.setToolTip("Approximate timing: check the start and end before accepting.")
                 word_item = QTableWidgetItem(sug.text)
                 word_item.setToolTip("Double-click to correct the recognised word")
-                match_item = QTableWidgetItem(
-                    f"{sug.entry_key.split(':', 1)[-1]} · {CATEGORY_TEXT.get(sug.category, sug.category)}"
-                )
+                match_text = f"{sug.entry_key.split(':', 1)[-1]} · {CATEGORY_TEXT.get(sug.category, sug.category)}"
+                if sug.source == CHECK:
+                    match_text += " · 2nd model"
+                    word_item.setFlags(word_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    word_item.setToolTip(
+                        "Only the double-check model heard this word; the transcript has something else here.\n"
+                        "Listen (P) before accepting.")
+                match_item = QTableWidgetItem(match_text)
+                if sug.source == CHECK:
+                    match_item.setToolTip(word_item.toolTip())
                 match_item.setFlags(match_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 status_item = QTableWidgetItem(STATUS_TEXT[sug.status])
                 status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)

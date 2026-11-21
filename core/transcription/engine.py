@@ -41,7 +41,11 @@ MODEL_REPOS = {
     "large-v3-russian": "bzikst/faster-whisper-large-v3-russian",
     "large-v3-russian-int8": "bzikst/faster-whisper-large-v3-russian-int8",
 }
-MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo") + tuple(MODEL_REPOS)
+# GigaAM (Russian) and Parakeet (English and more) run through onnx-asr, not
+# faster-whisper: see core.transcription.onnx_engine.
+ONNX_MODEL_NAMES = ("gigaam-v3", "parakeet-v3")
+MODEL_SIZES = (("tiny", "base", "small", "medium", "large-v3", "large-v3-turbo", "distil-large-v3")
+               + tuple(MODEL_REPOS) + ONNX_MODEL_NAMES)
 DEFAULT_MODEL = "small"
 AUTO = "auto"
 
@@ -69,6 +73,7 @@ class TranscribeOptions:
     accurate: bool = False  # wider beam search: slower, a little more accurate
     separate_voice: bool = False  # isolate the voice from game audio / music first (slower)
     refine_timing: bool = True  # snap word edges to where the voice starts and stops
+    cross_check: bool = False  # run a second model and keep its swear words too (see check_model_for)
 
 
 VAD_LEVELS = {"normal": 0.5, "sensitive": 0.3}
@@ -376,6 +381,7 @@ class WhisperEngine:
         self.notice = ""  # why the GPU was not used, if it was requested/available
         self._lock = threading.Lock()
         self._separator = None
+        self._onnx = None  # OnnxEngine for GigaAM / Parakeet, made on first use
 
     def separate_voice(self, stereo: np.ndarray, progress: Progress = lambda f, m: None,
                        cancel: threading.Event | None = None) -> np.ndarray:
@@ -469,6 +475,25 @@ class WhisperEngine:
                          f"Recognising ({info.language}) on {self.device_used.upper()}… {len(raw)} segments")
         return raw, info
 
+    def _transcribe_onnx(self, audio: np.ndarray, options: TranscribeOptions, progress: Progress,
+                         cancel: threading.Event | None) -> Transcript:
+        from core.transcription import onnx_engine
+
+        with self._lock:
+            if self._onnx is None:
+                self._onnx = onnx_engine.OnnxEngine(self.models_dir)
+            self.notice = ""
+            self.device_used = "cpu"
+            try:
+                return self._onnx.transcribe(audio, options.model, options.language, options.vad,
+                                             options.vad_threshold, progress, cancel)
+            except (TranscriptionCancelled, InterruptedError) as exc:
+                raise TranscriptionCancelled() from exc
+            except onnx_engine.OnnxError as exc:
+                raise TranscriptionError(str(exc)) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise TranscriptionError(f"Transcription with {options.model} failed: {exc}") from exc
+
     def transcribe(
         self,
         audio: np.ndarray,
@@ -476,6 +501,10 @@ class WhisperEngine:
         progress: Progress = lambda f, m: None,
         cancel: threading.Event | None = None,
     ) -> Transcript:
+        from core.transcription import onnx_engine
+
+        if onnx_engine.is_onnx_model(options.model):
+            return self._transcribe_onnx(audio, options, progress, cancel)
         with self._lock:
             candidates, self.notice = resolve_device(options.device)
             if self.notice:
@@ -510,6 +539,41 @@ class WhisperEngine:
         )
 
 
+def check_model_for(model: str, language: str, models_dir: Path) -> str:
+    """The second model for the swear-word double check: a model of the other
+    kind than ``model`` (they make different mistakes), for ``language``."""
+    from core.transcription import onnx_engine
+
+    if not onnx_engine.is_onnx_model(model):
+        return onnx_engine.GIGAAM if language == "ru" else onnx_engine.PARAKEET
+    have = set(downloaded_models(models_dir))
+    preferred = ("large-v3-russian-int8", "large-v3-russian") if language == "ru" else ()
+    for name in preferred + ("large-v3-turbo", "large-v3", "distil-large-v3", "medium", "small"):
+        if name in have and (language == "en" or not name.startswith("distil")):
+            return name
+    return "small"
+
+
+def add_cross_check(engine: "WhisperEngine", transcript: Transcript, audio: np.ndarray,
+                    options: TranscribeOptions, progress: Progress = lambda f, m: None,
+                    cancel: threading.Event | None = None) -> Transcript:
+    """Recognise ``audio`` again with the check model and keep its words on the transcript."""
+    language = transcript.language if transcript.language in ("ru", "en") else options.language
+    check = check_model_for(options.model, language, engine.models_dir)
+
+    def report(fraction: float, message: str) -> None:
+        progress(fraction, f"Double check with {check}: {message}")
+
+    second = engine.transcribe(audio, replace(options, model=check, language=language, cross_check=False),
+                               report, cancel)
+    words = [w for w in second.words()]
+    if options.refine_timing and second.segments:
+        from core.transcription.alignment import refine_segments
+
+        words = [w for s in refine_segments(second.segments, audio, SAMPLE_RATE) for w in s.words]
+    return replace(transcript, check_model=check, check_words=tuple(words))
+
+
 def transcribe_file(
     engine: WhisperEngine,
     path: Path,
@@ -528,6 +592,8 @@ def transcribe_file(
         from core.transcription.alignment import refine_segments
 
         transcript = replace(transcript, segments=refine_segments(transcript.segments, audio, SAMPLE_RATE))
+    if options.cross_check:
+        transcript = add_cross_check(engine, transcript, audio, options, progress, cancel)
     return transcript
 
 
@@ -600,10 +666,20 @@ def is_custom_model(model: str) -> bool:
 
 
 def downloaded_models(models_dir: Path) -> list[str]:
-    """Model sizes already present in ``models_dir`` (Hugging Face cache layout)."""
+    """Models already present in ``models_dir``: Whisper ones in the Hugging Face
+    cache layout, GigaAM / Parakeet in ``onnx/``."""
+    from core.transcription import models as whisper_models
+    from core.transcription import onnx_engine
+
     found = []
     for size in MODEL_SIZES:
-        pattern = os.path.join(str(models_dir), f"models--*faster-whisper-{size}", "snapshots", "*", "model.bin")
-        if glob.glob(pattern):
+        if onnx_engine.is_onnx_model(size):
+            if onnx_engine.is_downloaded(models_dir, size):
+                found.append(size)
+        elif size in whisper_models.REPOS:
+            if whisper_models.is_downloaded(models_dir, size):
+                found.append(size)
+        elif glob.glob(os.path.join(str(models_dir), f"models--*faster-whisper-{size}", "snapshots", "*",
+                                    "model.bin")):
             found.append(size)
     return found
