@@ -9,21 +9,28 @@ the other pages fill the window and hide the editor's docks.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTabBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ui.theme import icon
+from ui.theme import icon, palette
 from ui.widgets.card import Card
+
+ANIMATE = True  # page transitions and the sliding step indicator
+PAGE_IN_MS = 280
+INDICATOR_MS = 340
 
 EDIT, DATA, RENDER, PUBLISH = range(4)
 PAGES = (
@@ -31,7 +38,7 @@ PAGES = (
     ("Edit", "film", "Cut, lay out, subtitles, censor (Ctrl+1)"),
     ("Data", "document", "Title, description, tags (Ctrl+2)"),
     ("Render", "export", "Export the Short to a video file (Ctrl+3)"),
-    ("Publish", "youtube", "Upload to YouTube (Ctrl+4)"),
+    ("Publish", "youtube", "Upload to YouTube, TikTok and Instagram Reels (Ctrl+4)"),
 )
 
 
@@ -48,6 +55,13 @@ class PageBar(QWidget):
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         self.buttons: list[QToolButton] = []
+        # The active step's pill slides from button to button (M3 Expressive spring).
+        self.indicator = QFrame(self)
+        self.indicator.setObjectName("pageIndicator")
+        self.indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._indicator_anim = QPropertyAnimation(self.indicator, b"geometry", self)
+        self._indicator_anim.setDuration(INDICATOR_MS)
+        self._indicator_anim.setEasingCurve(QEasingCurve.Type.OutBack)
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 4, 12, 4)
         row.setSpacing(4)
@@ -80,8 +94,35 @@ class PageBar(QWidget):
     def current(self) -> int:
         return max(0, self.group.checkedId())
 
+    def _indicator_rect(self) -> QRect:
+        return self.buttons[self.current()].geometry()
+
+    def _move_indicator(self, animate: bool) -> None:
+        target = self._indicator_rect()
+        if target.isEmpty():
+            return
+        self.indicator.lower()
+        self.indicator.show()
+        self._indicator_anim.stop()
+        if animate and ANIMATE and self.isVisible() and not self.indicator.geometry().isEmpty():
+            self._indicator_anim.setStartValue(self.indicator.geometry())
+            self._indicator_anim.setEndValue(target)
+            self._indicator_anim.start()
+        else:
+            self.indicator.setGeometry(target)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._move_indicator(False)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._move_indicator(False)
+
     def set_current(self, index: int) -> None:
+        changed = index != self.current() or not self.buttons[index].isChecked()
         self.buttons[index].setChecked(True)
+        self._move_indicator(changed)
         last = index == len(PAGES) - 1
         self.next_button.setVisible(not last)
         if not last:
@@ -120,20 +161,121 @@ def page_scroll(content: QWidget, parent: QWidget, max_width: int = 960) -> QScr
     return scroll
 
 
-class StepPage(QWidget):
-    """A simple step page: a heading, a status card and one main action."""
+def page_hero(step: int, title: str, subtitle: str, icon_name: str, parent: QWidget) -> Card:
+    """The header of a step page: a tonal icon tile, "Step N of 4", a big title and a line
+    of text, on a softly tinted surface (M3 Expressive hero)."""
+    card = Card(parent=parent)
+    card.setObjectName("pageHero")
+    card.body.setContentsMargins(20, 18, 20, 18)
+    card.body.setSpacing(10)
+    tile = QLabel(card)
+    tile.setObjectName("heroIcon")
+    tile.setFixedSize(60, 60)
+    tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    tile.setPixmap(icon(icon_name, palette.accent().on_container).pixmap(30, 30))
+    step_label = QLabel(f"STEP {step + 1} OF {len(PAGES)}", card)
+    step_label.setObjectName("heroStep")
+    heading = QLabel(title, card)
+    heading.setObjectName("pageTitle")
+    card.body.removeWidget(card.subtitle_label)
+    card.subtitle_label.setText(subtitle)
+    card.subtitle_label.setVisible(bool(subtitle))
+    texts = QVBoxLayout()
+    texts.setSpacing(0)
+    texts.addWidget(step_label)
+    texts.addWidget(heading)
+    texts.addWidget(card.subtitle_label)
+    row = QHBoxLayout()
+    row.setSpacing(16)
+    row.addWidget(tile, 0, Qt.AlignmentFlag.AlignTop)
+    row.addLayout(texts, 1)
+    card.body.insertLayout(0, row)
+    card.heading = heading
+    return card
 
-    action_requested = Signal()
 
-    def __init__(self, title: str, subtitle: str, action: str, icon_name: str, parent: QWidget | None = None):
+def animate_in(widget: QWidget, distance: int = 22) -> None:
+    """Fade a page in while it slides up a little (removed when done)."""
+    if not ANIMATE or not widget.isVisible():
+        return
+    effect = QGraphicsOpacityEffect(widget)
+    effect.setOpacity(0.0)
+    widget.setGraphicsEffect(effect)
+    fade = QPropertyAnimation(effect, b"opacity", widget)
+    fade.setDuration(PAGE_IN_MS)
+    fade.setStartValue(0.0)
+    fade.setEndValue(1.0)
+    fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+    fade.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def done() -> None:
+        if widget.graphicsEffect() is effect:
+            widget.setGraphicsEffect(None)
+
+    fade.finished.connect(done)
+    if distance <= 0:  # fade only (a widget the layout is still placing)
+        return
+    end = widget.pos()
+    slide = QPropertyAnimation(widget, b"pos", widget)
+    slide.setDuration(PAGE_IN_MS + 60)
+    slide.setStartValue(end + QPoint(0, distance))
+    slide.setEndValue(end)
+    slide.setEasingCurve(QEasingCurve.Type.OutQuart)
+    slide.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+
+class ServiceTabs(QWidget):
+    """Tabs with a logo in front of each name; only the open tab takes room on the page."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.bar = QTabBar(self)
+        self.bar.setObjectName("serviceTabs")
+        self.bar.setIconSize(QSize(20, 20))
+        self.bar.setExpanding(False)
+        self.bar.setDrawBase(False)
+        self.bar.setDocumentMode(True)
+        self.pages: list[QWidget] = []
         column = QVBoxLayout(self)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(12)
-        heading = QLabel(title, self)
-        heading.setObjectName("pageTitle")
-        column.addWidget(heading)
-        self.card = Card(subtitle=subtitle, parent=self)
+        column.addWidget(self.bar)
+        self._column = column
+        self.bar.currentChanged.connect(self._show)
+
+    def add(self, page: QWidget, name: str, logo: str) -> int:
+        page.setParent(self)
+        self.pages.append(page)
+        self._column.addWidget(page)
+        index = self.bar.addTab(icon(logo), name)
+        self._show(self.bar.currentIndex())
+        return index
+
+    def current(self) -> int:
+        return self.bar.currentIndex()
+
+    def set_current(self, index: int) -> None:
+        self.bar.setCurrentIndex(index)
+
+    def _show(self, index: int) -> None:
+        for i, page in enumerate(self.pages):
+            page.setVisible(i == index)
+        if 0 <= index < len(self.pages):
+            animate_in(self.pages[index], 0)
+
+
+class StepPage(QWidget):
+    """A simple step page: a hero header with the status and one main action."""
+
+    action_requested = Signal()
+
+    def __init__(self, title: str, subtitle: str, action: str, icon_name: str, parent: QWidget | None = None,
+                 step: int = 0, hero_icon: str = ""):
+        super().__init__(parent)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(14)
+        self.card = page_hero(step, title, subtitle, hero_icon or icon_name, self)
         self.status = QLabel(self.card)
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -141,10 +283,11 @@ class StepPage(QWidget):
         self.action_button = QPushButton(action, self.card)
         self.action_button.setObjectName("primary")
         self.action_button.setIcon(icon(icon_name))
-        row = QHBoxLayout()
-        row.addWidget(self.action_button)
-        row.addStretch(1)
-        self.card.body.addLayout(row)
+        self.actions = QHBoxLayout()
+        self.actions.setSpacing(8)
+        self.actions.addWidget(self.action_button)
+        self.actions.addStretch(1)
+        self.card.body.addLayout(self.actions)
         column.addWidget(self.card)
         self.slot = QVBoxLayout()  # the page's own form (export settings, upload form)
         self.slot.setContentsMargins(0, 0, 0, 0)

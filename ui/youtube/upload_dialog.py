@@ -506,6 +506,8 @@ class UploadDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Widget)
         self.setMinimumWidth(0)
         self.close_button.hide()
+        if self.layout() is not None:
+            self.layout().setContentsMargins(0, 0, 0, 0)  # line up with the page
 
     @property
     def busy(self) -> bool:

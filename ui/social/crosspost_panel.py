@@ -1,4 +1,7 @@
-"""Publish page card: post the rendered Short to TikTok and Instagram Reels."""
+"""Publish page cards: post the rendered Short to TikTok or to Instagram Reels.
+
+One :class:`CrossPostPanel` per service, each on its own Publish tab.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +11,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, Signal
+from PySide6.QtCore import QThreadPool, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QGridLayout,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -79,9 +82,12 @@ class CrossPostPanel(Card):
     guide_requested = Signal(str)  # service
     posted = Signal(object)  # list[CrossPostResult]
 
-    def __init__(self, social, config, parent: QWidget | None = None) -> None:
-        super().__init__("TikTok & Instagram Reels", "Post the same Short to TikTok and Instagram. "
-                         "Set each service up once with its Guide.", parent)
+    def __init__(self, social, config, service: str = TIKTOK, parent: QWidget | None = None) -> None:
+        is_tiktok = service == TIKTOK
+        super().__init__("", ("Post the Short to your profile, or send it to the drafts in the TikTok app."
+                              if is_tiktok else "Post the Short as a Reel, with the cover from the Edit page."),
+                         parent)
+        self.service = service
         self.social = social
         self.config = config
         self.file: Path | None = None
@@ -117,7 +123,7 @@ class CrossPostPanel(Card):
         self.reels_guide = QPushButton("Guide", self)
         self.feed_check = QCheckBox("Also show in the feed", self)
 
-        self.post_button = QPushButton("Post", self)
+        self.post_button = QPushButton("Post to TikTok" if is_tiktok else "Post the Reel", self)
         self.post_button.setObjectName("primary")
         self.cancel_button = QPushButton("Cancel", self)
         self.cancel_button.hide()
@@ -128,24 +134,31 @@ class CrossPostPanel(Card):
         self.result_label.setWordWrap(True)
         self.result_label.setOpenExternalLinks(True)
 
+        # Account row: who is connected, and the set-up guide.
+        account = QHBoxLayout()
+        account.addWidget(QLabel("Account:", self))
+        status = self.tiktok_status if is_tiktok else self.reels_status
+        account.addWidget(status, 1)
+        account.addWidget(self.tiktok_guide if is_tiktok else self.reels_guide)
+        self.body.addLayout(account)
         self.body.addWidget(self.file_label)
         caption_row = QHBoxLayout()
         caption_row.addWidget(self.caption_edit, 1)
-        caption_row.addWidget(self.caption_reset)
+        caption_row.addWidget(self.caption_reset, 0, Qt.AlignmentFlag.AlignTop)
         self.body.addLayout(caption_row)
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.addWidget(self.tiktok_check, 0, 0)
-        grid.addWidget(self.tiktok_status, 0, 1)
-        grid.addWidget(self.mode_combo, 0, 2)
-        grid.addWidget(self.privacy_combo, 0, 3)
-        grid.addWidget(self.tiktok_guide, 0, 4)
-        grid.addWidget(self.reels_check, 1, 0)
-        grid.addWidget(self.reels_status, 1, 1)
-        grid.addWidget(self.feed_check, 1, 2, 1, 2)
-        grid.addWidget(self.reels_guide, 1, 4)
-        grid.setColumnStretch(1, 1)
-        self.body.addLayout(grid)
+        options = QFormLayout()  # under the caption (the card's own form sits above everything)
+        options.setHorizontalSpacing(12)
+        options.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        if is_tiktok:
+            options.addRow("Where", self.mode_combo)
+            options.addRow("Who can see", self.privacy_combo)
+        else:
+            options.addRow(self.feed_check)
+        self.body.addLayout(options)
+        others = ((self.reels_status, self.reels_guide, self.feed_check) if is_tiktok
+                  else (self.tiktok_status, self.tiktok_guide, self.mode_combo, self.privacy_combo))
+        for widget in (*others, self.tiktok_check, self.reels_check):  # the tab is the choice
+            widget.hide()
         buttons = QHBoxLayout()
         buttons.addWidget(self.progress, 1)
         buttons.addStretch(0)
@@ -157,8 +170,8 @@ class CrossPostPanel(Card):
         defaults = config.social_defaults
         self.mode_combo.setCurrentIndex(max(0, self.mode_combo.findData(defaults.get("tiktok_mode", tiktok.DIRECT))))
         self.feed_check.setChecked(bool(defaults.get("share_to_feed", True)))
-        self.tiktok_check.setChecked(bool(defaults.get("tiktok", True)))
-        self.reels_check.setChecked(bool(defaults.get("reels", True)))
+        self.tiktok_check.setChecked(is_tiktok)  # one service per panel
+        self.reels_check.setChecked(not is_tiktok)
 
         self.tiktok_guide.clicked.connect(lambda: self.guide_requested.emit(TIKTOK))
         self.reels_guide.clicked.connect(lambda: self.guide_requested.emit(INSTAGRAM))
@@ -187,7 +200,7 @@ class CrossPostPanel(Card):
         tiktok_name, reels_name = self.social.tiktok_name, self.social.instagram_name
         self.tiktok_status.setText(tiktok_name or "Not set up")
         self.reels_status.setText(reels_name or "Not set up")
-        if tiktok_name and self._info_worker is None:
+        if tiktok_name and self.service == TIKTOK and self._info_worker is None:
             worker = Worker(lambda: tiktok.creator_info(self.social.tiktok_access_token()))
             worker.signals.finished.connect(self._creator_info)
             worker.signals.failed.connect(lambda exc: self._info_failed(exc))
@@ -218,12 +231,10 @@ class CrossPostPanel(Card):
     def _update(self) -> None:
         busy = self._task is not None
         tiktok_ready, reels_ready = bool(self.social.tiktok_name), bool(self.social.instagram_name)
-        self.tiktok_check.setEnabled(tiktok_ready and not busy)
-        self.reels_check.setEnabled(reels_ready and not busy)
         self.mode_combo.setEnabled(tiktok_ready and not busy)
         self.privacy_combo.setEnabled(tiktok_ready and not busy and self.mode_combo.currentData() == tiktok.DIRECT)
         self.feed_check.setEnabled(reels_ready and not busy)
-        chosen = (tiktok_ready and self.tiktok_check.isChecked()) or (reels_ready and self.reels_check.isChecked())
+        chosen = tiktok_ready if self.service == TIKTOK else reels_ready
         self.post_button.setEnabled(not busy and chosen and self.file is not None and self.file.is_file())
         self.post_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
@@ -240,17 +251,18 @@ class CrossPostPanel(Card):
         caption = self.caption_edit.toPlainText().strip()
         cover = self.cover_ms() if callable(self.cover_ms) else None
         tiktok_post = None
-        if self.social.tiktok_name and self.tiktok_check.isChecked():
+        if self.social.tiktok_name and self.service == TIKTOK:
             tiktok_post = tiktok.TikTokPost(caption=caption, mode=self.mode_combo.currentData(),
                                             privacy=self.privacy_combo.currentData() or "SELF_ONLY",
                                             cover_ms=cover or 0)
         reels = None
-        if self.social.instagram_name and self.reels_check.isChecked():
+        if self.social.instagram_name and self.service == INSTAGRAM:
             reels = {"share_to_feed": self.feed_check.isChecked(), "cover_ms": cover}
-        self.config.social_defaults = {
-            "tiktok": self.tiktok_check.isChecked(), "reels": self.reels_check.isChecked(),
-            "tiktok_mode": self.mode_combo.currentData(), "tiktok_privacy": self.privacy_combo.currentData(),
-            "share_to_feed": self.feed_check.isChecked()}
+        if self.service == TIKTOK:
+            mine = {"tiktok_mode": self.mode_combo.currentData(), "tiktok_privacy": self.privacy_combo.currentData()}
+        else:
+            mine = {"share_to_feed": self.feed_check.isChecked()}
+        self.config.social_defaults = {**self.config.social_defaults, **mine}
         task = CancellableTask(run_posts, self.social, self.file, caption, tiktok_post, reels)
         task.signals.progress.connect(self._progress)
         task.signals.finished.connect(self._done)

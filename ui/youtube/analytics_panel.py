@@ -58,11 +58,13 @@ class _Item(QTableWidgetItem):
 class _Tile(QWidget):
     def __init__(self, caption: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("statTile")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         column = QVBoxLayout(self)
-        column.setContentsMargins(0, 0, 0, 0)
+        column.setContentsMargins(14, 10, 14, 12)
         column.setSpacing(0)
         self.value = QLabel("—", self)
-        self.value.setObjectName("pageTitle")
+        self.value.setObjectName("statValue")
         label = QLabel(caption, self)
         label.setObjectName("muted")
         column.addWidget(self.value)

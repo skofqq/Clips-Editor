@@ -365,6 +365,24 @@ QTabBar::tab:hover { color: @TEXT@; background: @SUBTLE_HOVER@; }
 QTabBar::tab:selected { color: @ACCENT_TEXT@; border-bottom: 3px solid @ACCENT@; }
 QTabBar::close-button { subcontrol-position: right; }
 
+/* Publish page services: pill tabs with the service's logo in front. */
+QTabBar#serviceTabs::tab {
+    background: @LAYER@;
+    color: @TEXT_SECONDARY@;
+    border: 1px solid @CARD_STROKE@;
+    border-radius: 20px;
+    padding: 9px 20px 9px 14px;
+    margin: 0 8px 0 0;
+    min-height: 22px;
+    font-weight: 600;
+}
+QTabBar#serviceTabs::tab:hover { color: @TEXT@; background: @CONTROL_HOVER@; }
+QTabBar#serviceTabs::tab:selected {
+    color: @ON_ACCENT_CONTAINER@;
+    background: @ACCENT_CONTAINER@;
+    border: 1px solid @ACCENT@;
+}
+
 /* --------------------------------------------------------------- labels */
 QLabel { background: transparent; }
 QLabel#sectionTitle { color: @TEXT@; font-weight: 700; padding-top: 10px; }
@@ -444,3 +462,23 @@ QLabel#doneChip {
     background: @ACCENT_CONTAINER@; color: @ON_ACCENT_CONTAINER@; border-radius: 10px; padding: 3px 10px;
     font-weight: 700;
 }
+
+/* ---- step pages, part 3: hero headers, sliding step pill, stat tiles ---- */
+QFrame#pageHero {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 @ACCENT_SOFT@, stop:0.55 @LAYER@, stop:1 @LAYER@);
+    border: 1px solid @CARD_STROKE@;
+    border-radius: 28px;
+}
+QFrame#pageHero QLabel { background: transparent; }
+QFrame#pageHero QLabel#pageTitle { font-size: 32px; font-weight: 800; padding: 0 0 2px 0; }
+QLabel#heroIcon { background: @ACCENT_CONTAINER@; border-radius: 20px; }
+QLabel#heroStep { color: @ACCENT_TEXT@; font-size: 8.5pt; font-weight: 800; letter-spacing: 1px; }
+QFrame#pageIndicator { background: @ACCENT_CONTAINER@; border-radius: 16px; }
+QToolButton#pageButton:checked { background: transparent; color: @ON_ACCENT_CONTAINER@; }
+QWidget#statTile { background: @LAYER_ALT@; border-radius: 16px; }
+QWidget#statTile QLabel { background: transparent; }
+QLabel#statValue { color: @ACCENT_TEXT@; font-size: 26px; font-weight: 800; }
+
+/* Expressive press: pills squeeze into a rounder square while held. */
+QPushButton:pressed { border-radius: 10px; }
+QPushButton#primary:pressed { border-radius: 10px; }

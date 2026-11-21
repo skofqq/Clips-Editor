@@ -246,37 +246,54 @@ def test_publish_page_cross_posts(qapp, data_dir, ffmpeg_paths, fake, tmp_path, 
     w = _window(data_dir, ffmpeg_paths)
     try:
         w.social.store = MemoryStore()
-        panel = w.crosspost_panel
+        panel, reels = w.tiktok_panel, w.reels_panel
         w.set_page(PUBLISH)
+        # One tab per service, each with its logo.
+        bar = w.service_tabs.bar
+        assert [bar.tabText(i) for i in range(bar.count())] == ["YouTube", "TikTok", "Instagram Reels"]
+        assert all(not bar.tabIcon(i).isNull() for i in range(bar.count()))
+        tabs = w.service_tabs.pages
+        assert not tabs[0].isHidden() and panel.isHidden()
+        w.service_tabs.set_current(1)
+        assert not panel.isHidden() and tabs[0].isHidden() and reels.isHidden()
         assert not panel.post_button.isEnabled() and panel.tiktok_status.text() == "Not set up"
         # The guide opens on the side, next to the page.
         panel.tiktok_guide.click()
         assert not w.guide_panel.isHidden() and w.guide_panel.service == TIKTOK
         assert "Content Posting API" in w.guide_panel.view.toPlainText()
-        panel.reels_guide.click()
+        w.service_tabs.set_current(2)
+        reels.reels_guide.click()
         assert w.guide_panel.service == INSTAGRAM
         setup = w.guide_panel.instagram_setup
         setup.token_edit.setText("ig-token")
         setup.connect_button.click()
         assert _wait(lambda: w.social.instagram_name == "@skof.clips")
-        assert panel.reels_status.text() == "@skof.clips"
+        assert reels.reels_status.text() == "@skof.clips"
         w.social.set_tiktok_app("k", "s")
         w.social.tiktok_connected(tiktok.TikTokToken("tt-access", "r", time.time() + 9999, time.time() + 9999,
                                                      "o"), "Skof")
         panel.refresh_accounts()
         assert _wait(lambda: panel.privacy_combo.count() == 2)
         video = _video(tmp_path)
-        panel.set_file(video)
-        panel.set_caption_source("ОХОТА | #sasavot", "#shorts")
-        assert panel.caption_edit.toPlainText() == "ОХОТА #sasavot #shorts"
-        assert panel.post_button.isEnabled()
+        for p in (panel, reels):
+            p.set_file(video)
+            p.set_caption_source("ОХОТА | #sasavot", "#shorts")
+            assert p.caption_edit.toPlainText() == "ОХОТА #sasavot #shorts"
+            assert p.post_button.isEnabled()
         results = []
         panel.posted.connect(results.append)
+        reels.posted.connect(results.append)
         panel.post_button.click()
         assert _wait(lambda: results, 20)
-        assert [r.ok for r in results[0]] == [True, True], [r.message for r in results[0]]
-        assert "instagram.com/reel/abc" in panel.result_label.text()
-        assert w.config.social_defaults["tiktok"] is True
+        assert [(r.service, r.ok) for r in results[0]] == [(TIKTOK, True)], [r.message for r in results[0]]
+        assert "tiktok.com/@skof" in panel.result_label.text()
+        reels.feed_check.setChecked(False)
+        reels.post_button.click()
+        assert _wait(lambda: len(results) == 2, 20)
+        assert [(r.service, r.ok) for r in results[1]] == [(INSTAGRAM, True)], [r.message for r in results[1]]
+        assert "instagram.com/reel/abc" in reels.result_label.text()
+        assert w.config.social_defaults["share_to_feed"] is False
+        assert w.config.social_defaults["tiktok_mode"] == tiktok.DIRECT
         w.guide_panel.hide()
     finally:
         w._set_dirty(False)

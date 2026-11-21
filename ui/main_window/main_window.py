@@ -101,7 +101,9 @@ from ui.main_window.blur_runner import BlurRunner
 from ui.blur.blur_panel import BlurPanel
 from ui.main_window.highlights_controller import HighlightsController
 from ui.main_window.listen_preview import ListenPreview
-from ui.main_window.pages import DATA, EDIT, PAGES, PUBLISH, RENDER, PageBar, StepPage, page_scroll
+from ui.main_window.pages import (
+    DATA, EDIT, PAGES, PUBLISH, RENDER, PageBar, ServiceTabs, StepPage, animate_in, page_hero, page_scroll,
+)
 from ui.main_window.session_keeper import AUTOSAVE_CHOICES, SessionKeeper
 from ui.main_window.thumbnail_keeper import ThumbnailKeeper
 from ui.thumbnails.thumbnail_editor import ThumbnailEditor
@@ -200,9 +202,10 @@ class MainWindow(QMainWindow):
         data = QWidget(self)
         data_column = QVBoxLayout(data)
         data_column.setContentsMargins(0, 0, 0, 0)
-        data_heading = QLabel("Data", data)
-        data_heading.setObjectName("pageTitle")
-        data_column.addWidget(data_heading)
+        data_column.setSpacing(14)
+        self.data_hero = page_hero(DATA, "Data", "Title, description and tags for YouTube, made from a template, "
+                                   "and the cover of the Short.", "document", data)
+        data_column.addWidget(self.data_hero)
         data_row = QHBoxLayout()
         data_row.setSpacing(20)
         data_row.addWidget(self.metadata_panel, 1)
@@ -216,7 +219,7 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self.data_page)
         self.render_page = StepPage(
             "Render", "Export the edited Short to a video file: format, quality, loudness, subtitles.",
-            "", "export", self)
+            "", "export", self, step=RENDER)
         self.render_page.action_button.hide()  # the form below has the Render button
         self.render_queue = RenderQueue(ffmpeg, self, uploader=_queued_upload)
         self.queue_panel = QueuePanel(self.render_queue, self.render_page)
@@ -226,25 +229,45 @@ class MainWindow(QMainWindow):
         self.queue_panel.upload_requested.connect(self.upload_to_youtube)
         self.page_stack.addWidget(page_scroll(self.render_page, self, 820))
         self.publish_page = StepPage(
-            "Publish", "Upload the exported video to YouTube with the title, description and tags from Data.",
-            "Choose another file…", "folder", self)
+            "Publish", "Post the exported Short to YouTube, TikTok and Instagram Reels with the title, "
+            "description and tags from Data.", "Choose another file…", "folder", self, step=PUBLISH, hero_icon="export")
         self.publish_page.action_button.setObjectName("")
-        youtube_guide = QPushButton("YouTube guide", self.publish_page.card)
+        self.service_tabs = ServiceTabs(self.publish_page)
+        self.publish_page.footer.addWidget(self.service_tabs)
+        # YouTube: the upload form (put into its own slot) and the channel's analytics.
+        youtube_tab = QWidget(self.service_tabs)
+        youtube_column = QVBoxLayout(youtube_tab)
+        youtube_column.setContentsMargins(0, 0, 0, 0)
+        youtube_column.setSpacing(14)
+        youtube_bar = QHBoxLayout()
+        youtube_note = QLabel("Upload as a Short to your channel. Pick the account in “Where”.", youtube_tab)
+        youtube_note.setObjectName("muted")
+        youtube_bar.addWidget(youtube_note, 1)
+        youtube_guide = QPushButton("Guide", youtube_tab)
         youtube_guide.setToolTip("How to connect YouTube (opens on the right)")
         youtube_guide.clicked.connect(lambda: self.guide_panel.toggle_service(YOUTUBE))
-        self.publish_page.card.body.addWidget(youtube_guide, 0, Qt.AlignmentFlag.AlignLeft)
-        self.crosspost_panel = CrossPostPanel(self.social, self.config, self.publish_page)
-        self.crosspost_panel.cover_ms = self._thumbnail_ms
-        self.crosspost_panel.guide_requested.connect(self.guide_panel.toggle_service)
-        self.crosspost_panel.posted.connect(lambda _r: self._save_config_quietly())
-        self.publish_page.footer.addWidget(self.crosspost_panel)
-        self.guide_panel.connections_changed.connect(self._social_connections_changed)
-        self.guide_panel.youtube_accounts_requested.connect(self.manage_youtube_accounts)
-        self.analytics_panel = AnalyticsPanel(self.publish_page)
-        self.publish_page.footer.addWidget(self.analytics_panel)
+        youtube_bar.addWidget(youtube_guide)
+        youtube_column.addLayout(youtube_bar)
+        self.publish_page.slot = QVBoxLayout()  # the upload form lands here
+        self.publish_page.slot.setContentsMargins(0, 0, 0, 0)
+        youtube_column.addLayout(self.publish_page.slot)
+        self.analytics_panel = AnalyticsPanel(youtube_tab)
+        youtube_column.addWidget(self.analytics_panel)
         self.analytics_panel.refresh_requested.connect(self.refresh_analytics)
         self._analytics_task: CancellableTask | None = None
         self._analytics_loaded = ""  # channel whose numbers are shown
+        self.service_tabs.add(youtube_tab, "YouTube", "logo_youtube")
+        # TikTok and Instagram Reels: one posting card each.
+        self.tiktok_panel = CrossPostPanel(self.social, self.config, TIKTOK, self.service_tabs)
+        self.reels_panel = CrossPostPanel(self.social, self.config, INSTAGRAM, self.service_tabs)
+        for panel, name, logo in ((self.tiktok_panel, "TikTok", "logo_tiktok"),
+                                  (self.reels_panel, "Instagram Reels", "logo_instagram")):
+            panel.cover_ms = self._thumbnail_ms
+            panel.guide_requested.connect(self.guide_panel.toggle_service)
+            panel.posted.connect(lambda _r: self._save_config_quietly())
+            self.service_tabs.add(panel, name, logo)
+        self.guide_panel.connections_changed.connect(self._social_connections_changed)
+        self.guide_panel.youtube_accounts_requested.connect(self.manage_youtube_accounts)
         self.page_stack.addWidget(page_scroll(self.publish_page, self, 960))
 
         composition_scroll = QScrollArea(self)
@@ -408,6 +431,8 @@ class MainWindow(QMainWindow):
             if self._page == PUBLISH:
                 self._save_upload_defaults()
             self.page_stack.setCurrentIndex(index)
+            if index != EDIT:  # the editor with its video stays as it is
+                animate_in(self.page_stack.currentWidget().widget())
             if index == PUBLISH:
                 self._sync_publish_page()
                 self._sync_analytics()
@@ -1442,10 +1467,11 @@ class MainWindow(QMainWindow):
             return  # uploading, or showing what was uploaded
         rendered = self._rendered_path()
         path = rendered or (form.file if form is not None else None)
-        if not self.crosspost_panel.busy:
-            meta = self.metadata_panel.metadata()
-            self.crosspost_panel.set_caption_source(meta.title, meta.description)
-            self.crosspost_panel.set_file(Path(path) if path is not None else None)
+        meta = self.metadata_panel.metadata()
+        for panel in self.social_panels:
+            if not panel.busy:
+                panel.set_caption_source(meta.title, meta.description)
+                panel.set_file(Path(path) if path is not None else None)
         if path is not None:
             self._show_upload_form(Path(path), fresh=True)
 
@@ -1460,9 +1486,14 @@ class MainWindow(QMainWindow):
             return None
         return timeline.source_to_output(src[1]) // 1000
 
+    @property
+    def social_panels(self) -> tuple[CrossPostPanel, CrossPostPanel]:
+        return self.tiktok_panel, self.reels_panel
+
     def _social_connections_changed(self) -> None:
         self._save_config_quietly()
-        self.crosspost_panel.refresh_accounts()
+        for panel in self.social_panels:
+            panel.refresh_accounts()
 
     def _save_config_quietly(self) -> None:
         try:
@@ -2119,7 +2150,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         running = [name for name, form in (("rendering", self.export_widget), ("uploading", self.upload_widget),
                                            ("rendering the queue", self.render_queue),
-                                           ("posting to TikTok / Instagram", self.crosspost_panel))
+                                           ("posting to TikTok", self.tiktok_panel),
+                                           ("posting to Instagram", self.reels_panel))
                    if form is not None and form.busy]
         if running:
             answer = QMessageBox.question(self, APP_NAME, f"Still {' and '.join(running)}. Stop and quit?")
@@ -2143,7 +2175,8 @@ class MainWindow(QMainWindow):
         self.blur_runner.cancel()
         if self._analytics_task is not None:
             self._analytics_task.cancel()
-        self.crosspost_panel.cancel()
+        for panel in self.social_panels:
+            panel.cancel()
         self.guide_panel.tiktok_setup.cancel()
         player = self.preview.player
         # stop() on a paused player can block inside Qt's FFmpeg backend when

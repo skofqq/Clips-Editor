@@ -116,14 +116,21 @@ class MetadataPanel(QWidget):
         tags_box.addWidget(self.tags_count, 0, Qt.AlignmentFlag.AlignRight)
         result.addRow("Tags", tags_box)
 
+        from ui.widgets.card import Card
+
+        self.source_card = Card("From the clip", "Who and what is in it; the template turns this into the "
+                                "title, description and tags.", self)
+        self.source_card.body.addLayout(choose)
+        self.source_card.body.addWidget(self.generate_button)
+        self.source_card.body.addWidget(self.status_label)
+        self.result_card = Card("Title, description, tags", "Edit freely: this is what goes to YouTube.", self)
+        self.result_card.body.addLayout(result)
+        self.result_card.body.addWidget(self.hashtags_label)
         layout = QVBoxLayout(self)
-        layout.addLayout(choose)
-        layout.addWidget(self.generate_button)
-        layout.addWidget(self.status_label)
-        layout.addSpacing(6)
-        layout.addWidget(QLabel("<b>Result</b> (edit freely; used by Upload to YouTube)", self))
-        layout.addLayout(result)
-        layout.addWidget(self.hashtags_label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.addWidget(self.source_card)
+        layout.addWidget(self.result_card)
         layout.addStretch(1)
 
         self.library_button.clicked.connect(lambda: self.library_requested.emit("", ""))
