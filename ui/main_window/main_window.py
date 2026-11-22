@@ -291,6 +291,9 @@ class MainWindow(QMainWindow):
             panel.posted.connect(lambda _r: self._save_config_quietly())
             panel.posted.connect(self._social_posted)
             self.service_tabs.add(panel, name, logo)
+        from ui.main_window.schedule_controller import ScheduleController
+
+        self.schedule = ScheduleController(self)  # the Schedule tab: Shorts spread over the week
         self.published_panel = PublishedPanel(self.clip_memory, self.service_tabs)
         self.published_panel.open_clip_requested.connect(self._open_published_clip)
         self.published_panel.refresh_requested.connect(self._refresh_published_numbers)
@@ -1519,6 +1522,7 @@ class MainWindow(QMainWindow):
         )
         form.embed()
         form.uploaded.connect(lambda result, f=form: self._upload_finished(f, result))
+        form.schedule_requested.connect(self.schedule.add_from_form)
         for combo in (form.category_combo, form.privacy_combo, form.language_combo):
             combo.currentIndexChanged.connect(lambda _i: self._save_upload_defaults())
         self.publish_page.set_content(form)
@@ -1816,6 +1820,7 @@ class MainWindow(QMainWindow):
         self._best_time = best_time(stats)
         if self.upload_widget is not None:
             self.upload_widget.set_best_time(self._best_time)
+        self.schedule.set_best_time(self._best_time)
         self.published_panel.set_busy(False)
         self.published_panel.refresh()
 
@@ -2536,7 +2541,8 @@ class MainWindow(QMainWindow):
         running = [name for name, form in (("rendering", self.export_widget), ("uploading", self.upload_widget),
                                            ("rendering the queue", self.render_queue),
                                            ("posting to TikTok", self.tiktok_panel),
-                                           ("posting to Instagram", self.reels_panel))
+                                           ("posting to Instagram", self.reels_panel),
+                                           ("uploading the schedule", self.schedule))
                    if form is not None and form.busy]
         if running:
             answer = QMessageBox.question(self, APP_NAME, f"Still {' and '.join(running)}. Stop and quit?")
@@ -2564,6 +2570,7 @@ class MainWindow(QMainWindow):
             self._analytics_task.cancel()
         for panel in self.social_panels:
             panel.cancel()
+        self.schedule.stop()
         if self._remember_timer.isActive():
             self._remember_clip()
         self.guide_panel.tiktok_setup.cancel()

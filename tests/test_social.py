@@ -250,7 +250,7 @@ def test_publish_page_cross_posts(qapp, data_dir, ffmpeg_paths, fake, tmp_path, 
         w.set_page(PUBLISH)
         # One tab per service, each with its logo.
         bar = w.service_tabs.bar
-        assert [bar.tabText(i) for i in range(bar.count())] == ["YouTube", "TikTok", "Instagram Reels", "History"]
+        assert [bar.tabText(i) for i in range(bar.count())] == ["YouTube", "TikTok", "Instagram Reels", "Schedule", "History"]
         assert all(not bar.tabIcon(i).isNull() for i in range(bar.count()))
         tabs = w.service_tabs.pages
         assert not tabs[0].isHidden() and panel.isHidden()

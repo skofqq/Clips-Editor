@@ -93,6 +93,7 @@ class UploadDialog(QDialog):
     """Upload form. Shown inside the Publish page (:meth:`embed`) or as a dialog."""
 
     uploaded = Signal(object)  # UploadResult
+    schedule_requested = Signal(object)  # dict: what the publishing schedule needs (see queue_entry)
 
     def __init__(
         self,
@@ -184,6 +185,9 @@ class UploadDialog(QDialog):
         self.status_label.setOpenExternalLinks(True)
         self.upload_button = QPushButton("Upload", self)
         self.upload_button.setObjectName("primary")
+        self.schedule_button = QPushButton("Add to schedule", self)
+        self.schedule_button.setToolTip("Put this Short in the weekly queue (Schedule tab): it takes the next free "
+                                        "slot and goes up to YouTube by itself")
         self.cancel_button = QPushButton("Cancel upload", self)
         self.copy_button = QPushButton("Copy link", self)
         self.close_button = QPushButton("Close", self)
@@ -235,6 +239,7 @@ class UploadDialog(QDialog):
         buttons.addWidget(self.copy_button)
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.schedule_button)
         buttons.addWidget(self.upload_button)
         buttons.addWidget(self.close_button)
         layout = QVBoxLayout(self)
@@ -271,6 +276,7 @@ class UploadDialog(QDialog):
         self.schedule_check.toggled.connect(self._update_schedule)
         self.manage_button.clicked.connect(self._manage)
         self.upload_button.clicked.connect(self.start_upload)
+        self.schedule_button.clicked.connect(self._request_schedule)
         self.cancel_button.clicked.connect(self.cancel_upload)
         self.copy_button.clicked.connect(self._copy_link)
         self.close_button.clicked.connect(self.reject)
@@ -376,6 +382,9 @@ class UploadDialog(QDialog):
         self.note_label.setVisible(bool(notes))
         if self._task is None:
             self.upload_button.setEnabled(not issues)
+            # The schedule picks the time (a "Publish at" here is ignored there) and may upload later.
+            self.schedule_button.setEnabled(not replace(meta, publish_at=None).problems()
+                                            and self.file.is_file())
 
     def _manage(self) -> None:
         if self.manage_accounts is not None:
@@ -425,6 +434,7 @@ class UploadDialog(QDialog):
         self.captions_check.setEnabled(not busy and bool(self.captions))
         self.thumbnail_check.setEnabled(not busy and self.thumbnail is not None)
         self.upload_button.setVisible(not busy)
+        self.schedule_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)
         self.close_button.setEnabled(not busy)
         self.progress_card.setVisible(busy)
@@ -458,6 +468,23 @@ class UploadDialog(QDialog):
         self._set_busy(True)
         log.info("Uploading %s to channel %s", self.file, channel_id)
         QThreadPool.globalInstance().start(task)
+
+    def queue_entry(self) -> dict:
+        """The form as the schedule keeps it: text, captions, thumbnail job, channel."""
+        meta = self.metadata()
+        srt = ""
+        if self.captions and self.captions_check.isChecked():
+            from core.subtitles.export import to_srt
+
+            srt = to_srt(self.captions)
+        job = self.thumbnail() if self.thumbnail is not None and self.thumbnail_check.isChecked() else None
+        return {"file": self.file, "metadata": meta, "captions_srt": srt,
+                "captions_language": self.captions_language if srt else "", "thumbnail": job,
+                "channel_id": self.channel_combo.currentData() or ""}
+
+    def _request_schedule(self) -> None:
+        if self._task is None:
+            self.schedule_requested.emit(self.queue_entry())
 
     def cancel_upload(self) -> None:
         if self._task is not None:
