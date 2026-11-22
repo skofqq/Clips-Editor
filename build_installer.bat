@@ -4,9 +4,15 @@ rem Needs Python 3 and internet on the first run (dependencies, FFmpeg, models, 
 rem Speech models to put in the installer (each one is a checkbox there):
 rem   build_installer.bat large-v3-russian-int8 small large-v3-turbo
 rem With no names: large-v3-russian-int8 small gigaam-v3 parakeet-v3. "none" = no models.
+rem   build_installer.bat update   = only the update package (program, no models), faster.
 setlocal
 cd /d "%~dp0"
 set MODELS=%*
+set UPDATEONLY=
+if /i "%MODELS%"=="update" (
+    set UPDATEONLY=1
+    set MODELS=
+)
 if "%MODELS%"=="" set MODELS=large-v3-russian-int8 small gigaam-v3 parakeet-v3
 
 if not exist .venv (
@@ -23,7 +29,9 @@ if not exist tools\ffmpeg\bin\ffmpeg.exe (
 )
 
 echo [3/6] Models: %MODELS%
-if /i "%MODELS%"=="none" (
+if defined UPDATEONLY (
+    echo The update package has no models: skipped.
+) else if /i "%MODELS%"=="none" (
     if exist build\models rmdir /s /q build\models
 ) else (
     .venv\Scripts\python tools\fetch_models.py %MODELS% || goto :fail
@@ -60,11 +68,19 @@ if not defined ISCC (
     echo Could not find Inno Setup 6. Install it from https://jrsoftware.org/isdl.php and run this again.
     goto :fail
 )
+if defined UPDATEONLY goto :update
 %ISCC% /Qp /DAppVersion=%VERSION% packaging\installer.iss || goto :fail
+:update
+echo Update package (program only, for Help - Check for Updates)...
+%ISCC% /Qp /DAppVersion=%VERSION% /DUpdateOnly packaging\installer.iss || goto :fail
 
 echo.
+if defined UPDATEONLY goto :done
 echo Done: build\installer\TwitchShortsStudio-Setup-%VERSION%.exe
 echo Give the .exe together with the .bin files next to it (they hold the models).
+:done
+echo Update package: build\installer\TwitchShortsStudio-Update-%VERSION%.exe
+echo Publish it for the installed programs: publish_release.bat
 endlocal
 exit /b 0
 
