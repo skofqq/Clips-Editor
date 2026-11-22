@@ -1586,10 +1586,11 @@ class MainWindow(QMainWindow):
         if not frames or not design.enabled:
             self.variants_card.set_covers([], [])
             return
-        variants = cover_variants(design, [us for us, _image in frames])
+        times = [us for us, _image in frames]
+        variants = cover_variants(design, times, faces=self.thumbnails.faces_for(times))
         images = {us: image for us, image in frames}
         title = self.thumbnails.title()
-        worker = Worker(render_variants, variants, images, title, 150)
+        worker = Worker(render_variants, variants, images, title, 150, self.thumbnails.face_boxes(times))
         worker.signals.finished.connect(lambda result, w=worker, v=variants: self._cover_variants_done(w, v, result))
         worker.signals.failed.connect(lambda exc, w=worker: (self._pending.discard(w),
                                                              log.warning("Cover variants: %s", exc)))

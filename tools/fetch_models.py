@@ -86,7 +86,10 @@ def fetch_extra(out: Path, kind: str) -> Path:
         if model_path(folder).is_file():
             return folder
     else:
+        from core.vision.emotion import download_model as download_emotion
         from core.vision.faces import download_model
+
+        download_emotion(folder)  # Auto cover reads emotions next to the face model
     download_model(folder)
     return folder
 

@@ -51,8 +51,10 @@ class ThumbnailDesign:
     size: int = 140
     uppercase: bool = True
     shade: bool = True  # darken behind the text so it reads on any frame
-    zoom: float = 1.0  # punch in on the frame's centre
+    zoom: float = 1.0  # punch in on the frame's centre (on the face when one is known)
     format: str = VERTICAL
+    face: tuple[float, float, float, float] | None = None  # streamer's face in the source frame (0..1 box)
+    face_cutout: bool = False  # draw the face again, big, as a framed cut-out
 
     @property
     def text_style(self) -> TextStyle:
@@ -79,6 +81,7 @@ class ThumbnailDesign:
 
     def clean(self) -> "ThumbnailDesign":
         source = None if self.source_us is None else max(0, int(self.source_us))
+        face = _clean_face(self.face)
         return replace(
             self,
             enabled=bool(self.enabled),
@@ -92,7 +95,19 @@ class ThumbnailDesign:
             shade=bool(self.shade),
             zoom=max(MIN_ZOOM, min(MAX_ZOOM, float(self.zoom))),
             format=self.format if self.format in SIZES else VERTICAL,
+            face=face,
+            face_cutout=bool(self.face_cutout) and face is not None,
         )
+
+
+def _clean_face(face) -> tuple[float, float, float, float] | None:
+    try:
+        x1, y1, x2, y2 = (min(1.0, max(0.0, float(v))) for v in face)
+    except (TypeError, ValueError):
+        return None
+    if x2 - x1 < 0.002 or y2 - y1 < 0.002:
+        return None
+    return (round(x1, 5), round(y1, 5), round(x2, 5), round(y2, 5))
 
 
 DEFAULT = ThumbnailDesign()

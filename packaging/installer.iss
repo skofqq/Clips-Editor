@@ -91,7 +91,7 @@ ru.CompSpeechGigaam=Распознавание речи: GigaAM v3, русски
 ru.CompSpeechParakeet=Распознавание речи: Parakeet v3, лучше для английского (~670 МБ)
 ru.CompSeparation=Отделение голоса от музыки (64 МБ)
 ru.CompSpeakers=Определение говорящих (28 МБ)
-ru.CompFace=Поиск лиц для слежения за вебкой (2 МБ)
+ru.CompFace=Поиск лиц и эмоций: слежение за вебкой и автообложка (37 МБ)
 en.TypeOptimal=Optimal: the program, the Russian speech models (Whisper and GigaAM) and the small models
 en.TypeFull=Full: the program and every model in the setup
 en.TypeMinimal=Minimal: the program only (models can be downloaded in it)
@@ -105,7 +105,7 @@ en.CompSpeechGigaam=Speech recognition: GigaAM v3, Russian, catches swearing bet
 en.CompSpeechParakeet=Speech recognition: Parakeet v3, best for English (~670 MB)
 en.CompSeparation=Separating the voice from music (64 MB)
 en.CompSpeakers=Telling speakers apart (28 MB)
-en.CompFace=Finding faces to follow the webcam (2 MB)
+en.CompFace=Faces and emotions: webcam follow and Auto cover (37 MB)
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"

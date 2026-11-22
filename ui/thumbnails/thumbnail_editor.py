@@ -53,6 +53,8 @@ class ThumbnailEditor(Card):
     frame_chosen = Signal(int)  # a suggested frame was clicked (source µs)
     scrub_moved = Signal(int)  # the "from the video" slider settled (output µs)
     save_requested = Signal()
+    auto_requested = Signal()  # find the best frame and set the cover up
+    auto_cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Thumbnail", "The cover of the Short: a frame of the clip with a big title. "
@@ -68,6 +70,20 @@ class ThumbnailEditor(Card):
         self.preview.setText("No clip")
 
         self.enabled_check = QCheckBox("Use this thumbnail", self)
+        self.auto_button = QPushButton("Auto cover", self)
+        self.auto_button.setObjectName("primary")
+        self.auto_button.setToolTip(
+            "Looks through the Short for the moment the streamer's face shows the strongest emotion "
+            "(laughing, shocked, angry), then puts that face big on the cover with a large title. "
+            "Works offline; the first time it downloads the face and emotion models (37 MB).")
+        self.auto_cancel_button = QPushButton("Cancel", self)
+        self.auto_cancel_button.hide()
+        self.auto_status = QLabel(self)
+        self.auto_status.setObjectName("muted")
+        self.auto_status.setWordWrap(True)
+        self.auto_status.hide()
+        self.face_check = QCheckBox("Streamer's face close-up", self)
+        self.face_check.setToolTip("The face again, big, in a white frame. Needs a frame found by Auto cover.")
         self.frame_button = QPushButton("Use the frame at the playhead", self)
         self.frame_button.setToolTip("Go to the Edit page, put the playhead on a good moment, then press this")
         self.frame_label = QLabel(self)
@@ -122,6 +138,7 @@ class ThumbnailEditor(Card):
         checks = QHBoxLayout()
         checks.addWidget(self.uppercase_check)
         checks.addWidget(self.shade_check)
+        checks.addWidget(self.face_check)
         checks.addStretch(1)
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -147,7 +164,13 @@ class ThumbnailEditor(Card):
         save_row.addStretch(1)
         form.addRow("", save_row)
         controls = QVBoxLayout()
-        controls.addWidget(self.enabled_check)
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(self.enabled_check)
+        auto_row.addStretch(1)
+        auto_row.addWidget(self.auto_button)
+        auto_row.addWidget(self.auto_cancel_button)
+        controls.addLayout(auto_row)
+        controls.addWidget(self.auto_status)
         controls.addLayout(form)
         controls.addStretch(1)
         row = QHBoxLayout()
@@ -166,6 +189,9 @@ class ThumbnailEditor(Card):
         self.zoom_slider.valueChanged.connect(lambda v: self._edit(zoom=v / 100))
         self.uppercase_check.toggled.connect(lambda v: self._edit(uppercase=v))
         self.shade_check.toggled.connect(lambda v: self._edit(shade=v))
+        self.face_check.toggled.connect(lambda v: self._edit(face_cutout=v))
+        self.auto_button.clicked.connect(self.auto_requested)
+        self.auto_cancel_button.clicked.connect(self.auto_cancel_requested)
         self.format_combo.currentIndexChanged.connect(lambda _i: self._edit(format=self.format_combo.currentData()))
         self.frame_button.clicked.connect(self.frame_requested)
         self.scrub.valueChanged.connect(self._on_scrub)
@@ -192,6 +218,7 @@ class ThumbnailEditor(Card):
             self.zoom_slider.setValue(round(design.zoom * 100))
             self.uppercase_check.setChecked(design.uppercase)
             self.shade_check.setChecked(design.shade)
+            self.face_check.setChecked(design.face_cutout)
             self.frame_label.setText(
                 f"Frame at {_format_time(design.source_us)} of the source" if design.source_us is not None
                 else "A quarter into the clip")
@@ -199,8 +226,15 @@ class ThumbnailEditor(Card):
                            self.offset_slider, self.size_slider, self.zoom_slider, self.uppercase_check, self.shade_check,
                            self.format_combo, self.save_button):
                 widget.setEnabled(design.enabled)
+            self.face_check.setEnabled(design.enabled and design.face is not None)
         finally:
             self._updating = False
+
+    def set_auto_busy(self, busy: bool, message: str = "") -> None:
+        self.auto_button.setEnabled(not busy)
+        self.auto_cancel_button.setVisible(busy)
+        self.auto_status.setText(message)
+        self.auto_status.setVisible(bool(message))
 
     def _show_offset(self, value: int) -> None:
         self.offset_label.setText("0" if value == 0 else (f"↑ {-value}%" if value < 0 else f"↓ {value}%"))

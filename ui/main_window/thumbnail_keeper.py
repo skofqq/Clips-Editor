@@ -11,9 +11,18 @@ from PySide6.QtCore import QObject, QThreadPool
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from core.thumbnails.draw import candidate_frames, candidate_times, jpeg_bytes, make_thumbnail, save_thumbnail
+from core.editor.composition import WEBCAM
+from core.thumbnails.auto import AutoCoverCancelled, apply_pick, find_cover_frames, sample_times
+from core.thumbnails.draw import (
+    candidate_frames,
+    candidate_times,
+    face_in_output,
+    jpeg_bytes,
+    make_thumbnail,
+    save_thumbnail,
+)
 from core.thumbnails.frame import grab_frame
-from core.workers import Worker
+from core.workers import CancellableTask, Worker
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +44,12 @@ class ThumbnailKeeper(QObject):
         self._candidates_key: tuple | None = None  # what the suggested frames were made for
         self.candidates: list = []  # (source µs, small composed frame) of the suggested frames
         editor.save_requested.connect(self.save_as)
+        editor.auto_requested.connect(self.auto_cover)
+        editor.auto_cancel_requested.connect(self.cancel_auto)
+        self.auto_task: CancellableTask | None = None
+        self.auto_picks: dict[str, list] = {}  # video path → CoverPick list (best first) from Auto cover
+        self.detector_factory = None  # tests inject (face detector, emotion model) factories
+        self.emotion_factory = None
 
     # ------------------------------------------------------------ source
     def _composition_at(self, us: int):
@@ -145,11 +160,22 @@ class ThumbnailKeeper(QObject):
         self.w.variants_card.mark_cover(design)
 
     # ------------------------------------------------------------ suggested frames
-    def _refresh_candidates(self, video, sw: int, sh: int) -> None:
+    def _peaks(self, video) -> list[int]:
+        """Loudest moments inside the edit, loudest first (source µs)."""
         timeline = self.w.timeline.timeline
-        peaks = [h.peak_us for h in sorted(self.w.project.highlights_for(str(video)) or (), key=lambda h: -h.score)
-                 if timeline is None or timeline.segment_index_at(h.peak_us) is not None]
-        times = candidate_times(self._length_us(), self._to_source, peaks)
+        return [h.peak_us for h in sorted(self.w.project.highlights_for(str(video)) or (), key=lambda h: -h.score)
+                if timeline is None or timeline.segment_index_at(h.peak_us) is not None]
+
+    def _in_edit(self, us: int) -> bool:
+        timeline = self.w.timeline.timeline
+        return timeline is None or timeline.segment_index_at(us) is not None
+
+    def _refresh_candidates(self, video, sw: int, sh: int) -> None:
+        picks = [p for p in self.auto_picks.get(str(video), ()) if self._in_edit(p.source_us)]
+        if picks:  # Auto cover ran: its best frames, best first
+            times = [p.source_us for p in picks[:6]]
+        else:
+            times = candidate_times(self._length_us(), self._to_source, self._peaks(video))
         items = [(us, self._composition_at(us)) for us in times]
         blurs = self._blurs()
         key = (str(video), tuple(items), sw, sh, blurs)
@@ -173,7 +199,16 @@ class ThumbnailKeeper(QObject):
             self.w._make_cover_variants()
 
     def use_frame(self, source_us: int) -> None:
-        design = replace(self.w.project.thumbnail, source_us=int(source_us))
+        self._set_frame(int(source_us))
+
+    def _set_frame(self, us: int) -> None:
+        """Another frame; the face box follows when Auto cover saw a face there."""
+        old = self.w.project.thumbnail
+        face = self.face_at(us)
+        if face is None and old.source_us == us:
+            face = old.face
+        design = replace(old, source_us=us, face=face,
+                         face_cutout=face is not None and (old.face_cutout or old.face is None)).clean()
         self.editor.set_design(design)
         self._design_changed(design)
 
@@ -184,9 +219,125 @@ class ThumbnailKeeper(QObject):
         self.use_frame(self._to_source(output_us))
 
     def use_playhead(self) -> None:
-        design = replace(self.w.project.thumbnail, source_us=int(self.w.composition.time_us))
+        self._set_frame(int(self.w.composition.time_us))
+
+    # ------------------------------------------------------------ auto cover
+    def _video_key(self) -> str:
+        media = self.w.preview.media
+        return str(media.path) if media is not None else ""
+
+    def face_at(self, us: int):
+        """The face Auto cover found on this frame (0..1 box of the source), or None."""
+        for pick in self.auto_picks.get(self._video_key(), ()):
+            if pick.source_us == us:
+                return pick.face
+        return None
+
+    def faces_for(self, times) -> dict:
+        design = self.w.project.thumbnail
+        result = {us: self.face_at(us) for us in times}
+        if design.source_us in result and result[design.source_us] is None:
+            result[design.source_us] = design.face
+        return {us: face for us, face in result.items() if face is not None}
+
+    def face_boxes(self, times) -> dict:
+        """Source µs → (face, webcam area) as 0..1 boxes of the composed frame."""
+        src = self.source()
+        if src is None:
+            return {}
+        _video, _us, _comp, sw, sh = src
+        boxes = {}
+        for us, face in self.faces_for(times).items():
+            found = face_in_output(face, self._composition_at(us), sw, sh, with_area=True)
+            if found is not None:
+                boxes[us] = found
+        return boxes
+
+    def _factories(self):
+        models = self.w.config.data_dir / "models"
+        detector = self.detector_factory
+        emotion = self.emotion_factory
+        if detector is None:
+            from core.vision.faces import FaceDetector, download_model
+
+            detector = lambda: FaceDetector(download_model(models))  # noqa: E731
+        if emotion is None:
+            from core.vision.emotion import EmotionModel, download_model as download_emotion
+
+            emotion = lambda: EmotionModel(download_emotion(models))  # noqa: E731
+        return detector, emotion
+
+    def auto_cover(self) -> bool:
+        """Find the frame with the strongest emotion on the streamer's face and set the cover up."""
+        if self.auto_task is not None:
+            return False
+        media = self.w.preview.media
+        if media is None or not media.has_video or self.w.ffmpeg is None or self._length_us() <= 0:
+            self.editor.set_auto_busy(False, "Open a clip first.")
+            return False
+        video = Path(media.path)
+        sw, sh = self.w.composition.source_size
+        peaks = self._peaks(video)
+        times = [us for us in sample_times(self._length_us(), self._to_source, peaks) if self._in_edit(us)]
+        if not times:
+            self.editor.set_auto_busy(False, "The Short is empty.")
+            return False
+        mid = times[len(times) // 2]
+        webcam = self._composition_at(mid).webcam.crop
+        detector, emotion = self._factories()
+        task = CancellableTask(find_cover_frames, self.w.ffmpeg.ffmpeg, video, times, webcam, sw, sh,
+                               detector, emotion, peaks)
+        task.signals.progress.connect(lambda f, m: self.editor.set_auto_busy(True, f"{m} {f * 100:.0f}%"))
+        task.signals.finished.connect(lambda result, v=str(video): self._auto_done(v, result))
+        task.signals.failed.connect(self._auto_failed)
+        task.signals.cancelled.connect(lambda: self._auto_finish("Cancelled."))
+        self.auto_task = task
+        self.editor.set_auto_busy(True, "Starting…")
+        QThreadPool.globalInstance().start(task)
+        return True
+
+    def cancel_auto(self) -> None:
+        if self.auto_task is not None:
+            self.auto_task.cancel()
+
+    def _auto_finish(self, message: str) -> None:
+        self.auto_task = None
+        self.editor.set_auto_busy(False, message)
+
+    def _auto_failed(self, error) -> None:
+        if isinstance(error, AutoCoverCancelled):
+            self._auto_finish("Cancelled.")
+            return
+        log.warning("Auto cover failed: %s", error)
+        self._auto_finish(f"Auto cover failed: {error}")
+
+    def _auto_done(self, video: str, result) -> None:
+        if self._video_key() != video:
+            self._auto_finish("The clip changed; nothing was applied.")
+            return
+        self.auto_task = None
+        best = result.best
+        if best is None:
+            self.editor.set_auto_busy(False, "No frames could be read.")
+            return
+        self.auto_picks[video] = list(result.picks)
+        src = self.source()
+        sw, sh = (src[3], src[4]) if src else self.w.composition.source_size
+        box = face_in_output(best.face, self._composition_at(best.source_us), sw, sh)
+        design = apply_pick(self.w.project.thumbnail, best, box.center().y() if box is not None else None)
         self.editor.set_design(design)
+        self._candidates_key = None  # suggested frames become the best ones found
         self._design_changed(design)
+        at = self._to_output(best.source_us) / 1e6
+        if best.face is None:
+            note = "No face found in the webcam; picked the loudest clear frame."
+        elif result.with_emotions:
+            note = f"Picked the frame at {int(at // 60)}:{at % 60:04.1f} · {best.note}."
+        else:
+            note = (f"Picked the frame at {int(at // 60)}:{at % 60:04.1f} by face size and loudness "
+                    "(the emotion model could not be loaded).")
+        self.editor.set_auto_busy(False, note + f" Looked at {result.sampled} frames; the best ones are under Suggested.")
+        self.w.statusBar().showMessage("Auto cover ready", 5000)
 
     # ------------------------------------------------------------ output
     def job(self):
