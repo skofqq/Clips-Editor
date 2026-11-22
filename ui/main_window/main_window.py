@@ -909,6 +909,8 @@ class MainWindow(QMainWindow):
         self.subtitles_panel.export_requested.connect(self.save_subtitles)
         self.subtitles_panel.set_user_presets(self.config.subtitle_presets)
         self.subtitles_panel.user_presets_changed.connect(self._subtitle_presets_changed)
+        self.subtitles_panel.set_emoji_allowed(self.config.subtitle_emoji)
+        self.subtitles_panel.emoji_allowed_changed.connect(self._subtitle_emoji_changed)
         self.subtitles_panel.translate_requested.connect(self.translate_subtitles)
         self.subtitles_panel.translate_cancelled.connect(self.cancel_translation)
         self.subtitles_panel.edit_translation_requested.connect(self.edit_translation)
@@ -1269,6 +1271,7 @@ class MainWindow(QMainWindow):
             self.censor_dictionary.save(self.censor_dictionary_path)
         except OSError as exc:
             QMessageBox.warning(self, "Censor dictionary", f"Could not save the dictionary:\n{exc}")
+        self._refresh_subtitles()  # "every swear word" censoring follows the dictionary
 
     def exclude_censor_word(self, word: str) -> None:
         if self.censor_dictionary.add_exclusion(word):
@@ -2306,6 +2309,13 @@ class MainWindow(QMainWindow):
             self._set_dirty(True)
         self._refresh_subtitles()
 
+    def _subtitle_emoji_changed(self, allowed: bool) -> None:
+        self.config.subtitle_emoji = allowed
+        try:
+            self.config.save()
+        except OSError:
+            pass
+
     def _subtitle_presets_changed(self, presets: dict) -> None:
         self.config.subtitle_presets = presets
         try:
@@ -2396,7 +2406,7 @@ class MainWindow(QMainWindow):
         if self._translate_task is None:
             self.subtitles_panel.set_translation(self.current_translation(),
                                                  getattr(self.transcript.transcript, "language", "") or "")
-        self.captions = build_captions(transcript, timeline, settings.style, settings.edits)
+        self.captions = build_captions(transcript, timeline, settings.style, settings.edits, self.censor_dictionary)
         self.subtitles_panel.set_captions(self.captions)
         self.preview.output_view.set_subtitles(self.captions, settings.style)
         self._update_subtitle_time(self.timeline.playhead_us)

@@ -39,6 +39,8 @@ from core.subtitles.model import (
     ANIM_REVEAL,
     ANIM_SLIDE,
     ANIM_WORD,
+    CENSOR_ALL,
+    CENSOR_MUTED,
     EMOJI_ABOVE,
     EMOJI_BELOW,
     EMOJI_INLINE,
@@ -101,6 +103,7 @@ class SubtitlesPanel(QWidget):
     split_requested = Signal()  # start a caption at the word under the playhead
     export_requested = Signal()
     user_presets_changed = Signal(dict)  # name → SubtitleStyle dict, to keep in the app settings
+    emoji_allowed_changed = Signal(bool)  # the user ticked / unticked "Emoji in subtitles" (an app setting)
     translate_requested = Signal(str)  # direction, "ru-en" / "en-ru"
     translate_cancelled = Signal()
     edit_translation_requested = Signal()
@@ -218,8 +221,9 @@ class SubtitlesPanel(QWidget):
         self.emoji_place_combo.setToolTip("Where the emoji goes. After the word: it pops in when the word is spoken.")
         self.word_box_check = QCheckBox("Box on the spoken word", self)
         self.word_box_check.setToolTip("The spoken word sits on a rounded box in the Spoken colour.")
-        self.emoji_check = QCheckBox("Emoji for key words", self)
-        self.emoji_check.setToolTip("Laughter, «жесть», money, clutch… put a matching emoji above the caption.")
+        self.emoji_check = QCheckBox("Emoji in subtitles", self)
+        self.emoji_check.setToolTip("Laughter, «жесть», money, clutch… put a matching emoji on the caption.\n"
+                                    "Untick to show no emoji at all (also the ones you chose; styles keep it off).")
         self.shadow_check = QCheckBox("Shadow", self)
         self.box_check = QCheckBox("Box behind text", self)
         look = Card("Look", parent=self, label_width=84)
@@ -289,12 +293,23 @@ class SubtitlesPanel(QWidget):
         layout_card.add_row("Lines", self.lines_spin)
 
         # ---- censored words
+        self.censor_check = QCheckBox("Censor swear words in subtitles", self)
+        self.censor_check.setToolTip("Write swear words with stars. Untick to write every word as spoken.")
         self.mask_combo = QComboBox(self)
         self.mask_combo.addItem("First letter: б***", MASK_FIRST)
         self.mask_combo.addItem("Stars only: ****", MASK_ALL)
-        self.mask_combo.addItem("Write as spoken", MASK_NONE)
-        censor_card = Card("Muted words", "Words inside a mute region are written like this.", self)
-        censor_card.add_row(self.mask_combo)
+        self.censor_scope_combo = QComboBox(self)
+        self.censor_scope_combo.addItem("Words you muted", CENSOR_MUTED)
+        self.censor_scope_combo.addItem("Every swear word (Censor dictionary)", CENSOR_ALL)
+        self.censor_scope_combo.setToolTip("Words you muted: only words inside a mute region.\n"
+                                           "Every swear word: whatever the Censor dictionary (with your own words) "
+                                           "finds, even where the sound is not muted.")
+        censor_card = Card("Censor", "How swear words are written in the subtitles.", self, label_width=84)
+        censor_card.add_row(self.censor_check)
+        censor_card.add_row("Which", self.censor_scope_combo)
+        censor_card.add_row("Written", self.mask_combo)
+        self._last_mask = MASK_FIRST
+        self._emoji_allowed = True
 
         # ---- captions
         self.list = QListWidget(self)
@@ -353,6 +368,7 @@ class SubtitlesPanel(QWidget):
         self._fill_emoji_menu()
         self.karaoke_combo.currentIndexChanged.connect(self._edited)
         self.emoji_place_combo.currentIndexChanged.connect(self._edited)
+        self.emoji_check.clicked.connect(self._emoji_clicked)
         self.emphasis_button.color_changed.connect(self._edited)
         self.font_combo.currentFontChanged.connect(self._edited)
         for spin in (self.size_spin, self.outline_spin, self.words_spin, self.chars_spin, self.lines_spin):
@@ -367,6 +383,8 @@ class SubtitlesPanel(QWidget):
         self.position_combo.currentIndexChanged.connect(self._edited)
         self.position_slider.valueChanged.connect(self._edited)
         self.mask_combo.currentIndexChanged.connect(self._edited)
+        self.censor_check.toggled.connect(self._edited)
+        self.censor_scope_combo.currentIndexChanged.connect(self._edited)
         self.list.itemClicked.connect(lambda item: self.seek_requested.emit(item.data(ROLE_START)))
         self.list.currentRowChanged.connect(lambda _row: self._update_buttons())
         self.split_button.clicked.connect(self.split_requested)
@@ -417,7 +435,11 @@ class SubtitlesPanel(QWidget):
             self.words_spin.setValue(s.max_words)
             self.chars_spin.setValue(s.max_chars)
             self.lines_spin.setValue(s.max_lines)
-            self.mask_combo.setCurrentIndex(max(0, self.mask_combo.findData(s.mask)))
+            if s.mask != MASK_NONE:
+                self._last_mask = s.mask
+            self.censor_check.setChecked(s.mask != MASK_NONE)
+            self.mask_combo.setCurrentIndex(max(0, self.mask_combo.findData(self._last_mask)))
+            self.censor_scope_combo.setCurrentIndex(max(0, self.censor_scope_combo.findData(s.censor_scope)))
             self.use_translation_check.setChecked(settings.translated and self._has_translation)
         finally:
             self._loading = False
@@ -433,7 +455,7 @@ class SubtitlesPanel(QWidget):
         for caption in captions:
             from core.subtitles.raster import caption_emoji
 
-            emoji = caption_emoji(caption) if (self._settings.style.emoji or caption.emoji) else ""
+            emoji = caption_emoji(caption) if self._settings.style.emoji else ""
             item = QListWidgetItem(f"{format_timecode(caption.start_us)}   {caption.text}{'  ' + emoji if emoji else ''}")
             item.setData(ROLE_START, caption.start_us)
             self.list.addItem(item)
@@ -482,7 +504,8 @@ class SubtitlesPanel(QWidget):
             max_words=self.words_spin.value(),
             max_chars=self.chars_spin.value(),
             max_lines=self.lines_spin.value(),
-            mask=self.mask_combo.currentData(),
+            mask=self.mask_combo.currentData() if self.censor_check.isChecked() else MASK_NONE,
+            censor_scope=self.censor_scope_combo.currentData(),
         ).cleaned()
 
     def _edited(self, *_args) -> None:
@@ -547,6 +570,19 @@ class SubtitlesPanel(QWidget):
             self._settings = replace(self._settings, translated=on)
             self.settings_changed.emit(self._settings)
 
+    # ------------------------------------------------------------ emoji
+    def set_emoji_allowed(self, allowed: bool) -> None:
+        """False: the user switched emoji off, so styles applied later bring none."""
+        self._emoji_allowed = bool(allowed)
+
+    def emoji_allowed(self) -> bool:
+        return self._emoji_allowed
+
+    def _emoji_clicked(self, checked: bool) -> None:
+        if checked != self._emoji_allowed:
+            self._emoji_allowed = checked
+            self.emoji_allowed_changed.emit(checked)
+
     # ---------------------------------------------------------- presets
     def set_user_presets(self, presets: dict) -> None:
         """The user's own styles (name → SubtitleStyle dict), from the app settings."""
@@ -585,7 +621,7 @@ class SubtitlesPanel(QWidget):
 
     def apply_preset(self, preset: SubtitleStyle) -> None:
         # Keep where the subtitles sit and how muted words are written.
-        style = style_from_preset(preset, self._settings.style)
+        style = style_from_preset(preset, self._settings.style, self._emoji_allowed)
         self.set_settings(replace(self._settings, style=style))
         self.settings_changed.emit(self._settings)
 
@@ -645,6 +681,10 @@ class SubtitlesPanel(QWidget):
         self.karaoke_combo.setEnabled(self.karaoke_check.isChecked())
         self.emphasis_button.setEnabled(self.emphasis_check.isChecked())
         self.emoji_place_combo.setEnabled(self.emoji_check.isChecked())
+        self.emoji_button.setEnabled(0 <= self.list.currentRow() < len(self._captions) and self.emoji_check.isChecked())
+        censor = self.censor_check.isChecked()
+        self.mask_combo.setEnabled(censor)
+        self.censor_scope_combo.setEnabled(censor)
 
     def _update_buttons(self) -> None:
         row = self.list.currentRow()
@@ -652,7 +692,7 @@ class SubtitlesPanel(QWidget):
         self.reset_button.setEnabled(not self._settings.edits.empty)
         self.export_button.setEnabled(bool(self._captions))
         self.split_button.setEnabled(bool(self._captions))
-        self.emoji_button.setEnabled(0 <= row < len(self._captions))
+        self.emoji_button.setEnabled(0 <= row < len(self._captions) and self.emoji_check.isChecked())
 
     def _merge_selected(self) -> None:
         row = self.list.currentRow()

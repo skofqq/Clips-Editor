@@ -30,6 +30,10 @@ KARAOKE_WORD, KARAOKE_FILL, KARAOKE_SWEEP = "word", "fill", "sweep"
 KARAOKE_MODES = (KARAOKE_WORD, KARAOKE_FILL, KARAOKE_SWEEP)
 EMOJI_ABOVE, EMOJI_BELOW, EMOJI_INLINE = "above", "below", "inline"
 EMOJI_PLACES = (EMOJI_ABOVE, EMOJI_BELOW, EMOJI_INLINE)
+# Which words the subtitles censor: only those inside a mute region, or every swear word the
+# censor dictionary knows (built-in lists and the user's own words), muted or not.
+CENSOR_MUTED, CENSOR_ALL = "muted", "all"
+CENSOR_SCOPES = (CENSOR_MUTED, CENSOR_ALL)
 POSITION_DIVIDER = -1.0  # sentinel: centre on the webcam/gameplay border
 
 
@@ -65,6 +69,7 @@ class SubtitleStyle:
     emphasis: bool = False  # key words (emoji cues, numbers) get their own colour
     emphasis_color: str = "#2bd94f"
     emoji_place: str = EMOJI_ABOVE
+    censor_scope: str = CENSOR_MUTED  # with mask != none
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -108,6 +113,7 @@ class SubtitleStyle:
             animation=self.animation if self.animation in ANIMATIONS else ANIM_NONE,
             karaoke_mode=self.karaoke_mode if self.karaoke_mode in KARAOKE_MODES else KARAOKE_WORD,
             emoji_place=self.emoji_place if self.emoji_place in EMOJI_PLACES else EMOJI_ABOVE,
+            censor_scope=self.censor_scope if self.censor_scope in CENSOR_SCOPES else CENSOR_MUTED,
             position=position,
         )
 
@@ -155,9 +161,11 @@ PRESETS: dict[str, SubtitleStyle] = {
 }
 
 
-def style_from_preset(preset: SubtitleStyle, current: SubtitleStyle) -> SubtitleStyle:
-    """A preset applied to the project: it keeps where the subtitles sit and how swears are written."""
-    return replace(preset, enabled=True, position=current.position, mask=current.mask).cleaned()
+def style_from_preset(preset: SubtitleStyle, current: SubtitleStyle, emoji_allowed: bool = True) -> SubtitleStyle:
+    """A preset applied to the project: it keeps where the subtitles sit and the censoring;
+    with ``emoji_allowed`` False (the user switched emoji off) it brings no emoji."""
+    return replace(preset, enabled=True, position=current.position, mask=current.mask,
+                   censor_scope=current.censor_scope, emoji=preset.emoji and emoji_allowed).cleaned()
 
 
 @dataclass(frozen=True)
@@ -283,10 +291,12 @@ def _muted(timeline: Timeline, start: int, end: int) -> bool:
     return covered * 2 >= length
 
 
-def _is_swear(text: str) -> bool:
-    from core.censor.dictionary import Dictionary
+def _is_swear(text: str, dictionary=None) -> bool:
+    if dictionary is None:
+        from core.censor.dictionary import Dictionary
 
-    return Dictionary().match(text) is not None
+        dictionary = Dictionary()
+    return dictionary.match(text) is not None
 
 
 def _kept(timeline: Timeline, start: int, end: int) -> bool:
@@ -294,11 +304,17 @@ def _kept(timeline: Timeline, start: int, end: int) -> bool:
     return any(s.start_us <= middle < s.end_us for s in timeline.segments)
 
 
-def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle) -> list[CaptionWord]:
-    """Every kept word in output time, masked where it is muted."""
+def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle,
+                dictionary=None) -> list[CaptionWord]:
+    """Every kept word in output time, masked where it is muted (or, with the "all" censor
+    scope, wherever ``dictionary`` — the censor's — calls it a swear word)."""
     result: list[CaptionWord] = []
     # A translation's word times are estimates: mask its swear words when the phrase was muted.
     translated = transcript.model.startswith("translate:")
+    if dictionary is None and style.mask != MASK_NONE and (translated or style.censor_scope == CENSOR_ALL):
+        from core.censor.dictionary import Dictionary
+
+        dictionary = Dictionary()  # built-in lists only
     for segment in transcript.segments:
         words = segment.words
         if not words:
@@ -314,8 +330,14 @@ def timed_words(transcript: Transcript, timeline: Timeline, style: SubtitleStyle
                 from core.transcription.cleanup import strip_punctuation
 
                 text = strip_punctuation(text)
-            masked = _muted(timeline, w.start_us, w.end_us) if not translated \
-                else (muted_phrase and _is_swear(text))
+            if style.mask == MASK_NONE:
+                masked = False
+            elif style.censor_scope == CENSOR_ALL:
+                masked = _is_swear(text, dictionary)
+            elif translated:
+                masked = muted_phrase and _is_swear(text, dictionary)
+            else:
+                masked = _muted(timeline, w.start_us, w.end_us)
             if masked:
                 text = mask_word(text, style.mask)
             if style.uppercase:
@@ -334,10 +356,11 @@ def build_captions(
     timeline: Timeline | None,
     style: SubtitleStyle,
     edits: SubtitleEdits = SubtitleEdits(),
+    dictionary=None,
 ) -> list[Caption]:
     if transcript is None or timeline is None:
         return []
-    words = timed_words(transcript, timeline, style)
+    words = timed_words(transcript, timeline, style, dictionary)
     groups: list[list[CaptionWord]] = []
     current: list[CaptionWord] = []
     gap = style.gap_split_ms * 1000

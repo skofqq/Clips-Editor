@@ -173,7 +173,7 @@ def draw_caption(painter: QPainter, canvas: QRectF, caption: Caption | None, sty
     font = caption_font(style, scale)
     words = [w.text for w in caption.words]
     lines = wrap_lines(words, style.max_chars, style.max_lines)
-    emoji, emoji_index = caption_emoji_at(caption) if (style.emoji or caption.emoji) else ("", -1)
+    emoji, emoji_index = caption_emoji_at(caption) if style.emoji else ("", -1)  # off = no emoji at all
     inline = bool(emoji) and style.emoji_place == EMOJI_INLINE
     metrics = QFontMetricsF(font)
 
@@ -361,7 +361,7 @@ def frame_times(caption: Caption, style: SubtitleStyle) -> list[int]:
         animated.add(caption.start_us)
     if style.animation in (ANIM_WORD, ANIM_REVEAL):
         animated |= {w.start_us for w in caption.words}
-    if style.emoji or caption.emoji:
+    if style.emoji:
         emoji, index = caption_emoji_at(caption)
         if emoji:
             appear = caption.words[index].start_us if style.emoji_place == EMOJI_INLINE else caption.start_us

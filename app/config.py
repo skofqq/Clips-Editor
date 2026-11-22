@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.32"
+APP_VERSION = "0.9.33"
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ class AppConfig:
     twitch_folder: str = ""  # where clips imported by link are saved ("" = Videos/Twitch Clips)
     twitch_autofill: bool = True
     twitch_add_to_library: bool = True
+    subtitle_emoji: bool = True  # False: the user switched subtitle emoji off; styles bring none
     subtitle_presets: dict = field(default_factory=dict)  # the user's caption styles: name → SubtitleStyle dict
     censor_defaults: dict = field(default_factory=dict)  # last Censor padding / mode / categories (CensorSettings)
     update_check: bool = True  # look for a newer version on GitHub at start
@@ -135,7 +136,7 @@ class AppConfig:
             config.theme = raw["theme"]
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
                     "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_cross_check", "transcribe_capitalise",
-                    "autosave_enabled", "twitch_autofill", "twitch_add_to_library", "update_check"):
+                    "autosave_enabled", "twitch_autofill", "twitch_add_to_library", "subtitle_emoji", "update_check"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])
         minutes = raw.get("autosave_minutes")

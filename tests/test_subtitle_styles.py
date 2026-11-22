@@ -188,8 +188,11 @@ def test_emoji_places_and_user_choice(qapp):
     assert above[0] < plain[0] - 10 and below[-1] > plain[-1] + 10
     none = _caption("ЭТО", "ЖЕСТЬ", emoji="")
     assert rows(_draw(SubtitleStyle(enabled=True, shadow=False, emoji=True), none, now))[0] >= plain[0] - 2
-    chosen = _caption("ПРИВЕТ", emoji="🐐")  # the user's emoji shows even with automatic emoji off
-    assert rows(_draw(SubtitleStyle(enabled=True, shadow=False), chosen, chosen.start_us + 1))[0] < plain[0] - 10
+    chosen = _caption("ПРИВЕТ", emoji="🐐")  # the user's emoji shows with emoji on…
+    on = SubtitleStyle(enabled=True, shadow=False, emoji=True)
+    assert rows(_draw(on, chosen, chosen.start_us + 1))[0] < plain[0] - 10
+    # …and emoji off means no emoji at all, the chosen ones too.
+    assert rows(_draw(SubtitleStyle(enabled=True, shadow=False), chosen, chosen.start_us + 1))[0] >= plain[0] - 2
 
 
 def test_style_preview_and_overlay(qapp, tmp_path):
