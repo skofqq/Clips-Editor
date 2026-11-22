@@ -174,10 +174,11 @@ def _smooth(labels: list[int]) -> list[int]:
 
 def find_speakers(transcript: Transcript, audio: np.ndarray, embedder: SpeakerEmbedder,
                   speakers: int | None = None, offset_us: int = 0, progress: Progress | None = None,
-                  cancel: threading.Event | None = None) -> list[int]:
+                  cancel: threading.Event | None = None, voices: dict | None = None) -> list[int]:
     """Speaker per word of ``transcript`` (order of ``transcript.words()``).
 
-    ``audio`` is 16 kHz mono starting at ``offset_us`` of source time.
+    ``audio`` is 16 kHz mono starting at ``offset_us`` of source time. A ``voices``
+    dict is filled with each speaker's voice: speaker → (unit vector, windows heard).
     """
     progress = progress or (lambda f, m: None)
     words = transcript.words()
@@ -203,6 +204,8 @@ def find_speakers(transcript: Transcript, audio: np.ndarray, embedder: SpeakerEm
         embeddings.append(embedder.embed(audio[int(start * RATE):int(end * RATE)]))
         progress((k + 1) / len(windows), f"Listening for voices… {k + 1}/{len(windows)}")
     labels = cluster(np.stack(embeddings), speakers)
+    if voices is not None:
+        voices.update(speaker_voices(np.stack(embeddings), labels))
     centres = np.array([(s + e) / 2 for s, e in windows])
     result = []
     for s, e in spans:
@@ -217,12 +220,30 @@ def find_speakers(transcript: Transcript, audio: np.ndarray, embedder: SpeakerEm
     return _smooth(result)
 
 
+def speaker_voices(embeddings: np.ndarray, labels: list[int]) -> dict[int, tuple[np.ndarray, int]]:
+    """Each speaker's average voice (unit vector) and how many windows it was heard in."""
+    result = {}
+    for label in sorted(set(labels)):
+        rows = embeddings[[i for i, x in enumerate(labels) if x == label]]
+        mean = rows.mean(axis=0)
+        result[int(label)] = (mean / (np.linalg.norm(mean) + 1e-9), len(rows))
+    return result
+
+
+class SpeakerLabels(list):
+    """Speaker per word, plus ``voices``: speaker → (voice vector, windows heard)."""
+
+    def __init__(self, labels, voices=None) -> None:
+        super().__init__(labels)
+        self.voices = dict(voices or {})
+
+
 _EMBEDDERS: dict[str, SpeakerEmbedder] = {}
 
 
 def find_speakers_in_file(models_dir: Path, path: Path, ffmpeg: Path, transcript: Transcript,
                           speakers: int | None = None, progress: Progress | None = None,
-                          cancel: threading.Event | None = None, audio_stream: int = 0) -> list[int]:
+                          cancel: threading.Event | None = None, audio_stream: int = 0) -> SpeakerLabels:
     """Decode the clip's audio and label every word of ``transcript`` with a speaker."""
     from core.transcription.engine import TranscriptionCancelled, decode_audio
 
@@ -236,4 +257,6 @@ def find_speakers_in_file(models_dir: Path, path: Path, ffmpeg: Path, transcript
         audio = decode_audio(path, ffmpeg, audio_stream, cancel)
     except TranscriptionCancelled as exc:
         raise DiarizationCancelled() from exc
-    return find_speakers(transcript, audio, embedder, speakers, 0, progress, cancel)
+    voices: dict = {}
+    labels = find_speakers(transcript, audio, embedder, speakers, 0, progress, cancel, voices)
+    return SpeakerLabels(labels, voices)

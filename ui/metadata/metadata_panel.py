@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -40,12 +41,17 @@ FIELD_NAMES = {"title": "title", "description": "description", "tags": "tags"}
 class MetadataPanel(QWidget):
     metadata_changed = Signal(object)  # ClipMetadata
     library_requested = Signal(str, str)  # kind, entity id ("" = just open)
+    carry_over_toggled = Signal(bool)  # "Fill from the streamer's last clip" ticked / unticked
 
     def __init__(self, library: Library, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.library = library
         self._generated = None
         self._loading = False
+        # (metadata, streamer id) → core.metadata.carry_over.CarryOver or None; set by the window.
+        self.previous_provider = None
+        self._before_carry = None  # metadata before it was filled from the last clip (for Undo)
+        self._last_streamer = ""
 
         self.library_button = QPushButton("Library…", self)
         self.library_button.setIcon(icon("library"))
@@ -65,6 +71,24 @@ class MetadataPanel(QWidget):
         self.custom_edit.setPlaceholderText("Your variables, one per line:  promo = https://t.me/…")
         self.custom_edit.setFixedHeight(54)
         self.extra_tag_chips = ChipInput("Extra tags for this clip…", free_text=True, parent=self)
+        from ui.metadata.voices_box import VoicesBox
+
+        self.voices_box = VoicesBox(self)
+        self.carry_check = QCheckBox("Fill a new clip from the streamer's last clip", self)
+        self.carry_check.setChecked(True)
+        self.carry_check.setToolTip("Participants, game, stream type, template, extra tags and hashtags of the "
+                                    "streamer's last clip; the clip title stays yours.")
+        self.carry_label = QLabel(self)
+        self.carry_label.setObjectName("muted")
+        self.carry_label.setWordWrap(True)
+        self.carry_undo = QPushButton("Undo", self)
+        self.carry_undo.setToolTip("Clear what was copied from the last clip")
+        self.carry_row = QWidget(self)
+        carry_layout = QHBoxLayout(self.carry_row)
+        carry_layout.setContentsMargins(0, 0, 0, 0)
+        carry_layout.addWidget(self.carry_label, 1)
+        carry_layout.addWidget(self.carry_undo)
+        self.carry_row.hide()
         self.generate_button = QPushButton("Generate metadata", self)
         self.generate_button.setIcon(icon("sparkle", palette.accent().on_fill))
         self.generate_button.setObjectName("primary")
@@ -93,6 +117,7 @@ class MetadataPanel(QWidget):
         choose.addRow("Template", template_row)
         choose.addRow("Streamer", self.streamer_chips)
         choose.addRow("Participants", self.participant_chips)
+        choose.addRow("Voices", self.voices_box)
         choose.addRow("Game", self.game_chips)
         choose.addRow("Stream type", self.type_chips)
         choose.addRow("Clip title", self.clip_title_edit)
@@ -120,7 +145,9 @@ class MetadataPanel(QWidget):
 
         self.source_card = Card("From the clip", "Who and what is in it; the template turns this into the "
                                 "title, description and tags.", self)
+        self.source_card.body.addWidget(self.carry_row)
         self.source_card.body.addLayout(choose)
+        self.source_card.body.addWidget(self.carry_check)
         self.source_card.body.addWidget(self.generate_button)
         self.source_card.body.addWidget(self.status_label)
         self.result_card = Card("Title, description, tags", "Edit freely: this is what goes to YouTube.", self)
@@ -154,6 +181,9 @@ class MetadataPanel(QWidget):
         for edit in (self.custom_edit, self.description_edit):
             edit.textChanged.connect(self._emit)
         self.template_combo.currentIndexChanged.connect(self._emit)
+        self.streamer_chips.changed.connect(self._streamer_changed)
+        self.carry_undo.clicked.connect(self.undo_carry_over)
+        self.carry_check.toggled.connect(self.carry_over_toggled)
         self.refresh_library()
         self._update_counts()
 
@@ -213,9 +243,13 @@ class MetadataPanel(QWidget):
             tags=clean_tags(self.tag_chips.labels()),
         )
 
-    def set_metadata(self, metadata: ClipMetadata | None) -> None:
+    def set_metadata(self, metadata: ClipMetadata | None, keep_note: bool = False) -> None:
         metadata = metadata or ClipMetadata()
         s = metadata.selection
+        self._last_streamer = s.streamer_id
+        if not keep_note:
+            self._before_carry = None
+            self.carry_row.hide()
         self._loading = True
         try:
             self.refresh_library()
@@ -247,6 +281,68 @@ class MetadataPanel(QWidget):
             self._loading = False
         self._update_counts()
         self._update_insights()
+
+    # ------------------------------------------------------- last clip
+    def _streamer_changed(self) -> None:
+        """A streamer was picked by hand: fill the rest from their last clip if nothing else is chosen."""
+        if self._loading:
+            return
+        streamer = next(iter(self.streamer_chips.ids()), "")
+        changed, self._last_streamer = streamer != self._last_streamer, streamer
+        if changed and streamer:
+            self.fill_from_last_clip()
+
+    def fill_from_last_clip(self, streamer_id: str = "") -> bool:
+        """Copy the streamer's last clip's choices into a still empty clip; True when something was filled."""
+        if self.previous_provider is None or not self.carry_check.isChecked():
+            return False
+        before = self.metadata()
+        result = self.previous_provider(before, streamer_id or before.selection.streamer_id)
+        if result is None:
+            return False
+        self.apply_carry_over(before, result)
+        return True
+
+    def apply_carry_over(self, before: ClipMetadata, result) -> None:
+        from pathlib import Path
+
+        self.set_metadata(result.metadata, keep_note=True)
+        self._before_carry = before
+        streamer = self.library.person(result.streamer_id, STREAMER)
+        who = streamer.name if streamer else "the streamer"
+        missing = "" if result.metadata.selection.clip_title.strip() else \
+            " Type the clip title and press Generate for the title."
+        self.carry_label.setText(f"Filled from {who}'s last clip “{Path(result.source).name}”.{missing}")
+        self.carry_row.show()
+        self.metadata_changed.emit(self.metadata())
+
+    def undo_carry_over(self) -> None:
+        before = self._before_carry
+        if before is None:
+            return
+        self.set_metadata(before)
+        self.status_label.setText("Cleared what was copied from the last clip.")
+        self.metadata_changed.emit(self.metadata())
+
+    # ------------------------------------------------------------ voices
+    def set_voices(self, clip, people=None) -> None:
+        if people is None:
+            people = self.library.all_people(PARTICIPANT)
+        self.voices_box.set_voices(clip, people)
+
+    def add_person(self, person_id: str) -> str:
+        """Put a recognised person on the clip: "streamer", "participant" or "" (already there / unknown)."""
+        person = self.library.person(person_id, PARTICIPANT)
+        if person is None:
+            return ""
+        streamer = next(iter(self.streamer_chips.ids()), "")
+        if person.id == streamer or person.id in self.participant_chips.ids():
+            return ""
+        if not streamer and self.library.person_kind(person.id, PARTICIPANT) == STREAMER:
+            self.streamer_chips.add_item(person.id, person.name)  # may fill the rest from their last clip
+            return "streamer"
+        self.participant_chips.add_item(person.id, person.name)
+        return "participant"
 
     def _hashtag_text(self) -> str:
         g = self._generated

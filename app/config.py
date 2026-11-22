@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.34"
+APP_VERSION = "0.9.35"
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ class AppConfig:
     censor_defaults: dict = field(default_factory=dict)  # last Censor padding / mode / categories (CensorSettings)
     update_check: bool = True  # look for a newer version on GitHub at start
     update_skipped: str = ""  # version the user chose to skip
+    metadata_carry_over: bool = True  # a new clip starts with its streamer's last clip's metadata
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -136,7 +137,8 @@ class AppConfig:
             config.theme = raw["theme"]
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
                     "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_cross_check", "transcribe_capitalise",
-                    "autosave_enabled", "twitch_autofill", "twitch_add_to_library", "subtitle_emoji", "update_check"):
+                    "autosave_enabled", "twitch_autofill", "twitch_add_to_library", "subtitle_emoji", "update_check",
+                    "metadata_carry_over"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])
         minutes = raw.get("autosave_minutes")

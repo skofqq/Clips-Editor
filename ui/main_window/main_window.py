@@ -298,6 +298,9 @@ class MainWindow(QMainWindow):
         from ui.main_window.schedule_controller import ScheduleController
 
         self.schedule = ScheduleController(self)  # the Schedule tab: Shorts spread over the week
+        from ui.main_window.voices_controller import VoicesController
+
+        self.voices = VoicesController(self)  # participants by voice, metadata from the streamer's last clip
         self.published_panel = PublishedPanel(self.clip_memory, self.service_tabs)
         self.published_panel.open_clip_requested.connect(self._open_published_clip)
         self.published_panel.refresh_requested.connect(self._refresh_published_numbers)
@@ -1671,6 +1674,7 @@ class MainWindow(QMainWindow):
         source = str(info.path) if info is not None else ""
         if not source or cm.clip_key(source) == cm.clip_key(self._memory_source or "\0"):
             self._memory_source = source
+            self.voices.show(source)
             self._show_clip_publications()
             return
         entry = self.clip_memory.get(source)
@@ -1688,8 +1692,10 @@ class MainWindow(QMainWindow):
             self.project.thumbnail = thumbnail
             self.thumbnail_editor.set_design(thumbnail)
         self._memory_source = source
+        self.voices.show(source)
         if entry is None:
-            self.clip_memory.remember(source, metadata, thumbnail)  # a project's title for this clip
+            self.voices.fill_new_clip(source)  # from the streamer's last clip, when it is a new clip
+            self.clip_memory.remember(source, self.project.metadata, thumbnail)  # a project's title for this clip
         self._show_clip_publications()
 
     def _show_clip_publications(self) -> None:
@@ -1924,6 +1930,7 @@ class MainWindow(QMainWindow):
         dialog.library_changed.connect(self.metadata_panel.refresh_library)
         dialog.exec()
         self.metadata_panel.refresh_library()
+        self.voices.show()
 
     def _metadata_changed(self, metadata) -> None:
         if metadata != self.project.metadata:
@@ -2092,6 +2099,7 @@ class MainWindow(QMainWindow):
         updated = t.with_speakers(labels)
         self.transcript.set_transcript(updated)  # undoable
         n = updated.speaker_count
+        self.voices.speakers_found(str(path), updated, labels)
         self.transcript_panel.set_busy(False, f"Found {n} speaker{'s' if n != 1 else ''}." if n else
                                        "No speech to analyse.")
 
