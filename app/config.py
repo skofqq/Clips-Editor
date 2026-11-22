@@ -78,6 +78,8 @@ class AppConfig:
     twitch_add_to_library: bool = True
     subtitle_presets: dict = field(default_factory=dict)  # the user's caption styles: name → SubtitleStyle dict
     censor_defaults: dict = field(default_factory=dict)  # last Censor padding / mode / categories (CensorSettings)
+    update_check: bool = True  # look for a newer version on GitHub at start
+    update_skipped: str = ""  # version the user chose to skip
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -123,6 +125,7 @@ class AppConfig:
             "ffmpeg_dir", "last_import_dir", "project_dir", "window_geometry", "window_state",
             "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
             "youtube_active", "transcribe_vad", "transcribe_custom_model", "transcribe_rules", "twitch_folder",
+            "update_skipped",
         ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
@@ -132,7 +135,7 @@ class AppConfig:
             config.theme = raw["theme"]
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
                     "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_cross_check", "transcribe_capitalise",
-                    "autosave_enabled", "twitch_autofill", "twitch_add_to_library"):
+                    "autosave_enabled", "twitch_autofill", "twitch_add_to_library", "update_check"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])
         minutes = raw.get("autosave_minutes")

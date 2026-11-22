@@ -1,6 +1,10 @@
 ; Inno Setup script for Twitch Shorts Studio. build_installer.bat passes AppVersion.
 ; Installs for the current user (no administrator needed); settings, models and
 ; history stay in %LOCALAPPDATA%\TwitchShortsStudio and survive an update or uninstall.
+;
+; /DUpdateOnly builds the update package TwitchShortsStudio-Update-<version>.exe:
+; the program only, one file, no models. The program downloads it from GitHub
+; Releases and runs it with /SILENT /RELAUNCH (Help -> Check for Updates).
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -8,7 +12,11 @@
 #define AppName "Twitch Shorts Studio"
 #define AppExe "TwitchShortsStudio.exe"
 ; Models downloaded by tools\fetch_models.py; each folder found becomes a component.
-#define Models SourcePath + "..\build\models\"
+#ifdef UpdateOnly
+  #define Models SourcePath + "..\build\no-models\"
+#else
+  #define Models SourcePath + "..\build\models\"
+#endif
 #define ModelsDest "{localappdata}\TwitchShortsStudio\models"
 
 [Setup]
@@ -25,15 +33,23 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\build\installer
+#ifdef UpdateOnly
+OutputBaseFilename=TwitchShortsStudio-Update-{#AppVersion}
+#else
 OutputBaseFilename=TwitchShortsStudio-Setup-{#AppVersion}
+#endif
 SetupIconFile=app.ico
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2/max
 SolidCompression=no
 ; Models make the setup bigger than one file can be: the rest goes to
 ; TwitchShortsStudio-Setup-<version>-1.bin, -2.bin ... next to the .exe.
+#ifdef UpdateOnly
+DiskSpanning=no
+#else
 DiskSpanning=yes
 DiskSliceSize=max
+#endif
 WizardStyle=modern
 CloseApplications=yes
 
@@ -110,6 +126,10 @@ en.CompFace=Faces and emotions: webcam follow and Auto cover (37 MB)
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[InstallDelete]
+; Package metadata of the previous version: two versions side by side confuse importlib.metadata.
+Type: filesandordirs; Name: "{app}\*.dist-info"
+
 [Files]
 Source: "..\build\dist\TwitchShortsStudio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: program
 ; Models go where the app keeps them; already there = kept; uninstall leaves them.
@@ -149,3 +169,16 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; An update started from the program: open the new version when done.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: Relaunch
+
+[Code]
+function Relaunch: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+      Result := True;
+end;

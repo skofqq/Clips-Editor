@@ -354,6 +354,11 @@ class MainWindow(QMainWindow):
         self._create_page_bar()
         self._connect()
         self.highlights = HighlightsController(self)  # Highlights dock ↔ timeline markers
+        from ui.main_window.update_controller import UpdateController
+
+        self.update_installer = None  # set when "Install and restart" closes the window
+        self.updates = UpdateController(self)  # Help → Check for Updates (bootstrap starts the quiet check)
+        self.help_menu.insertActions(self.act_about, [self.updates.act_check, self.updates.act_auto])
         self._restore_layout()
         self._update_dock_titles()
         self.timeline_panel.view.restore_view_state(self.config.timeline_view)
@@ -788,7 +793,7 @@ class MainWindow(QMainWindow):
         integrations = settings_menu.addMenu("Integrations")
         integrations.addAction(self.act_youtube_accounts)
 
-        help_menu = self.menuBar().addMenu("&Help")
+        help_menu = self.help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.act_shortcuts)
         help_menu.addSeparator()
         guides = help_menu.addMenu("Setup guides")
@@ -2574,6 +2579,7 @@ class MainWindow(QMainWindow):
         if self._remember_timer.isActive():
             self._remember_clip()
         self.guide_panel.tiktok_setup.cancel()
+        self.updates.shutdown()
         player = self.preview.player
         # stop() on a paused player can block inside Qt's FFmpeg backend when
         # there is no audio device; the window is closing, so pausing is enough.
