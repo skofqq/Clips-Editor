@@ -175,7 +175,7 @@ def test_window_imports_clip_by_link(qapp, data_dir, ffmpeg_paths, sample_clips,
 
     monkeypatch.setattr(TwitchImportDialog, "exec", run)
     assert w.import_from_twitch("https://www.twitch.tv/evelone192/clip/SlugX123", ydl_factory=fake_ydl)
-    assert _wait(lambda: w.media_panel.list.count() == 1)
+    assert _wait(lambda: w.media_panel.media_count() == 1)
     media = w.media_panel.all_media()[0]
     assert media.path.parent == tmp_path / "twitch" and "[SlugX123]" in media.path.name
     selection = w.project.metadata.selection

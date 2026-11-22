@@ -44,6 +44,7 @@ from core.editor.composition import default_composition
 from core.editor.presets import PresetStore
 from core.history import History
 from core.timeline.timebase import format_timecode
+from core.media.dates import MediaGroupsStore
 from core.media.errors import MediaError
 from core.media.ffmpeg_locator import FFmpegPaths, tool_version
 from core.media.probe import SUPPORTED_EXTENSIONS, MediaInfo, probe_media
@@ -195,7 +196,7 @@ class MainWindow(QMainWindow):
         self._export_dialog: ExportDialog | None = None
         self.upload_widget: UploadDialog | None = None  # the Publish page's form
 
-        self.media_panel = MediaPanel(self)
+        self.media_panel = MediaPanel(self, MediaGroupsStore.load(config.data_dir / "media_groups.json"))
         self.properties_panel = PropertiesPanel(self)  # media info
         self.composition_panel = CompositionPanel(self.composition, self.presets, self)
         self.timeline_panel = TimelinePanel(self.timeline, self)

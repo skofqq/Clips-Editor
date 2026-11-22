@@ -76,7 +76,7 @@ def test_window_brings_back_title_and_cover(qapp, data_dir, ffmpeg_paths, sample
 
         from pathlib import Path
 
-        w.media_panel.list.setCurrentItem(w.media_panel._find(Path(first)))
+        w.media_panel.select_media(Path(first))
         assert _wait(lambda: str(w.preview.media.path) == first)
         assert w.metadata_panel.metadata().title == "ОХОТА | #sasavot"
         assert w.project.thumbnail.offset == 20 and w.project.thumbnail.text == "ОХОТА"

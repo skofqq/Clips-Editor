@@ -196,7 +196,7 @@ def test_composition_saved_with_project(qapp, data_dir, ffmpeg_paths, sample_cli
 
     window = MainWindow(config=AppConfig.load(data_dir), ffmpeg=ffmpeg_paths)
     window.import_files([str(sample_clips["mp4"])])
-    assert _wait(lambda: window.media_panel.list.count() == 1)
+    assert _wait(lambda: window.media_panel.media_count() == 1)
     assert window.composition.source_size == (1280, 720)
     assert window.project.composition is not None
 
@@ -214,7 +214,7 @@ def test_composition_saved_with_project(qapp, data_dir, ffmpeg_paths, sample_cli
     other.open_project(tmp_path / "comp.tssproj")
     assert other.composition.composition == saved
     assert not other._dirty
-    assert _wait(lambda: other.media_panel.list.count() == 1)
+    assert _wait(lambda: other.media_panel.media_count() == 1)
     assert other.composition.composition == saved  # default must not overwrite it
     assert not other._dirty
     other.close()
