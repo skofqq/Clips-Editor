@@ -39,6 +39,8 @@ class VideoStats:
     avg_view_s: float | None = None
     subscribers: int | None = None  # gained from this video
     from_app: bool = False  # uploaded with this app
+    tags: tuple[str, ...] = ()  # YouTube tags (the owner sees them)
+    hashtags: tuple[str, ...] = ()  # #words in the title and description, without "#"
 
     @property
     def is_short(self) -> bool:
@@ -72,6 +74,18 @@ def parse_duration(text: str) -> int:
         return 0
     d, h, m, s = (int(g or 0) for g in match.groups())
     return ((d * 24 + h) * 60 + m) * 60 + s
+
+
+_HASHTAG = re.compile(r"(?<![\w&])#(\w+)", re.UNICODE)
+
+
+def find_hashtags(text: str) -> tuple[str, ...]:
+    """#words in ``text`` (without "#"), each once, in order."""
+    seen: dict[str, str] = {}
+    for word in _HASHTAG.findall(text or ""):
+        if not word.isdigit():
+            seen.setdefault(word.casefold(), word)
+    return tuple(seen.values())
 
 
 def _int(value) -> int:
@@ -116,6 +130,8 @@ def video_stats(client, video_ids: list[str]) -> list[VideoStats]:
                 likes=_int(stats.get("likeCount")),
                 comments=_int(stats.get("commentCount")),
                 privacy=str((item.get("status") or {}).get("privacyStatus", "")),
+                tags=tuple(str(t) for t in snippet.get("tags") or () if str(t).strip()),
+                hashtags=find_hashtags(str(snippet.get("title", "")) + "\n" + str(snippet.get("description", ""))),
             ))
     return result
 

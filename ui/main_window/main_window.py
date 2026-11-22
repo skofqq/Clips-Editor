@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 import html
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSize, QThreadPool, Qt, QTimer, Signal
@@ -166,6 +166,9 @@ class MainWindow(QMainWindow):
         self.social = SocialService(config, self.youtube.store)  # TikTok / Instagram Reels
         self.upload_history = UploadHistory(config.data_dir / "youtube_uploads.json")
         self.clip_memory = cm.ClipMemory(config.data_dir / "clip_memory.json")  # title + cover per clip
+        from core.metadata.tag_insights import TagInsightsStore
+
+        self.tag_insights = TagInsightsStore.load(config.data_dir / "tag_insights.json")  # tags that bring views
         self._memory_source = ""  # the clip whose title and cover are shown
         self._remember_timer = QTimer(self)
         self._remember_timer.setSingleShot(True)
@@ -813,6 +816,8 @@ class MainWindow(QMainWindow):
         self.act_youtube_accounts.triggered.connect(self.manage_youtube_accounts)
         self.act_metadata_library.triggered.connect(lambda: self.open_metadata_library())
         self.metadata_panel.metadata_changed.connect(self._metadata_changed)
+        self._show_tag_insights()
+        QTimer.singleShot(4000, self._relearn_tags_if_old)
         self.metadata_panel.library_requested.connect(self.open_metadata_library)
         self.act_new.triggered.connect(self.new_project)
         self.act_open.triggered.connect(self.choose_project)
@@ -1485,6 +1490,7 @@ class MainWindow(QMainWindow):
         dialog = YouTubeAccountsDialog(self.youtube, self)
         dialog.exec()
         self.config.save()  # account list (no secrets) and the active channel
+        self._show_tag_insights()
 
     def upload_to_youtube(self, path: Path | None = None) -> None:
         """The Publish page with the upload form for ``path`` (the last export when None)."""
@@ -1784,6 +1790,30 @@ class MainWindow(QMainWindow):
         if self.upload_widget is not None:
             self.config.youtube_defaults = self.upload_widget.defaults()
 
+    # ------------------------------------------------------------ tag insights
+    def _show_tag_insights(self) -> None:
+        channel = self.youtube.active
+        self.metadata_panel.set_tag_insights(self.tag_insights.get(channel.id) if channel is not None else None)
+
+    def _relearn_tags_if_old(self) -> None:
+        """Learn again from the channel's numbers once a day, without opening the Publish page."""
+        channel = self.youtube.active
+        if channel is None or not self.youtube.has_token(channel.id) or self._analytics_task is not None:
+            return
+        learned = self.tag_insights.get(channel.id).learned_at
+        try:
+            fresh = learned and datetime.now(timezone.utc) - datetime.fromisoformat(learned) < timedelta(days=1)
+        except ValueError:
+            fresh = False
+        if not fresh:
+            self.refresh_analytics()
+
+    def _learn_tags(self, channel_id: str, stats) -> None:
+        from core.metadata.tag_insights import learn
+
+        self.tag_insights.put(learn(stats, channel_id))
+        self._show_tag_insights()
+
     # ------------------------------------------------------------ analytics
     def _sync_analytics(self) -> None:
         """Show the active channel; load its numbers the first time the page opens."""
@@ -1824,6 +1854,7 @@ class MainWindow(QMainWindow):
         stats, note = result
         self.analytics_panel.set_stats(stats, note)
         self.clip_memory.set_stats(stats)
+        self._learn_tags(channel_id, stats)
         from core.youtube.best_time import best_time
 
         self._best_time = best_time(stats)

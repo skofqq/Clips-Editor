@@ -131,6 +131,12 @@ class MetadataPanel(QWidget):
         layout.setSpacing(14)
         layout.addWidget(self.source_card)
         layout.addWidget(self.result_card)
+        from ui.metadata.tag_insights_card import TagInsightsCard
+
+        self.insights_card = TagInsightsCard(self)
+        self.insights_card.tag_chosen.connect(self.add_tag)
+        self.insights_card.hashtag_chosen.connect(self.add_hashtag)
+        layout.addWidget(self.insights_card)
         layout.addStretch(1)
 
         self.library_button.clicked.connect(lambda: self.library_requested.emit("", ""))
@@ -240,6 +246,7 @@ class MetadataPanel(QWidget):
         finally:
             self._loading = False
         self._update_counts()
+        self._update_insights()
 
     def _hashtag_text(self) -> str:
         g = self._generated
@@ -247,8 +254,44 @@ class MetadataPanel(QWidget):
             return ""
         return "Hashtags in the description: " + " ".join(g.hashtags) + " (not sent as YouTube tags)"
 
+    # ------------------------------------------------------- tag insights
+    def set_tag_insights(self, insights) -> None:
+        """What was learned about the channel's tags (core.metadata.tag_insights.TagInsights)."""
+        self.insights_card.set_insights(insights)
+        self._update_insights()
+
+    def description_hashtags(self) -> tuple[str, ...]:
+        from core.youtube.analytics import find_hashtags
+
+        return find_hashtags(self.title_edit.text() + "\n" + self.description_edit.toPlainText())
+
+    def _update_insights(self) -> None:
+        self.insights_card.update_for(self.tag_chips.labels(), self.description_hashtags())
+
+    def add_tag(self, text: str) -> bool:
+        return self.tag_chips.add_item(text, text)
+
+    def add_hashtag(self, text: str) -> None:
+        """Add ``#text`` to the description: on the last line that has hashtags, or a new last line."""
+        text = text.lstrip("#")
+        if text.casefold() in {h.casefold() for h in self.description_hashtags()}:
+            return
+        lines = self.description_edit.toPlainText().split("\n")
+        for i in range(len(lines) - 1, -1, -1):
+            if "#" in lines[i]:
+                lines[i] = lines[i].rstrip() + f" #{text}"
+                break
+        else:
+            if lines and lines[-1].strip():
+                lines.append("")
+            if lines == [""]:
+                lines = []
+            lines.append(f"#{text}")
+        self.description_edit.setPlainText("\n".join(lines))
+
     def _emit(self, *args) -> None:
         self._update_counts()
+        self._update_insights()
         if not self._loading:
             self.metadata_changed.emit(self.metadata())
 
