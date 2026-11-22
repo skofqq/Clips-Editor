@@ -301,6 +301,9 @@ class MainWindow(QMainWindow):
         from ui.main_window.voices_controller import VoicesController
 
         self.voices = VoicesController(self)  # participants by voice, metadata from the streamer's last clip
+        from ui.main_window.twitch_link_controller import TwitchLinkController
+
+        self.twitch_link = TwitchLinkController(self)  # fill from a Twitch link, title ideas from the transcript
         self.published_panel = PublishedPanel(self.clip_memory, self.service_tabs)
         self.published_panel.open_clip_requested.connect(self._open_published_clip)
         self.published_panel.refresh_requested.connect(self._refresh_published_numbers)

@@ -42,6 +42,7 @@ class MetadataPanel(QWidget):
     metadata_changed = Signal(object)  # ClipMetadata
     library_requested = Signal(str, str)  # kind, entity id ("" = just open)
     carry_over_toggled = Signal(bool)  # "Fill from the streamer's last clip" ticked / unticked
+    twitch_link_requested = Signal(str)  # "Fill" next to the Twitch link field
 
     def __init__(self, library: Library, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -63,6 +64,28 @@ class MetadataPanel(QWidget):
         self.type_chips = ChipInput("Stream type…", parent=self)
         self.clip_title_edit = QLineEdit(self)
         self.clip_title_edit.setPlaceholderText("What happens in the clip")
+        self.link_edit = QLineEdit(self)
+        self.link_edit.setPlaceholderText("Paste a Twitch clip or stream recording link")
+        self.link_edit.setClearButtonEnabled(True)
+        self.link_edit.setToolTip("Streamer, game, clip title, date, stream link and people named with @ "
+                                  "are taken from Twitch. Everything stays editable.")
+        self.link_button = QPushButton("Fill", self)
+        self.link_button.setIcon(icon("sparkle"))
+        self.link_button.setToolTip(self.link_edit.toolTip())
+        self.ideas_box = QWidget(self)
+        ideas_layout = QVBoxLayout(self.ideas_box)
+        ideas_layout.setContentsMargins(0, 0, 0, 0)
+        ideas_layout.setSpacing(4)
+        self.ideas_label = QLabel("Ideas from what was said — click one:", self.ideas_box)
+        self.ideas_label.setObjectName("muted")
+        ideas_layout.addWidget(self.ideas_label)
+        self.ideas_flow_host = self.ideas_box
+        self.ideas_flow = QVBoxLayout()
+        self.ideas_flow.setSpacing(3)
+        ideas_layout.addLayout(self.ideas_flow)
+        self.ideas_box.hide()
+        self.idea_buttons: list[QPushButton] = []
+        self._ideas: list = []
         self.date_edit = QLineEdit(self)
         self.date_edit.setPlaceholderText("today")
         self.stream_url_edit = QLineEdit(self)
@@ -114,13 +137,21 @@ class MetadataPanel(QWidget):
         template_row = QHBoxLayout()
         template_row.addWidget(self.template_combo, 1)
         template_row.addWidget(self.library_button)
+        link_row = QHBoxLayout()
+        link_row.addWidget(self.link_edit, 1)
+        link_row.addWidget(self.link_button)
+        choose.addRow("Twitch link", link_row)
         choose.addRow("Template", template_row)
         choose.addRow("Streamer", self.streamer_chips)
         choose.addRow("Participants", self.participant_chips)
         choose.addRow("Voices", self.voices_box)
         choose.addRow("Game", self.game_chips)
         choose.addRow("Stream type", self.type_chips)
-        choose.addRow("Clip title", self.clip_title_edit)
+        clip_title_box = QVBoxLayout()
+        clip_title_box.setSpacing(4)
+        clip_title_box.addWidget(self.clip_title_edit)
+        clip_title_box.addWidget(self.ideas_box)
+        choose.addRow("Clip title", clip_title_box)
         choose.addRow("Date", self.date_edit)
         choose.addRow("Stream URL", self.stream_url_edit)
         choose.addRow("Variables", self.custom_edit)
@@ -184,6 +215,9 @@ class MetadataPanel(QWidget):
         self.streamer_chips.changed.connect(self._streamer_changed)
         self.carry_undo.clicked.connect(self.undo_carry_over)
         self.carry_check.toggled.connect(self.carry_over_toggled)
+        self.link_button.clicked.connect(self._link_requested)
+        self.link_edit.returnPressed.connect(self._link_requested)
+        self.clip_title_edit.textChanged.connect(lambda _t: self._mark_ideas())
         self.refresh_library()
         self._update_counts()
 
@@ -316,12 +350,74 @@ class MetadataPanel(QWidget):
         self.carry_row.show()
         self.metadata_changed.emit(self.metadata())
 
+    def show_filled(self, before: ClipMetadata, metadata: ClipMetadata, text: str) -> None:
+        """Put ``metadata`` in the fields with a note and an Undo back to ``before``."""
+        self.set_metadata(metadata, keep_note=True)
+        self._before_carry = before
+        self.carry_label.setText(text)
+        self.carry_row.show()
+        self.metadata_changed.emit(self.metadata())
+
+    # ------------------------------------------------------- Twitch link
+    def _link_requested(self) -> None:
+        text = self.link_edit.text().strip()
+        if not text:
+            self.status_label.setText("Paste a link to a Twitch clip or stream recording first.")
+            return
+        self.twitch_link_requested.emit(text)
+
+    def set_link_busy(self, busy: bool) -> None:
+        self.link_button.setEnabled(not busy)
+        self.link_button.setText("Asking Twitch…" if busy else "Fill")
+
+    # ------------------------------------------------------- title ideas
+    def set_title_ideas(self, ideas: list) -> None:
+        """Clip title ideas from the transcript (core.metadata.said_titles.TitleIdea)."""
+        for button in self.idea_buttons:
+            self.ideas_flow.removeWidget(button)
+            button.deleteLater()
+        self.idea_buttons = []
+        self._ideas = list(ideas)
+        for idea in self._ideas:
+            button = QPushButton(idea.text, self.ideas_flow_host)
+            button.setObjectName("variantTitle")
+            button.setCheckable(True)
+            button.setToolTip(f"{idea.label} · {idea.start_us / 1e6:.0f} s — use as the clip title")
+            button.clicked.connect(lambda _c=False, item=idea: self.use_title_idea(item))
+            self.ideas_flow.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
+            self.idea_buttons.append(button)
+        self.ideas_box.setVisible(bool(self._ideas))
+        self._mark_ideas()
+
+    def idea_texts(self) -> list[str]:
+        return [idea.text for idea in self._ideas]
+
+    def _mark_ideas(self) -> None:
+        current = self.clip_title_edit.text().strip()
+        for button, idea in zip(self.idea_buttons, self._ideas):
+            button.setChecked(bool(current) and idea.text == current)
+
+    def use_title_idea(self, idea) -> None:
+        """Make the idea the clip title and the title, description and tags from it (hand edits stay)."""
+        from dataclasses import replace
+
+        from core.metadata.twitch_link import regenerate
+
+        current = self.metadata()
+        updated = regenerate(replace(current, selection=replace(current.selection, clip_title=idea.text)),
+                             self.library)
+        self.set_metadata(updated, keep_note=True)
+        kept = [FIELD_NAMES[f] for f in current.edited_fields() if current.generated is not None]
+        self.status_label.setText(f"Clip title: “{idea.text}”." + (
+            " Kept your edits: " + ", ".join(kept) + "." if kept else ""))
+        self.metadata_changed.emit(self.metadata())
+
     def undo_carry_over(self) -> None:
         before = self._before_carry
         if before is None:
             return
         self.set_metadata(before)
-        self.status_label.setText("Cleared what was copied from the last clip.")
+        self.status_label.setText("Put back the fields as they were before.")
         self.metadata_changed.emit(self.metadata())
 
     # ------------------------------------------------------------ voices
