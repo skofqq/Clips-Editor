@@ -347,8 +347,7 @@ def test_window_long_moments_chat_ticks_and_clips(qapp, data_dir, ffmpeg_paths, 
 
     out = tmp_path / "clips"
     assert ctl.save_clips(out)
-    assert _wait(lambda: w.media_panel.list.count() >= 2 if hasattr(w.media_panel, "list") else
-                 len(w.project.media) >= 2, 60)
+    assert _wait(lambda: w.media_panel.media_count() >= 2, 60)
     files = list(out.glob("*.mp4"))
     assert len(files) == 1
     assert w.project.transcript_for(str(files[0])) is not None

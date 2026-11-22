@@ -92,17 +92,14 @@ def test_import_in_background_and_show_properties(qapp, data_dir, ffmpeg_paths, 
     window.show()
     window.import_files([str(sample_clips["mp4"]), str(sample_clips["mkv_noaudio"])])
 
-    assert _wait(lambda: window.media_panel.list.count() == 2)
+    assert _wait(lambda: window.media_panel.media_count() == 2)
     QThreadPool.globalInstance().waitForDone(5000)
     names = sorted(m.path.name for m in window.media_panel.all_media())
     assert names == ["silent.mkv", "stream clip.mp4"]
     assert len(window.project.media) == 2
 
     # Select the mp4 and check properties panel content.
-    for i in range(window.media_panel.list.count()):
-        item = window.media_panel.list.item(i)
-        if "stream clip" in item.text():
-            window.media_panel.list.setCurrentItem(item)
+    window.media_panel.select_media(sample_clips["mp4"])
     rows = window.properties_panel.rows()
     assert rows["Resolution"] == "1280 × 720"
     assert rows["Frame rate"] == "30"
@@ -126,7 +123,7 @@ def test_import_failure_is_reported(qapp, data_dir, ffmpeg_paths, tmp_path, monk
     window = _window(data_dir, ffmpeg_paths)
     window.import_files([str(bad)])
     assert _wait(lambda: bool(shown))
-    assert window.media_panel.list.count() == 0
+    assert window.media_panel.media_count() == 0
     window.close()
 
 
@@ -135,7 +132,7 @@ def test_save_and_reopen_project(qapp, data_dir, ffmpeg_paths, sample_clips, tmp
 
     window = _window(data_dir, ffmpeg_paths)
     window.import_files([str(sample_clips["mp4"])])
-    assert _wait(lambda: window.media_panel.list.count() == 1)
+    assert _wait(lambda: window.media_panel.media_count() == 1)
 
     target = tmp_path / "session.tssproj"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
@@ -146,7 +143,7 @@ def test_save_and_reopen_project(qapp, data_dir, ffmpeg_paths, sample_clips, tmp
 
     other = _window(data_dir, ffmpeg_paths)
     other.open_project(target)
-    assert _wait(lambda: other.media_panel.list.count() == 1)
+    assert _wait(lambda: other.media_panel.media_count() == 1)
     assert other.project.name == "session"
     other.close()
 

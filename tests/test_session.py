@@ -111,19 +111,18 @@ def test_undo_survives_switching_clips_and_reopening(qapp, data_dir, ffmpeg_path
 
     w = _window(data_dir, ffmpeg_paths)
     w.import_files([str(sample_clips["mp4"]), str(sample_clips["mkv_noaudio"])])
-    assert _wait(lambda: w.media_panel.list.count() == 2 and w.timeline.timeline is not None)
-    rows = {m.path: i for i, m in enumerate(w.media_panel.all_media())}
-    w.media_panel.list.setCurrentRow(rows[sample_clips["mp4"]])
+    assert _wait(lambda: w.media_panel.media_count() == 2 and w.timeline.timeline is not None)
+    w.media_panel.select_media(sample_clips["mp4"])
     assert _wait(lambda: w.preview.media is not None and w.preview.media.path == sample_clips["mp4"])
     w.timeline.set_playhead(1 * S)
     w.act_split.trigger()
     assert len(w.timeline.timeline.segments) == 2 and w.act_undo.isEnabled()
 
     # Another clip and back: the split can still be undone.
-    w.media_panel.list.setCurrentRow(rows[sample_clips["mkv_noaudio"]])
+    w.media_panel.select_media(sample_clips["mkv_noaudio"])
     assert _wait(lambda: w.preview.media.path == sample_clips["mkv_noaudio"])
     assert not w.act_undo.isEnabled()
-    w.media_panel.list.setCurrentRow(rows[sample_clips["mp4"]])
+    w.media_panel.select_media(sample_clips["mp4"])
     assert _wait(lambda: w.preview.media.path == sample_clips["mp4"])
     assert w.act_undo.isEnabled()
 
@@ -135,9 +134,8 @@ def test_undo_survives_switching_clips_and_reopening(qapp, data_dir, ffmpeg_path
 
     other = _window(data_dir, ffmpeg_paths)
     other.open_project(path)
-    assert _wait(lambda: other.media_panel.list.count() == 2)
-    row = next(i for i, m in enumerate(other.media_panel.all_media()) if m.path == sample_clips["mp4"])
-    other.media_panel.list.setCurrentRow(row)
+    assert _wait(lambda: other.media_panel.media_count() == 2)
+    other.media_panel.select_media(sample_clips["mp4"])
     ok = _wait(lambda: other.preview.media is not None and other.preview.media.path == sample_clips["mp4"]
                and other.timeline.timeline is not None and len(other.timeline.timeline.segments) == 2)
     assert ok, (other.preview.media, other.timeline.timeline, list(other.project.timelines))
