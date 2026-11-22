@@ -54,6 +54,7 @@ class CensorPanel(QWidget):
     preview_requested = Signal(int, int)  # start_us, end_us
     dictionary_requested = Signal()
     range_edit_finished = Signal()  # closes the undo step of a Start/End edit
+    defaults_changed = Signal(object)  # CensorSettings the user picked: remembered for new clips
 
     def __init__(self, controller: CensorController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -179,7 +180,8 @@ class CensorPanel(QWidget):
         layout.addWidget(self.review_card)
         layout.addLayout(apply)
 
-        self.set_settings(CensorSettings())
+        self._defaults = CensorSettings()  # shown for clips that have no censor scan yet
+        self.set_settings(self._defaults)
 
         # ----------------------------------------------------- wiring
         self.detect_button.clicked.connect(self.detect_requested)
@@ -254,6 +256,15 @@ class CensorPanel(QWidget):
         finally:
             self._rebuilding = False
 
+    def set_defaults(self, settings: CensorSettings) -> None:
+        """Settings remembered between runs; shown while the clip has no scan yet."""
+        self._defaults = settings.cleaned()
+        if self.controller.state is None:
+            self.set_settings(self._defaults)
+
+    def defaults(self) -> CensorSettings:
+        return self._defaults
+
     def _apply_settings(self, settings: CensorSettings) -> None:
         self.strong_check.setChecked(STRONG in settings.categories)
         self.mild_check.setChecked(MILD in settings.categories)
@@ -265,10 +276,13 @@ class CensorPanel(QWidget):
     def _settings_edited(self) -> None:
         if self._rebuilding:
             return
+        settings = self.settings()
+        if settings != self._defaults:
+            self._defaults = settings
+            self.defaults_changed.emit(settings)
         state = self.controller.state
         if state is None:
             return
-        settings = self.settings()
         if settings.categories != state.settings.categories:
             # Different categories need a new scan; keep the rest in sync now.
             settings = CensorSettings(settings.pad_before_us, settings.pad_after_us, settings.mode,
@@ -297,8 +311,7 @@ class CensorPanel(QWidget):
         keep = self.selected_ids() if self.table.rowCount() else []
         self._rebuilding = True
         try:
-            if state is not None:
-                self._apply_settings(state.settings)
+            self._apply_settings(state.settings if state is not None else self._defaults)
             items = state.suggestions if state is not None else ()
             self.table.setRowCount(len(items))
             for row, sug in enumerate(items):

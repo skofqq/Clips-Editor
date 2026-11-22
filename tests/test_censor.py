@@ -354,3 +354,54 @@ def test_panel_allows_negative_padding(qapp):
     panel = CensorPanel(CensorController())
     panel.before_spin.setValue(-60)
     assert panel.settings().pad_before_us == -60_000
+
+
+def test_panel_remembers_padding_as_defaults(qapp):
+    """0.9.30: padding / mode / categories picked by the user become the defaults."""
+    from ui.censor.censor_controller import CensorController
+    from ui.censor.censor_panel import CensorPanel
+
+    controller = CensorController()
+    panel = CensorPanel(controller)
+    seen = []
+    panel.defaults_changed.connect(seen.append)
+    panel.set_defaults(CensorSettings(-40_000, 90_000, BEEP))
+    assert (panel.before_spin.value(), panel.after_spin.value()) == (-40, 90)
+    assert panel.mode_combo.currentData() == BEEP
+    assert seen == []  # loading saved defaults is not a user edit
+
+    panel.after_spin.setValue(120)  # no scan yet: still remembered
+    assert seen[-1].pad_after_us == 120_000 and seen[-1].pad_before_us == -40_000
+
+    # A clip with its own scan shows that scan's settings...
+    controller.set_state(CensorState(settings=CensorSettings(10_000, 20_000)))
+    panel.rebuild()
+    assert (panel.before_spin.value(), panel.after_spin.value()) == (10, 20)
+    # ...and a clip without one shows the remembered defaults again.
+    controller.set_state(None)
+    panel.rebuild()
+    assert (panel.before_spin.value(), panel.after_spin.value()) == (-40, 120)
+
+
+def test_censor_defaults_survive_restart(qapp, data_dir):
+    from app.config import AppConfig
+    from ui.censor.censor_controller import CensorController
+    from ui.censor.censor_panel import CensorPanel
+
+    config = AppConfig.load(data_dir)
+    assert CensorSettings.from_dict(config.censor_defaults) == CensorSettings()
+    config.censor_defaults = CensorSettings(-70_000, 300_000, BEEP).to_dict()
+    config.save()
+    again = AppConfig.load(data_dir)
+    panel = CensorPanel(CensorController())
+    panel.set_defaults(CensorSettings.from_dict(again.censor_defaults))
+    assert panel.settings() == CensorSettings(-70_000, 300_000, BEEP)
+
+
+def test_window_saves_censor_padding(window, data_dir):
+    from app.config import AppConfig
+
+    window.censor_panel.before_spin.setValue(-50)
+    window.censor_panel.after_spin.setValue(180)
+    saved = CensorSettings.from_dict(AppConfig.load(data_dir).censor_defaults)
+    assert (saved.pad_before_us, saved.pad_after_us) == (-50_000, 180_000)

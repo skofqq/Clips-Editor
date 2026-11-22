@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from app.config import APP_NAME, APP_VERSION, AppConfig
 from core.audio.waveform import load_waveform
 from core.censor.dictionary import Dictionary
-from core.censor.review import detect
+from core.censor.review import CensorSettings, detect
 from core.render.encoders import detect_encoders
 from core.render.settings import RenderSettings
 from core.metadata.library import Library
@@ -914,6 +914,8 @@ class MainWindow(QMainWindow):
         self.censor_panel.word_edited.connect(self.edit_censor_word)
         self.censor_panel.preview_requested.connect(self.preview_range)
         self.censor_panel.dictionary_requested.connect(self.edit_censor_dictionary)
+        self.censor_panel.set_defaults(CensorSettings.from_dict(self.config.censor_defaults))
+        self.censor_panel.defaults_changed.connect(self._remember_censor_defaults)
         self.censor_panel.range_edit_finished.connect(lambda: self.history.break_merge())
         self.timeline.playhead_changed.connect(self._check_preview_stop)
         self.timeline.selection_changed.connect(self._update_edit_actions)
@@ -1218,6 +1220,11 @@ class MainWindow(QMainWindow):
             previous=self.censor.state,
             duration_us=self.censor.duration_us,
         )
+
+    def _remember_censor_defaults(self, settings: CensorSettings) -> None:
+        """Padding, mode and categories stay for the next clip and the next start."""
+        self.config.censor_defaults = settings.to_dict()
+        self._save_config_quietly()
 
     def detect_censor(self) -> None:
         if self.transcript.transcript is None:

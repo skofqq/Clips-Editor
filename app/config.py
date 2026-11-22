@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.29"
+APP_VERSION = "0.9.30"
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +77,7 @@ class AppConfig:
     twitch_autofill: bool = True
     twitch_add_to_library: bool = True
     subtitle_presets: dict = field(default_factory=dict)  # the user's caption styles: name → SubtitleStyle dict
+    censor_defaults: dict = field(default_factory=dict)  # last Censor padding / mode / categories (CensorSettings)
 
     data_dir: Path = field(default_factory=user_data_dir, compare=False)
 
@@ -141,7 +142,7 @@ class AppConfig:
         if isinstance(learned, list):
             config.transcribe_learned = [w for w in learned if isinstance(w, str)][:100]
         for key in ("export_settings", "youtube_defaults", "timeline_view", "social_accounts", "social_defaults",
-                    "subtitle_presets"):
+                    "subtitle_presets", "censor_defaults"):
             if isinstance(raw.get(key), dict):
                 setattr(config, key, raw[key])
         accounts = raw.get("youtube_accounts")
