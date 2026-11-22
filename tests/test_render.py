@@ -300,6 +300,7 @@ def test_export_dialog_settings_and_render(qapp, mp4, ffmpeg_paths, tmp_path):
     assert _wait(lambda: dialog._task is None)
     assert dialog.result_path == out and out.is_file()
     assert "Done" in dialog.status_label.text() and dialog.open_button.isVisibleTo(dialog)
+    assert "LUFS" in dialog.status_label.text()  # the finished file's loudness is reported
     dialog.close()
 
 

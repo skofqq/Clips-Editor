@@ -134,16 +134,18 @@ class RenderQueue(QObject):
         task = CancellableTask(self.runner, job.source, job.composition, job.timeline, job.settings, job.output,
                                self.ffmpeg.ffmpeg, self.ffmpeg.ffprobe, job.encoders, **job.subtitles)
         task.signals.progress.connect(lambda f, m, j=job: self._progress(j, f, m))
-        task.signals.finished.connect(lambda result, j=job: self._rendered(j))
+        task.signals.finished.connect(lambda result, j=job: self._rendered(j, result))
         task.signals.failed.connect(lambda exc, j=job: self._done(j, FAILED, str(exc)))
         task.signals.cancelled.connect(lambda j=job: self._done(j, CANCELLED, "Cancelled"))
         self._task, self._current = task, job
         self.changed.emit()
         QThreadPool.globalInstance().start(task)
 
-    def _rendered(self, job: RenderJob) -> None:
+    def _rendered(self, job: RenderJob, result=None) -> None:
+        loudness = getattr(result, "loudness", None)
+        note = "" if loudness is None or loudness.silent else f"{loudness.input_i:.1f} LUFS"
         if job.upload is None or self.uploader is None:
-            self._done(job, DONE, "")
+            self._done(job, DONE, note)
             return
         self.job_finished.emit(job)  # the file is there even if the upload fails
         job.status, job.progress, job.message = UPLOADING, 0.0, "Starting upload…"

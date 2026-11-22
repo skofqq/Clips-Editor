@@ -32,7 +32,7 @@ from core.media.probe import MediaInfo
 from core.render.encoders import EncoderInfo, choose_encoder, encoder_info
 from core.render.graph import output_fps
 from core.render.job import RenderError, render
-from core.audio.enhance import LOUDNESS_CHOICES, LOUDNESS_OFF
+from core.audio.enhance import LOUDNESS_CHOICES, LOUDNESS_OFF, loudness_report
 from core.render.settings import (
     PROGRESS_BOTTOM,
     PROGRESS_COLORS,
@@ -637,6 +637,9 @@ class ExportDialog(QDialog):
             f"Done in {result.elapsed_s:.0f} s: {result.path.name} · {size_mb:.1f} MB · "
             f"{format_timecode(round(result.duration_s * 1e6))} · {encoder_info(result.encoder).label}"
         )
+        report = loudness_report(getattr(result, "loudness", None), self.settings().loudness_lufs)
+        if report:
+            text += "\n" + report
         if result.notice:
             text += "\n" + result.notice
         self.status_label.setText(text)

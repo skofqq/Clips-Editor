@@ -16,6 +16,8 @@ from core.audio.enhance import (
     MeasureCancelled,
     apply_filter,
     denoise_filter,
+    loudness_report,
+    measure_file,
     measure_filter,
     measure_loudness,
     parse_loudnorm,
@@ -140,10 +142,33 @@ def test_render_normalises_to_minus_14(quiet_voice, ffmpeg_paths, tmp_path):
                     progress=lambda f, m: messages.append(m))
     assert any("loudness" in m.lower() for m in messages)
     assert _integrated(result.path, ffmpeg_paths.ffmpeg) == pytest.approx(-14, abs=1.0)
+    # The finished file is measured again and the result is reported.
+    assert result.loudness is not None and result.loudness.input_i == pytest.approx(-14, abs=1.0)
+    assert result.loudness.input_tp <= -0.5
+    assert "LUFS" in loudness_report(result.loudness, -14) and "✓" in loudness_report(result.loudness, -14)
 
     off = render(info, default_composition(640, 360), t, RenderSettings(width=360, height=640, loudness_lufs=0),
                  tmp_path / "off.mp4", ffmpeg_paths.ffmpeg, ffmpeg_paths.ffprobe)
     assert _integrated(off.path, ffmpeg_paths.ffmpeg) == pytest.approx(before, abs=1.0)
+    assert off.loudness is None  # no check when normalisation is off
+
+
+def test_measure_file_and_report(quiet_voice, noise_only, ffmpeg_paths, tmp_path):
+    measured = measure_file(ffmpeg_paths.ffmpeg, quiet_voice)
+    assert measured is not None and measured.input_i < -25
+    report = loudness_report(measured, -14)
+    assert "quieter than the target" in report and "✓" not in report
+    assert "peaks above" in loudness_report(Loudness(-14, 0.3, 5, -24, 0), -14)
+    assert "louder" in loudness_report(Loudness(-9, -1.2, 5, -20, 0), -14)
+    assert loudness_report(measured, 0) == "" and loudness_report(None, -14) == ""
+    assert "silent" in loudness_report(Loudness(float("-inf"), -90, 0, -70, 0), -14)
+    silent_video = tmp_path / "novoice.mp4"
+    subprocess.run([str(ffmpeg_paths.ffmpeg), "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=160x90:rate=10:duration=1", "-c:v", "libx264", str(silent_video)], check=True)
+    assert measure_file(ffmpeg_paths.ffmpeg, silent_video) is None  # no audio track
+    cancel = threading.Event()
+    cancel.set()
+    assert measure_file(ffmpeg_paths.ffmpeg, noise_only, cancel=cancel) is None
 
 
 def test_loudness_measurement_cancel(quiet_voice, ffmpeg_paths, tmp_path):

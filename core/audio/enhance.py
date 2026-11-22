@@ -138,6 +138,53 @@ def measure_loudness(
     return parse_loudnorm(stderr)
 
 
+def measure_file(ffmpeg: Path, path: Path, target_lufs: float = -14.0,
+                 cancel: threading.Event | None = None, timeout: float = 600.0) -> Loudness | None:
+    """Loudness of a finished file's first audio track (integrated LUFS and
+    true peak), to check what the render really produced. None when it has no
+    audio or cannot be read."""
+    cmd = [str(ffmpeg), "-hide_banner", "-nostdin", "-i", str(path), "-map", "0:a:0", "-vn", "-sn",
+           "-af", measure_filter(target_lufs or -14.0), "-f", "null", "-"]
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                                   encoding="utf-8", errors="replace", **no_window_kwargs())
+    except OSError as exc:
+        log.warning("Loudness check could not start: %s", exc)
+        return None
+    chunks: list[str] = []
+    reader = threading.Thread(target=lambda: chunks.append(process.stderr.read()), daemon=True)
+    reader.start()
+    waited = 0.0
+    while process.poll() is None:
+        if (cancel is not None and cancel.is_set()) or waited > timeout:
+            process.kill()
+            process.wait()
+            return None
+        reader.join(0.1)
+        waited += 0.1
+    reader.join(5)
+    if process.returncode != 0:
+        return None
+    return parse_loudnorm("".join(chunks))
+
+
+def loudness_report(measured: Loudness | None, target_lufs: float) -> str:
+    """One line for the render summary: what the finished file measures, with a
+    hint when it is off the target (more than 1 LU) or peaks above -1 dBTP."""
+    if measured is None or not target_lufs:
+        return ""
+    if measured.silent:
+        return "Loudness: the sound is silent."
+    text = f"Loudness {measured.input_i:.1f} LUFS, peak {measured.input_tp:.1f} dBTP (target {target_lufs:.0f} LUFS)"
+    notes = []
+    if abs(measured.input_i - target_lufs) > 1.0:
+        notes.append("quieter than the target: loud peaks left no room" if measured.input_i < target_lufs
+                     else "louder than the target")
+    if measured.input_tp > TRUE_PEAK_DB + 0.5:
+        notes.append("peaks above -1 dB")
+    return text + (" · " + ", ".join(notes) if notes else " ✓")
+
+
 def render_preview(
     ffmpeg: Path,
     source: Path,

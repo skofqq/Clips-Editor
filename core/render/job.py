@@ -19,7 +19,7 @@ from core.media.errors import MediaError
 from core.media.ffmpeg_locator import no_window_kwargs, tool_version
 from core.media.probe import MediaInfo, probe_media
 from core.render.encoders import SOFTWARE_ENCODER, EncoderInfo, choose_encoder, encoder_info, video_args
-from core.audio.enhance import MeasureCancelled, apply_filter, measure_loudness
+from core.audio.enhance import Loudness, MeasureCancelled, apply_filter, measure_file, measure_loudness
 from core.render.graph import RenderGraph, build_graph, loudness_graph
 from core.render.settings import AAC, AUDIO_SAMPLE_RATE, HEVC, MP4, RenderSettings
 from core.timeline.model import Timeline
@@ -65,6 +65,7 @@ class RenderResult:
     elapsed_s: float
     notice: str  # e.g. why the CPU was used instead of the GPU
     info: MediaInfo
+    loudness: Loudness | None = None  # measured on the finished file when normalisation was on
 
 
 # ------------------------------------------------------------------ helpers
@@ -349,6 +350,12 @@ def render(
                     notice = f"{label} failed, rendered on the CPU instead."
             progress(0.995, "Checking the file…")
             info = validate_output(partial, ffprobe, settings, graph.duration_s, graph.audio_label is not None)
+            loudness = None
+            if loudnorm and graph.audio_label is not None:
+                progress(0.997, "Checking the loudness…")
+                loudness = measure_file(ffmpeg, partial, settings.loudness_lufs, cancel)
+                if loudness is not None:
+                    log.info("Rendered loudness %.1f LUFS, peak %.1f dBTP", loudness.input_i, loudness.input_tp)
             os.replace(partial, output)
         except BaseException:
             try:
@@ -366,4 +373,5 @@ def render(
         elapsed_s=time.monotonic() - started,
         notice=notice,
         info=info,
+        loudness=loudness,
     )
