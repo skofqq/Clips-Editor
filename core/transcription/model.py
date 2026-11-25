@@ -157,6 +157,35 @@ def rewrite_words(segment: Segment, text: str) -> tuple[Word, ...]:
     return tuple(out)
 
 
+# Whisper sometimes starts a word at the end of the pause or music before it, so a
+# short word like «Она» seems to last 13 s. Words much longer than their letters
+# allow keep their end (which is reliable) and get a believable length.
+_STRETCH_MIN_US = 1_200_000
+_STRETCH_PER_LETTER_US = 250_000
+_TYPICAL_BASE_US = 150_000
+_TYPICAL_PER_LETTER_US = 120_000
+
+
+def tame_stretched_words(segments: tuple[Segment, ...]) -> tuple[Segment, ...]:
+    """``segments`` with over-long exact words shortened from the front."""
+    result = []
+    for seg in segments:
+        words = list(seg.words)
+        changed = False
+        for i, w in enumerate(words):
+            letters = _weight(w.text)
+            if not w.exact or w.end_us - w.start_us <= max(_STRETCH_MIN_US, _STRETCH_PER_LETTER_US * letters):
+                continue
+            length = _TYPICAL_BASE_US + _TYPICAL_PER_LETTER_US * letters
+            words[i] = replace(w, start_us=w.end_us - length)
+            changed = True
+        if changed:
+            start = words[0].start_us if words[0].exact else seg.start_us
+            seg = replace(seg, words=tuple(words), start_us=max(seg.start_us, min(start, seg.end_us)))
+        result.append(seg)
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class Transcript:
     language: str  # ISO code, e.g. "ru"
@@ -299,6 +328,7 @@ class Transcript:
                 Segment(seg_id, start, end, str(item.get("text", "")), tuple(words), bool(item.get("edited")))
             )
         segments.sort(key=lambda s: (s.start_us, s.id))
+        segments = list(tame_stretched_words(tuple(segments)))  # also fixes clips transcribed earlier
         check = data.get("check") if isinstance(data.get("check"), dict) else {}
         check_words = []
         for raw in check.get("words") or []:

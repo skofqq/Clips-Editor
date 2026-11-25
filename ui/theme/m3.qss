@@ -283,6 +283,16 @@ QListWidget::item:selected, QTreeWidget::item:selected, QListView::item:selected
     background: @ACCENT_CONTAINER@; color: @ON_ACCENT_CONTAINER@;
 }
 QTableWidget::item, QTableView::item { padding: 4px 6px; }
+/* A tree row is one even band across its columns and the expand arrow, not a pill per cell. */
+QTreeWidget::item, QTreeView::item { border-radius: 0; }
+QTreeWidget::branch:hover, QTreeView::branch:hover { background: @SUBTLE_HOVER@; }
+QTreeWidget::branch:selected, QTreeView::branch:selected { background: @ACCENT_CONTAINER@; }
+/* In-place editing of a row: a compact opaque field that fits the row and hides the old text. */
+QTreeWidget QLineEdit, QTreeView QLineEdit, QListWidget QLineEdit, QTableView QLineEdit, QTableWidget QLineEdit {
+    background: @INPUT_FOCUSED@; border: 1px solid @ACCENT@; border-radius: 6px;
+    padding: 0 6px; margin: 0; min-height: 0;
+}
+
 QTableWidget::item:selected, QTableView::item:selected { background: @ACCENT_CONTAINER@; color: @ON_ACCENT_CONTAINER@; }
 QTableWidget, QTableView { gridline-color: @DIVIDER@; }
 QHeaderView { background: transparent; }

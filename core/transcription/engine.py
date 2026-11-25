@@ -29,7 +29,7 @@ import numpy as np
 from core.media.errors import MediaError
 from core.media.ffmpeg_locator import no_window_kwargs
 from core.timeline.timebase import seconds_to_us
-from core.transcription.model import SEGMENT_TIMING, WORD_TIMING, Segment, Transcript, Word
+from core.transcription.model import SEGMENT_TIMING, WORD_TIMING, Segment, Transcript, Word, tame_stretched_words
 
 log = logging.getLogger(__name__)
 
@@ -365,7 +365,7 @@ def convert_segments(raw_segments, offset_us: int = 0) -> tuple[Segment, ...]:
             text = " ".join(w.text for w in words)
         if text:
             result.append(Segment(index, start, end, text, tuple(words)))
-    return tuple(result)
+    return tame_stretched_words(tuple(result))
 
 
 # ------------------------------------------------------------------ engine

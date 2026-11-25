@@ -686,3 +686,21 @@ def test_step_pill_follows_buttons_when_marks_appear(qapp):
     qapp.processEvents()
     assert bar.indicator.geometry() == bar.buttons[0].geometry()
     bar.close()
+
+
+def test_stretched_first_word_gets_a_believable_length():
+    # Whisper put «Она» at 24.58 s although it is said right before «скорее» at 37.49 s.
+    raw = [raw_seg(24.58, 38.2, " Она скорее всего", [(24.58, 37.4, " Она", 0.9), (37.49, 37.9, " скорее", 0.9),
+                                                       (37.91, 38.2, " всего", 0.9)])]
+    seg = convert_segments(raw)[0]
+    assert seg.words[0].end_us == 37_400_000
+    assert seg.words[0].start_us == 37_400_000 - 150_000 - 3 * 120_000
+    assert seg.start_us == seg.words[0].start_us and seg.words[1].start_us == 37_490_000
+    long_but_fine = convert_segments([raw_seg(1.0, 2.5, " Нееееееет", [(1.0, 2.5, " Нееееееет", 0.9)])])[0]
+    assert long_but_fine.words[0].start_us == 1_000_000  # 9 letters may last 1.5 s
+    # Clips transcribed before the fix are repaired when they are opened.
+    stretched = Transcript("ru", 1.0, "m", (Segment(1, 0, 10 * S, "Да ну", (
+        Word(0, 9 * S, "Да"), Word(9 * S, 10 * S, "ну"))),))
+    loaded = Transcript.from_dict(stretched.to_dict())
+    assert loaded.segments[0].words[0].start_us == 9 * S - 390_000
+    assert loaded.segments[0].start_us == 9 * S - 390_000
