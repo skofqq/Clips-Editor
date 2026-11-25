@@ -84,8 +84,10 @@ from ui.metadata.youtube_preview import YouTubePreview
 from ui.subtitles.subtitles_panel import SubtitlesPanel
 from ui.theme import icon, palette, windows
 from ui.twitch.import_dialog import TwitchImportDialog
+from ui.twitch.vod_dialog import VodDownloadDialog
 from core.twitch.autofill import autofill
 from core.twitch.clip import parse_clip_url
+from core.twitch.vod import parse_vod_link
 from ui.widgets.card import Card
 from ui.youtube.accounts_dialog import YouTubeAccountsDialog
 from ui.youtube.analytics_panel import AnalyticsPanel
@@ -138,6 +140,8 @@ class MainWindow(QMainWindow):
         self.project_path: Path | None = None
         self._dirty = False
         self._pending: set[Worker] = set()
+        self.vod_dialog: VodDownloadDialog | None = None
+        self._vod_fill: dict[Path, object] = {}  # downloaded stream parts → Twitch facts to fill when opened
         self.pool = QThreadPool.globalInstance()
 
         self.setWindowTitle(APP_NAME)
@@ -651,6 +655,9 @@ class MainWindow(QMainWindow):
         self.act_import = QAction("&Import Video…", self, shortcut=QKeySequence("Ctrl+I"))
         self.act_twitch = QAction("Import from &Twitch…", self, shortcut=QKeySequence("Ctrl+Shift+I"))
         self.act_twitch.setToolTip("Download a Twitch clip by its link and fill in the metadata (Ctrl+Shift+I)")
+        self.act_vod = QAction("Download Stream &Recording (VOD)…", self, shortcut=QKeySequence("Ctrl+Shift+D"))
+        self.act_vod.setToolTip("Download a part of a Twitch stream recording (e.g. 1:20:00 – 2:00:00) "
+                                "with its chat (Ctrl+Shift+D)")
         self.act_export = QAction("&Export Video…", self, shortcut=QKeySequence("Ctrl+E"))
         self.act_export.setToolTip("Render the Short to MP4 / MKV (Ctrl+E)")
         self.act_upload = QAction("&Upload to YouTube…", self, shortcut=QKeySequence("Ctrl+U"))
@@ -719,6 +726,7 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.act_import)
         file_menu.addAction(self.act_twitch)
+        file_menu.addAction(self.act_vod)
         file_menu.addAction(self.act_export)
         file_menu.addAction(self.act_upload)
         self.recent_menu = file_menu.addMenu("Recent Files")
@@ -817,6 +825,7 @@ class MainWindow(QMainWindow):
         self.timeline.changed.connect(self._refresh_steps)
         self.act_import.triggered.connect(self.choose_files)
         self.act_twitch.triggered.connect(lambda: self.import_from_twitch())
+        self.act_vod.triggered.connect(lambda: self.download_vod())
         self.act_export.triggered.connect(self.export_video)
         self.act_upload.triggered.connect(lambda: self.upload_to_youtube())
         self.act_youtube_accounts.triggered.connect(self.manage_youtube_accounts)
@@ -1080,6 +1089,9 @@ class MainWindow(QMainWindow):
         self.history = self.session.history_for(info.path if info is not None else None, self._edit_state())
         if hasattr(self, "highlights"):
             self.highlights.show_for_current()
+        facts = self._vod_fill.pop(Path(info.path), None) if info is not None else None
+        if facts is not None:
+            self.twitch_link.apply(facts)
         self._update_edit_actions()
         view = self.timeline_panel.view
         view.set_waveform(None)
@@ -1911,6 +1923,8 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- twitch
     def import_from_twitch(self, url: str = "", ydl_factory=None) -> bool:
+        if url and parse_clip_url(url) is None and parse_vod_link(url) is not None:
+            return self.download_vod(url, ydl_factory=ydl_factory) is not None
         dialog = TwitchImportDialog(self.config.twitch_folder, self.config.twitch_autofill,
                                     self.config.twitch_add_to_library, url, self, ydl_factory=ydl_factory)
         accepted = dialog.exec() == dialog.DialogCode.Accepted
@@ -1923,6 +1937,53 @@ class MainWindow(QMainWindow):
         path, clip = dialog.result
         self.apply_twitch_result(path, clip, dialog.autofill, dialog.add_to_library)
         return True
+
+    def download_vod(self, url: str = "", **fakes) -> VodDownloadDialog | None:
+        """File → Download Stream Recording: a window that stays open while the part downloads."""
+        dialog = self.vod_dialog
+        if dialog is not None and dialog.isVisible():
+            if url and not dialog.busy:
+                dialog.url_edit.setText(url)
+            dialog.raise_()
+            dialog.activateWindow()
+            return dialog
+        if self.ffmpeg is None:
+            QMessageBox.warning(self, "FFmpeg not found",
+                                "FFmpeg is needed to download stream recordings. See Help → FFmpeg.")
+            return None
+        c = self.config
+        dialog = VodDownloadDialog(folder=c.vod_folder, quality=c.vod_quality, chat=c.vod_chat, fill=c.vod_fill,
+                                   url=url, ffmpeg=self.ffmpeg.ffmpeg, cache_dir=c.cache_dir, parent=self, **fakes)
+        dialog.downloaded.connect(self._vod_downloaded)
+        dialog.finished.connect(lambda _code, d=dialog: self._vod_dialog_closed(d))
+        self.vod_dialog = dialog
+        dialog.show()
+        return dialog
+
+    def _vod_dialog_closed(self, dialog: VodDownloadDialog) -> None:
+        c = self.config
+        c.vod_folder = dialog.folder
+        if dialog.quality:
+            c.vod_quality = dialog.quality
+        c.vod_chat = dialog.chat_check.isChecked()
+        c.vod_fill = dialog.fill_check.isChecked()
+        if self.vod_dialog is dialog:
+            self.vod_dialog = None
+        dialog.deleteLater()
+
+    def _vod_downloaded(self, result, facts, notes) -> None:
+        """A part of a stream recording is on disk: add it to Media (it opens) and
+        fill the Data page from Twitch once it is shown."""
+        if facts is not None:
+            self._vod_fill[Path(result.path)] = facts
+        if any(Path(m.path) == Path(result.path) for m in self.media_panel.all_media()):
+            self.media_panel.select_media(Path(result.path))
+        else:
+            self.import_files([str(result.path)])
+        message = f"Downloaded {result.path.name}"
+        if notes:
+            message += " • " + " ".join(notes)
+        self.statusBar().showMessage(message, 15000)
 
     def apply_twitch_result(self, path, clip, fill: bool, add_to_library: bool) -> None:
         """Import the downloaded clip and fill the project's metadata."""
@@ -2592,13 +2653,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- events
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
         mime = event.mimeData()
-        if mime.hasUrls() or (mime.hasText() and parse_clip_url(mime.text())):
+        if mime.hasUrls() or (mime.hasText() and (parse_clip_url(mime.text()) or ("twitch.tv" in mime.text().lower() and parse_vod_link(mime.text())))):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
         mime = event.mimeData()
-        links = [u.toString() for u in mime.urls() if not u.isLocalFile() and parse_clip_url(u.toString())]
-        if not links and mime.hasText() and parse_clip_url(mime.text()):
+        def twitch(text: str) -> bool:
+            return bool(parse_clip_url(text) or ("twitch.tv" in text.lower() and parse_vod_link(text)))
+
+        links = [u.toString() for u in mime.urls() if not u.isLocalFile() and twitch(u.toString())]
+        if not links and mime.hasText() and twitch(mime.text()):
             links = [mime.text()]
         if links:  # a clip link dragged from the browser
             self.import_from_twitch(links[0])
@@ -2626,6 +2690,13 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             event.ignore()
             return
+        if self.vod_dialog is not None and self.vod_dialog.busy:
+            answer = QMessageBox.question(self, APP_NAME, "A stream recording is still downloading. Stop it and quit?\n"
+                                          "The pieces downloaded so far are kept for next time.")
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.vod_dialog._task.cancel()
         for form, stop in ((self.export_widget, "cancel_render"), (self.upload_widget, "cancel_upload"),
                            (self.render_queue, "stop")):
             if form is not None and form.busy:

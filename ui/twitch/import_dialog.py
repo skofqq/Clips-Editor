@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from core.twitch.clip import ClipLink, TwitchClip, parse_clip_url
 from core.twitch.download import download_clip, fetch_info
+from core.twitch.vod import parse_vod_link
 from core.workers import CancellableTask
 from ui.widgets.m3_progress import WavyProgressBar
 
@@ -129,7 +130,10 @@ class TwitchImportDialog(QDialog):
         text = self.url_edit.text().strip()
         ok = parse_clip_url(text) is not None
         self.import_button.setEnabled(ok and self._task is None)
-        if text and not ok:
+        if text and not ok and parse_vod_link(text) is not None:
+            self.status.setText("This is a stream recording. Use File → Download Stream Recording (VOD)… "
+                                "to download a part of it.")
+        elif text and not ok:
             self.status.setText("This does not look like a Twitch clip link.")
         elif self._task is None:
             self.status.clear()

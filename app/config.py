@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "Twitch Shorts Studio"
 APP_DIR_NAME = "TwitchShortsStudio"
-APP_VERSION = "0.9.39"
+APP_VERSION = "0.9.40"
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +76,10 @@ class AppConfig:
     twitch_folder: str = ""  # where clips imported by link are saved ("" = Videos/Twitch Clips)
     twitch_autofill: bool = True
     twitch_add_to_library: bool = True
+    vod_folder: str = ""  # where parts of stream recordings are saved ("" = Videos/Twitch VODs)
+    vod_quality: str = ""  # "1080p60", "720p30", "Audio only"; "" = the best there is
+    vod_chat: bool = True  # also fetch the chat of the downloaded part for Highlights
+    vod_fill: bool = True  # fill streamer, game and date on the Data page when the file opens
     subtitle_emoji: bool = True  # False: the user switched subtitle emoji off; styles bring none
     subtitle_presets: dict = field(default_factory=dict)  # the user's caption styles: name → SubtitleStyle dict
     censor_defaults: dict = field(default_factory=dict)  # last Censor padding / mode / categories (CensorSettings)
@@ -127,7 +131,7 @@ class AppConfig:
             "ffmpeg_dir", "last_import_dir", "project_dir", "window_geometry", "window_state",
             "transcribe_vocabulary", "transcribe_model", "transcribe_language", "export_dir",
             "youtube_active", "transcribe_vad", "transcribe_custom_model", "transcribe_rules", "twitch_folder",
-            "update_skipped",
+            "update_skipped", "vod_folder", "vod_quality",
         ):
             if isinstance(raw.get(key), str):
                 setattr(config, key, raw[key])
@@ -138,7 +142,7 @@ class AppConfig:
         for key in ("transcribe_slang", "transcribe_clean_audio", "transcribe_accurate", "mica",
                     "transcribe_separate_voice", "transcribe_refine_timing", "transcribe_cross_check", "transcribe_capitalise",
                     "autosave_enabled", "twitch_autofill", "twitch_add_to_library", "subtitle_emoji", "update_check",
-                    "metadata_carry_over"):
+                    "metadata_carry_over", "vod_chat", "vod_fill"):
             if isinstance(raw.get(key), bool):
                 setattr(config, key, raw[key])
         minutes = raw.get("autosave_minutes")

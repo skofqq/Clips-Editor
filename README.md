@@ -248,7 +248,15 @@ Transcript panel; it checks for cuBLAS/cuDNN before touching the GPU.
 The **Highlights** panel finds the moments worth a Short. Nothing is cut
 until you decide.
 
-1. Open the long clip or the stream recording. **Length** switches to
+1. Open the long clip or the stream recording. To get a part of a
+   recording straight from Twitch use **File → Download Stream Recording
+   (VOD)…** (Ctrl+Shift+D): paste the `twitch.tv/videos/…` link, write the
+   part (e.g. from `1:20:00` to `2:00:00`; empty end = to the end), pick a
+   quality. Only that part is downloaded (in Twitch's 10-second pieces,
+   several at once; Cancel keeps the pieces and Download continues from
+   them), its chat is fetched for Highlights and, when the file opens, the
+   Data page gets the streamer, game and date. Sub-only recordings can't be
+   downloaded. **Length** switches to
    *Shorts of about 30 s* for clips longer than 3 minutes (20, 45 and
    60 s are there too; *Short moments* marks just a few seconds).
 2. Optional, but it helps a lot: **Twitch chat → From Twitch…** downloads the
