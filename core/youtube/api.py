@@ -72,6 +72,8 @@ class UploadResult:
     upload_status: str
     captions: str = ""  # "" = not asked, "added", or why they could not be added
     thumbnail: str = ""  # "" = not asked, "set", or why it could not be set
+    playlist: str = ""  # "" = not asked, "added", "created" (new playlist), or why it was not added
+    playlist_title: str = ""
 
     @property
     def url(self) -> str:
@@ -110,8 +112,9 @@ def _error_from(status: int, raw: bytes) -> YouTubeError:
         return YouTubeAuthError("YouTube sign-in expired. Reconnect the account.", status, reason)
     if status == 403 and (reason in ("insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT")
                           or "insufficient authentication scopes" in message.lower()):
-        return YouTubeAuthError("This account was connected without permission to add captions. "
-                                "Open Accounts…, reconnect the channel and allow managing your YouTube videos.",
+        return YouTubeAuthError("This account was connected without permission to manage videos (captions, "
+                                "playlists). Open Accounts…, reconnect the channel and allow managing your "
+                                "YouTube videos.",
                                 status, "insufficientPermissions")
     if status == 403 and "thumbnail" in message.lower():
         return YouTubeError("YouTube allows custom thumbnails only on verified channels. Verify the channel "
@@ -163,6 +166,36 @@ class YouTubeClient:
             thumb = (thumbs.get("default") or thumbs.get("medium") or {}).get("url", "")
             channels.append(Channel(item["id"], snippet.get("title", ""), snippet.get("customUrl", ""), thumb))
         return channels
+
+    # ------------------------------------------------------------ playlists
+    def my_playlists(self) -> list[tuple[str, str]]:
+        """(id, title) of the channel's playlists. 1 quota unit per 50 playlists."""
+        found: list[tuple[str, str]] = []
+        token = ""
+        for _ in range(40):  # 2000 playlists is plenty
+            url = f"{API_URL}/playlists?part=snippet&mine=true&maxResults=50"
+            if token:
+                url += f"&pageToken={urllib.parse.quote(token)}"
+            payload = self._call("GET", url)
+            for item in payload.get("items") or []:
+                found.append((str(item.get("id", "")), str((item.get("snippet") or {}).get("title", ""))))
+            token = str(payload.get("nextPageToken") or "")
+            if not token:
+                break
+        return found
+
+    def create_playlist(self, title: str, description: str = "", privacy: str = "public") -> str:
+        """New playlist on the channel; returns its id. 50 quota units."""
+        body = {"snippet": {"title": title, "description": description},
+                "status": {"privacyStatus": privacy}}
+        payload = self._call("POST", f"{API_URL}/playlists?part=snippet,status", body)
+        return str(payload.get("id", ""))
+
+    def add_to_playlist(self, playlist_id: str, video_id: str) -> None:
+        """Put the video at the end of the playlist. 50 quota units."""
+        body = {"snippet": {"playlistId": playlist_id,
+                            "resourceId": {"kind": "youtube#video", "videoId": video_id}}}
+        self._call("POST", f"{API_URL}/playlistItems?part=snippet", body)
 
     # ------------------------------------------------------------ upload
     def start_upload(self, path: Path, metadata: VideoMetadata) -> str:

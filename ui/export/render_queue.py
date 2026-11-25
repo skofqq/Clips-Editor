@@ -44,6 +44,7 @@ class UploadPlan:
     captions_language: str = ""
     thumbnail: object = None  # callable making the cover's JPEG bytes, or None
     client: object = None  # YouTubeClient for the channel
+    playlist: str = ""  # the streamer's playlist to add the video to ("" = none)
     result: object = None  # UploadResult once uploaded
 
 

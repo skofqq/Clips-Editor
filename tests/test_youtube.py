@@ -48,6 +48,9 @@ class FakeGoogle:
         self.captions_scope_missing = False
         self.thumbnails: list = []
         self.thumbnail_forbidden = False
+        self.playlists: list[dict] = []  # {"id", "title", "privacy"}
+        self.playlist_items: list[tuple[str, str]] = []  # (playlist id, video id)
+        self.playlist_calls: list[str] = []
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -109,6 +112,22 @@ class FakeGoogle:
                     assert "multipart/related" in self.headers["Content-Type"]
                     fake.captions.append(self._body().decode("utf-8"))
                     return self._send(200, {"id": "cap1"})
+                if url.path in ("/youtube/v3/playlists", "/youtube/v3/playlistItems"):
+                    if not self._authorized():
+                        return self._send(401, {"error": {"code": 401}})
+                    body = json.loads(self._body())
+                    fake.playlist_calls.append("POST " + url.path.rsplit("/", 1)[1])
+                    if url.path.endswith("/playlists"):
+                        new = {"id": f"PL{len(fake.playlists) + 1}", "title": body["snippet"]["title"],
+                               "privacy": body["status"]["privacyStatus"]}
+                        fake.playlists.append(new)
+                        return self._send(200, {"id": new["id"]})
+                    snippet = body["snippet"]
+                    if not any(p["id"] == snippet["playlistId"] for p in fake.playlists):
+                        return self._send(404, {"error": {"code": 404, "message": "Playlist not found.",
+                                                          "errors": [{"reason": "playlistNotFound"}]}})
+                    fake.playlist_items.append((snippet["playlistId"], snippet["resourceId"]["videoId"]))
+                    return self._send(200, {"id": "item1"})
                 if url.path == "/upload":
                     if not self._authorized():
                         return self._send(401, {"error": {"code": 401, "message": "Invalid Credentials"}})
@@ -129,6 +148,16 @@ class FakeGoogle:
                     return self._send(200, {"items": [{"id": "UC123", "snippet": {
                         "title": "Skof Clips", "customUrl": "@skofclips",
                         "thumbnails": {"default": {"url": "http://example/avatar.jpg"}}}}]})
+                if url.path == "/youtube/v3/playlists":
+                    query = dict(urllib.parse.parse_qsl(url.query))
+                    fake.playlist_calls.append("GET playlists" + (" page2" if query.get("pageToken") else ""))
+                    assert query["mine"] == "true"
+                    items = [{"id": p["id"], "snippet": {"title": p["title"]}} for p in fake.playlists]
+                    if query.get("pageToken") == "next":  # second page holds the rest
+                        return self._send(200, {"items": items[1:]})
+                    if len(items) > 1:
+                        return self._send(200, {"items": items[:1], "nextPageToken": "next"})
+                    return self._send(200, {"items": items})
                 self._send(404, {})
 
             def do_PUT(self):
@@ -549,3 +578,69 @@ def test_upload_sets_thumbnail_and_explains_unverified_channel(google, tmp_path)
     google.thumbnail_forbidden = True
     result = _upload(client, video, meta, thumbnail=lambda: b"\xff\xd8jpeg")
     assert result.video_id == "vid42" and "verif" in result.thumbnail
+
+
+# ------------------------------------------------------------------ streamer playlists
+def test_playlist_name_from_streamer_profile():
+    from core.metadata.library import STREAMER, Library
+    from core.youtube.playlists import playlist_name
+
+    lib = Library(None)
+    streamer = lib.create(STREAMER, "sasavot")
+    assert playlist_name(streamer) == "sasavot"
+    assert playlist_name(None) == ""
+    from dataclasses import replace
+
+    named = lib.save(replace(streamer, playlist="  Клипы Сасавот "))
+    assert playlist_name(lib.get(STREAMER, named.id)) == "Клипы Сасавот"
+    off = lib.save(replace(named, playlist_off=True))
+    loaded = lib.get(STREAMER, off.id)
+    assert loaded.playlist_off is True and playlist_name(loaded) == ""
+
+
+def test_upload_finds_or_makes_the_streamer_playlist(google, tmp_path):
+    from ui.youtube.upload_dialog import _upload, playlist_text
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x" * 300_000)
+    client = YouTubeClient(lambda force: "access-1")
+    meta = VideoMetadata(title="t")
+    result = _upload(client, video, meta, playlist="sasavot")
+    assert result.playlist == "created" and result.playlist_title == "sasavot"
+    assert google.playlists == [{"id": "PL1", "title": "sasavot", "privacy": "public"}]
+    assert google.playlist_items == [("PL1", "vid42")]
+    assert "Made the playlist" in playlist_text(result)
+
+    # The next clip goes into the same playlist (name matched without case), found on page 2.
+    google.playlists.insert(0, {"id": "PL0", "title": "Other", "privacy": "public"})
+    google.uploaded.clear()
+    google.playlist_calls.clear()
+    result = _upload(client, video, meta, playlist="SASAVOT ")
+    assert result.playlist == "added" and len(google.playlists) == 2
+    assert google.playlist_items[-1] == ("PL1", "vid42")
+    assert google.playlist_calls == ["GET playlists", "GET playlists page2", "POST playlistItems"]
+
+    # No playlist asked: nothing is called.
+    google.uploaded.clear()
+    google.playlist_calls.clear()
+    assert _upload(client, video, meta).playlist == "" and google.playlist_calls == []
+
+
+def test_playlist_failure_keeps_the_upload(google, tmp_path, monkeypatch):
+    from ui.youtube.upload_dialog import _upload, playlist_text
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x" * 300_000)
+    client = YouTubeClient(lambda force: "access-1")
+
+    def no_scope(*a, **k):
+        raise api_mod._error_from(403, json.dumps({"error": {"message": "Request had insufficient "
+                                                             "authentication scopes.",
+                                                             "errors": [{"reason": "insufficientPermissions"}]}})
+                                  .encode())
+
+    monkeypatch.setattr(YouTubeClient, "create_playlist", no_scope)
+    result = _upload(client, video, VideoMetadata(title="t"), playlist="sasavot")
+    assert result.video_id == "vid42"
+    assert "reconnect" in result.playlist.lower() and "playlists" in result.playlist
+    assert "was not added to the playlist" in playlist_text(result)

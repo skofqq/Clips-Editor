@@ -193,19 +193,25 @@ class FakeSocial:
 @pytest.fixture
 def fake_upload(monkeypatch):
     """Replace the network upload: returns what YouTube would."""
-    calls = []
+    class Calls(list):
+        playlists: list
+
+    calls = Calls()
 
     def upload(client, path, metadata, progress=None, cancel=None, captions_srt="", captions_language="",
-               thumbnail=None):
+               thumbnail=None, playlist=""):
         if client.fail:
             raise client.fail.pop(0)
         calls.append((str(path), metadata, captions_srt, thumbnail() if thumbnail else None))
+        upload.playlists.append(playlist)
         return UploadResult(f"vid{len(calls)}", "private",
                             metadata.publish_at.strftime("%Y-%m-%dT%H:%M:%SZ"), "uploaded")
 
+    upload.playlists = []
     import ui.youtube.upload_dialog as ud
 
     monkeypatch.setattr(ud, "_upload", upload)
+    calls.playlists = upload.playlists
     return calls
 
 
@@ -238,7 +244,8 @@ def test_panel_uploads_queue_with_publish_times(qapp, tmp_path, fake_upload):
         f = tmp_path / f"short{n}.mp4"
         f.write_bytes(b"video")
         files.append(f)
-        panel.add(sc.new_item(f, f"Short {n}", captions_srt="1\n00:00:00,000 --> 00:00:01,000\nhi\n"))
+        panel.add(sc.new_item(f, f"Short {n}", captions_srt="1\n00:00:00,000 --> 00:00:01,000\nhi\n",
+                              playlist="sasavot" if n == 0 else ""))
     panel.store.set_cover(panel.store.items[0].id, b"cover")
     assert panel.list.topLevelItemCount() == 2
     results = []
@@ -251,6 +258,8 @@ def test_panel_uploads_queue_with_publish_times(qapp, tmp_path, fake_upload):
     assert first[1].body()["status"]["publishAt"]
     assert first[2].startswith("1\n") and first[3] == b"cover" and second[3] is None
     assert second[1].publish_at > first[1].publish_at
+    assert fake_upload.playlists == ["sasavot", ""]
+    assert sc.QueueItem.from_dict(panel.store.items[0].to_dict()).playlist == "sasavot"
     assert all(i.status == sc.SCHEDULED and i.channel_title == "My channel" for i in panel.store.items)
     assert "goes public" in panel.status_label.text()
     _wait(qapp, lambda: not panel.busy)

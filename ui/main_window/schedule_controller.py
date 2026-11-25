@@ -37,7 +37,7 @@ class ScheduleController:
             entry["file"], meta.title.strip(), description=meta.description, tags=tuple(meta.tags),
             category_id=str(meta.category_id), language=meta.language or "", made_for_kids=meta.made_for_kids,
             captions_srt=entry.get("captions_srt", ""), captions_language=entry.get("captions_language", ""),
-            source=w._current_source(), variant=w._variant_text(),
+            playlist=entry.get("playlist", ""), source=w._current_source(), variant=w._variant_text(),
             channel_id=channel.id if channel else "", channel_title=channel.title if channel else "")
         item = self.panel.add(item)
         job = entry.get("thumbnail")

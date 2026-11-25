@@ -276,7 +276,7 @@ def _upload_one(client, item: sc.QueueItem, cover: Path | None, progress=None, c
 
     thumbnail = (lambda: cover.read_bytes()) if cover is not None else None
     return _upload(client, item.file, video_metadata(item), progress, cancel, item.captions_srt,
-                   item.captions_language, thumbnail)
+                   item.captions_language, thumbnail, playlist=item.playlist)
 
 
 class SchedulePanel(Card):

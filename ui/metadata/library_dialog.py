@@ -118,6 +118,10 @@ class EntityPage(QWidget):
         self.links_edit = QPlainTextEdit(self)
         self.links_edit.setPlaceholderText("One per line: Telegram | https://t.me/…")
         self.links_edit.setFixedHeight(70)
+        self.playlist_edit = QLineEdit(self)
+        self.playlist_edit.setToolTip("Uploaded clips of this streamer go to this playlist on your channel; "
+                                      "it is made the first time. Empty: the streamer's name.")
+        self.playlist_off_check = QCheckBox("Don't put this streamer's clips in a playlist", self)
         self.aliases_edit = QLineEdit(self)
         self.aliases_edit.setPlaceholderText("GTA 6, Grand Theft Auto VI")
         self.tags_edit = QLineEdit(self)
@@ -151,6 +155,9 @@ class EntityPage(QWidget):
             form.addRow("YouTube", self.youtube_edit)
             form.addRow("Twitch", self.twitch_edit)
             form.addRow("Other links", self.links_edit)
+        if kind == STREAMER:
+            form.addRow("YouTube playlist", self.playlist_edit)
+            form.addRow("", self.playlist_off_check)
         if kind == GAME:
             form.addRow("Other names", self.aliases_edit)
         if kind == TEMPLATE:
@@ -164,7 +171,7 @@ class EntityPage(QWidget):
             form.addRow("Own template", self.template_combo)
         used = {form.itemAt(i).widget() for i in range(form.count())}
         for widget in (self.username_edit, self.youtube_edit, self.twitch_edit, self.links_edit,
-                       self.aliases_edit, self.template_combo, self.title_edit, self.description_edit,
+                       self.playlist_edit, self.playlist_off_check, self.aliases_edit, self.template_combo, self.title_edit, self.description_edit,
                        self.hashtags_edit, self.category_combo, self.default_check, self.help_label,
                        self.preview_label):
             if widget not in used and not (kind == TEMPLATE and widget in (self.help_label, self.preview_label)):
@@ -212,8 +219,11 @@ class EntityPage(QWidget):
         self.save_button.clicked.connect(self.save_current)
         self.delete_button.clicked.connect(self.delete_current)
         for edit in (self.name_edit, self.username_edit, self.youtube_edit, self.twitch_edit, self.aliases_edit,
-                     self.tags_edit, self.title_edit, self.hashtags_edit):
+                     self.tags_edit, self.title_edit, self.hashtags_edit, self.playlist_edit):
             edit.textEdited.connect(self._edited)
+        self.name_edit.textChanged.connect(self._playlist_placeholder)
+        self.playlist_off_check.toggled.connect(self._edited)
+        self.playlist_off_check.toggled.connect(lambda off: self.playlist_edit.setEnabled(not off))
         for edit in (self.links_edit, self.description_edit):
             edit.textChanged.connect(self._edited)
         for combo in (self.template_combo, self.category_combo):
@@ -282,6 +292,10 @@ class EntityPage(QWidget):
         self.twitch_edit.setText(getattr(e, "twitch_url", ""))
         self.links_edit.setPlainText(_format_links(getattr(e, "social_links", ())))
         self.aliases_edit.setText(", ".join(getattr(e, "aliases", ())))
+        self.playlist_edit.setText(getattr(e, "playlist", ""))
+        self.playlist_off_check.setChecked(bool(getattr(e, "playlist_off", False)))
+        self.playlist_edit.setEnabled(not self.playlist_off_check.isChecked())
+        self._playlist_placeholder()
         self.tags_edit.setText(", ".join(getattr(e, "default_tags", ())))
         self.title_edit.setText(getattr(e, "title", ""))
         self.description_edit.setPlainText(getattr(e, "description", ""))
@@ -311,6 +325,9 @@ class EntityPage(QWidget):
                 twitch_url=self.twitch_edit.text().strip(),
                 social_links=_parse_links(self.links_edit.toPlainText()),
             )
+        if self.kind == STREAMER:
+            data.update(playlist=self.playlist_edit.text().strip(),
+                        playlist_off=self.playlist_off_check.isChecked())
         if self.kind == GAME:
             data["aliases"] = _split(self.aliases_edit.text())
         if self.kind == TEMPLATE:
@@ -324,6 +341,10 @@ class EntityPage(QWidget):
         if self.kind in (STREAMER, GAME, STREAM_TYPE):
             data["template_id"] = self.template_combo.currentData() or ""
         return entity_from_dict(self.kind, data)
+
+    def _playlist_placeholder(self, *args) -> None:
+        name = self.name_edit.text().strip()
+        self.playlist_edit.setPlaceholderText(f"{name} (the streamer's name)" if name else "The streamer's name")
 
     def _edited(self, *args) -> None:
         if self._loading or self._current is None:

@@ -78,6 +78,8 @@ class Person:
     social_links: tuple[tuple[str, str], ...] = ()  # (label, url)
     default_tags: tuple[str, ...] = ()
     template_id: str = ""  # streamer's own template, optional
+    playlist: str = ""  # YouTube playlist for this streamer's clips ("" = their name)
+    playlist_off: bool = False  # do not put this streamer's clips in a playlist
     kind: str = PARTICIPANT
 
     @property
@@ -171,6 +173,8 @@ def entity_from_dict(kind: str, data: dict) -> Entity:
             values[f.name] = str(values[f.name] or "")
     if "is_default" in names:
         values["is_default"] = bool(values.get("is_default"))
+    if "playlist_off" in names:
+        values["playlist_off"] = bool(values.get("playlist_off"))
     return cls(**values)
 
 

@@ -336,6 +336,14 @@ def test_library_dialog_edits_profiles_and_templates(qapp, lib, monkeypatch):
     s = lib.find(STREAMER, "sasavot")
     assert s.social_links == (("Telegram", "https://t.me/sasavot"), ("", "https://vk.com/x"))
     assert s.default_tags == ("sasavot", "clips") and page.list.count() == 1
+    assert s.playlist == "" and not s.playlist_off and "sasavot" in page.playlist_edit.placeholderText()
+    page.playlist_edit.setText("Клипы Сасавот")
+    page.playlist_off_check.setChecked(True)
+    assert not page.playlist_edit.isEnabled()
+    assert page.save_current()
+    s = lib.find(STREAMER, "sasavot")
+    assert (s.playlist, s.playlist_off) == ("Клипы Сасавот", True)
+    assert not dialog.pages[GAME].playlist_edit.isVisibleTo(dialog.pages[GAME])
 
     page.new_entry("SASAVOT")  # duplicate: refused with a message, nothing saved
     assert not page.save_current() and "already exists" in page.status.text()
@@ -406,6 +414,7 @@ def test_window_stores_metadata_and_prefills_upload(qapp, data_dir, ffmpeg_paths
     form = w.upload_widget
     assert w.page == PUBLISH and isinstance(form, upload_mod.UploadDialog) and not form.isWindow()
     assert form.title_edit.text() == "Танк | #sasavot on #Twitch"
+    assert form.playlist == "sasavot" and form.playlist_check.isChecked()  # the streamer's playlist
     # The chosen category is kept for the next upload, over the template's one.
     form.category_combo.setCurrentIndex(form.category_combo.findData("24"))
     assert w.config.youtube_defaults["category"] == "24"
@@ -440,3 +449,17 @@ def test_upload_dialog_uses_project_metadata(qapp, data_dir, tmp_path, ffmpeg_pa
                          {"tags": "old"}, metadata=ClipMetadata())
     assert plain.metadata().title == "clip" and plain.metadata().tags == ("old",)
     plain.close()
+
+    # The streamer's playlist: ticked by default, kept off once unticked, empty without a streamer.
+    named = UploadDialog(service, UploadHistory(tmp_path / "h.json"), rendered, ffmpeg_paths.ffprobe,
+                         {}, metadata=meta, playlist="sasavot")
+    assert named.playlist_check.isChecked() and "sasavot" in named.playlist_check.text()
+    assert named.queue_entry()["playlist"] == "sasavot"
+    named.playlist_check.setChecked(False)
+    assert named.chosen_playlist() == "" and named.defaults()["playlist"] is False
+    named.close()
+    off = UploadDialog(service, UploadHistory(tmp_path / "h.json"), rendered, ffmpeg_paths.ffprobe,
+                       {"playlist": False}, metadata=meta, playlist="sasavot")
+    assert not off.playlist_check.isChecked()
+    off.close()
+    assert not plain.playlist_check.isEnabled() and plain.chosen_playlist() == "" 

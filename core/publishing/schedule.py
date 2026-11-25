@@ -125,6 +125,7 @@ class QueueItem:
     made_for_kids: bool = False
     captions_srt: str = ""
     captions_language: str = ""
+    playlist: str = ""  # the streamer's playlist to add it to ("" = none)
     cover: str = ""  # JPEG file name in the covers folder ("" = none)
     source: str = ""  # the clip it was made from
     variant: str = ""  # kind of title and cover, for History

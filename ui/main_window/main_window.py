@@ -1452,6 +1452,7 @@ class MainWindow(QMainWindow):
             captions_language=self._captions_language(),
             thumbnail=self.thumbnails.job() if defaults.get("thumbnail", True) else None,
             client=self.youtube.client_for(channel.id),
+            playlist=self._streamer_playlist() if defaults.get("playlist", True) else "",
         )
 
     def _queued_upload_done(self, job) -> None:
@@ -1516,6 +1517,20 @@ class MainWindow(QMainWindow):
         self._show_upload_form(Path(path))
         self.set_page(PUBLISH)
 
+    def _streamer_playlist(self) -> str:
+        """The playlist for the Data page's streamer ("" = no streamer, or off in their profile)."""
+        from core.metadata.library import STREAMER
+        from core.youtube.playlists import playlist_name
+
+        streamer_id = self.project.metadata.selection.streamer_id
+        if not streamer_id:
+            return ""
+        try:
+            return playlist_name(self.metadata_panel.library.person(streamer_id, STREAMER))
+        except Exception as exc:  # noqa: BLE001 - a playlist is a convenience; never block uploads
+            log.warning("Streamer playlist: %s", exc)
+            return ""
+
     def _choose_upload_file(self) -> Path | None:
         start = self.config.export_dir or self.config.last_import_dir
         file, _ = QFileDialog.getOpenFileName(
@@ -1540,6 +1555,7 @@ class MainWindow(QMainWindow):
             captions=self.captions,
             captions_language=self._captions_language(),
             thumbnail=self.thumbnails.job,
+            playlist=self._streamer_playlist(),
         )
         form.embed()
         form.uploaded.connect(lambda result, f=form: self._upload_finished(f, result))
@@ -2669,4 +2685,4 @@ def _queued_upload(job, progress=None, cancel=None):
     plan = job.upload
     return _upload(plan.client, Path(job.output), plan.metadata, progress, cancel,
                    captions_srt=plan.captions_srt, captions_language=plan.captions_language,
-                   thumbnail=plan.thumbnail)
+                   thumbnail=plan.thumbnail, playlist=getattr(plan, "playlist", ""))
