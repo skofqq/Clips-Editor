@@ -30,7 +30,9 @@ def create_application(argv: list[str], theme: str = "dark", mica: bool = False)
     app = QApplication.instance() or QApplication(argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
-    app.setStyle("Fusion")
+    from ui.theme.style import AppStyle
+
+    app.setStyle(AppStyle())
     from ui.theme import icon
 
     app.setWindowIcon(icon("app"))

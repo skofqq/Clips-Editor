@@ -188,6 +188,11 @@ QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QDateTimeEdit:di
     background: @CONTROL_DISABLED@; border-color: @DIVIDER@; color: @TEXT_DISABLED@;
 }
 QLineEdit[frame="false"] { border: none; background: transparent; padding: 3px 2px; }
+/* The clear (✕) button and other icons inside a line edit: no button padding, so they sit centred. */
+QLineEdit QToolButton {
+    background: transparent; border: none; padding: 0; margin: 0; min-height: 0; border-radius: 9px;
+}
+QLineEdit QToolButton:hover { background: @CONTROL_HOVER@; }
 QAbstractSpinBox QLineEdit, QComboBox QLineEdit {
     border: none; background: transparent; padding: 0; margin: 0; min-height: 0; border-radius: 0;
 }

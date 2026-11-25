@@ -156,6 +156,7 @@ class VodDownloadDialog(QDialog):
         self.progress = WavyProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.hide()
+        layout.addSpacing(14)  # keep the wave clear of the checkboxes above
         layout.addWidget(self.progress)
         self.status = QLabel()
         self.status.setWordWrap(True)
