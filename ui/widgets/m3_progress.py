@@ -66,6 +66,7 @@ class WavyProgressBar(_Animated, QProgressBar):
         super().__init__(parent)
         self._init_animation()
         self.setTextVisible(False)
+        self.setProperty("wavy", True)  # m3.qss gives plain progress bars 6px; this one needs 16px
         self.setFixedHeight(16)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._shown = 0.0  # eased fraction actually drawn
@@ -78,12 +79,22 @@ class WavyProgressBar(_Animated, QProgressBar):
         return 0.0 if span <= 0 else (self.value() - self.minimum()) / span
 
     def _wave(self, path: QPainterPath, x0: float, x1: float, y: float, amplitude: float, phase: float) -> None:
-        step = 2.0
+        """A sine from x0 to x1 that flattens out over the last half wavelength, so it
+        meets the flat track (and its own start) smoothly instead of ending mid-swing."""
+        step = 1.0
+        ease = self.WAVELENGTH / 2
+
+        def at(x: float) -> float:
+            fade = min(1.0, (x - x0) / ease, (x1 - x) / ease) if x1 - x0 > 0 else 0.0
+            fade = max(0.0, fade)
+            fade = fade * fade * (3 - 2 * fade)  # smoothstep
+            return y + amplitude * fade * math.sin((x / self.WAVELENGTH) * 2 * math.pi - phase)
+
         x = x0
-        path.moveTo(x, y + amplitude * math.sin((x / self.WAVELENGTH) * 2 * math.pi - phase))
+        path.moveTo(x, at(x))
         while x < x1:
             x = min(x1, x + step)
-            path.lineTo(x, y + amplitude * math.sin((x / self.WAVELENGTH) * 2 * math.pi - phase))
+            path.lineTo(x, at(x))
 
     def paintEvent(self, event) -> None:  # noqa: N802
         p = QPainter(self)

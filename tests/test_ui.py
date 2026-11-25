@@ -384,3 +384,21 @@ def test_about_dialog_shows_version_and_developer(qapp, data_dir, ffmpeg_paths):
         dialog.close()
     finally:
         w.close()
+
+
+def test_wavy_bar_keeps_its_height_under_the_theme(qapp):
+    """m3.qss makes plain progress bars 6px tall; the wave would be cut flat in that."""
+    from ui.theme import stylesheet
+    from ui.widgets.m3_progress import ProgressCard
+
+    old = qapp.styleSheet()
+    qapp.setStyleSheet(stylesheet())
+    try:
+        card = ProgressCard("Rendering")
+        card.resize(600, 160)
+        card.show()
+        QApplication.processEvents()
+        assert card.bar.height() == 16
+        card.close()
+    finally:
+        qapp.setStyleSheet(old)
