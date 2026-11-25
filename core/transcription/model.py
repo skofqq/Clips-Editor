@@ -15,6 +15,7 @@ The model is immutable; edits return a new :class:`Transcript`.
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass, replace
 from typing import Any
@@ -65,21 +66,95 @@ def _tokens(text: str) -> list[str]:
     return _clean(text).split(" ") if _clean(text) else []
 
 
+def _key(text: str) -> str:
+    """A word compared loosely: case, ё/е and punctuation do not matter."""
+    return "".join(ch for ch in text.casefold().replace("ё", "е") if ch.isalnum())
+
+
+def _weight(text: str) -> int:
+    return max(1, sum(ch.isalnum() for ch in text))
+
+
+def spread(start_us: int, end_us: int, tokens: list[str], like: Word) -> list[Word]:
+    """``tokens`` sharing ``start_us``–``end_us`` by their number of letters.
+
+    Speaker, confidence and timing kind come from ``like``. Words without exact
+    timing all keep the whole span, like any approximate word.
+    """
+    if not like.exact:
+        return [replace(like, start_us=start_us, end_us=end_us, text=t) for t in tokens]
+    total = sum(_weight(t) for t in tokens)
+    span = max(0, end_us - start_us)
+    words, done, at = [], 0, start_us
+    for token in tokens:
+        done += _weight(token)
+        end = start_us + span * done // total
+        words.append(replace(like, start_us=at, end_us=end, text=token))
+        at = end
+    return words
+
+
+# An inserted word gets the pause next to it when the pause is at least this long
+# per word; otherwise it shares the time of the word next to it.
+_MIN_GAP_PER_WORD_US = 120_000
+
+
 def rewrite_words(segment: Segment, text: str) -> tuple[Word, ...]:
     """Words for ``segment`` after its text became ``text``.
 
-    If the number of words is unchanged, each word keeps its own timing
-    (a spelling fix keeps exact timestamps). Otherwise the alignment is
-    lost and every word gets the segment span with ``segment`` timing.
+    Words that stay the same keep their own timing. A changed stretch takes the time
+    of the words it replaces (split by letters), an inserted word takes the pause
+    next to it or shares the neighbouring word's time, and deleted words go away.
+    Only a segment without word timing at all gives every word the segment span.
     """
     tokens = _tokens(text)
-    if segment.words and len(tokens) == len(segment.words):
-        return tuple(replace(w, text=t) for w, t in zip(segment.words, tokens))
-    speakers = [w.speaker for w in segment.words if w.speaker >= 0]
-    speaker = max(set(speakers), key=speakers.count) if speakers else -1
-    return tuple(
-        Word(segment.start_us, segment.end_us, t, 0.0, SEGMENT_TIMING, speaker) for t in tokens
-    )
+    old = list(segment.words)
+    if not old:
+        return tuple(
+            Word(segment.start_us, segment.end_us, t, 0.0, SEGMENT_TIMING, -1) for t in tokens
+        )
+    matcher = difflib.SequenceMatcher(None, [_key(w.text) for w in old], [_key(t) for t in tokens],
+                                      autojunk=False)
+    # First pass: kept and replaced words get times, inserted ones are plain strings.
+    items: list[Word | str] = []
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        span, new = old[i1:i2], tokens[j1:j2]
+        if op == "equal" or (op == "replace" and len(span) == len(new)):
+            items.extend(replace(w, text=t) for w, t in zip(span, new))
+        elif op == "replace":
+            like = span[0] if all(w.exact for w in span) else replace(span[0], timing=SEGMENT_TIMING)
+            items.extend(spread(span[0].start_us, span[-1].end_us, new, like))
+        elif op == "insert":
+            items.extend(new)
+    # Second pass: each run of inserted words goes into the pause beside it, or
+    # shares the time of the word before it (else after it).
+    out: list[Word] = []
+    i = 0
+    while i < len(items):
+        if isinstance(items[i], Word):
+            out.append(items[i])
+            i += 1
+            continue
+        j = i
+        while j < len(items) and isinstance(items[j], str):
+            j += 1
+        inserted = [str(t) for t in items[i:j]]
+        before = out[-1] if out else None
+        after = items[j] if j < len(items) else None
+        gap_start = before.end_us if before else segment.start_us
+        gap_end = after.start_us if after else segment.end_us
+        if gap_end - gap_start >= _MIN_GAP_PER_WORD_US * len(inserted):
+            out.extend(spread(gap_start, gap_end, inserted, before or after))
+            i = j
+        elif before is not None:
+            out.pop()
+            out.extend(spread(before.start_us, before.end_us, [before.text] + inserted, before))
+            i = j
+        else:  # inserted at the very start with no pause: share the first word
+            assert isinstance(after, Word)
+            out.extend(spread(after.start_us, after.end_us, inserted + [after.text], after))
+            i = j + 1
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -140,14 +215,16 @@ class Transcript:
         return self._replace_segment(updated)
 
     def with_word_text(self, segment_id: int, index: int, text: str) -> "Transcript":
+        """Change one word. Several words split its time by letters; empty deletes it."""
         segment = self.segment(segment_id)
-        text = _clean(text)
-        if segment is None or not 0 <= index < len(segment.words) or not text or " " in text:
+        if segment is None or not 0 <= index < len(segment.words):
             return self
-        if segment.words[index].text == text:
+        tokens = _tokens(text)
+        word = segment.words[index]
+        if tokens == [word.text] or (not tokens and len(segment.words) == 1):
             return self
         words = list(segment.words)
-        words[index] = replace(words[index], text=text)
+        words[index:index + 1] = spread(word.start_us, word.end_us, tokens, word)
         updated = replace(segment, words=tuple(words), text=" ".join(w.text for w in words), edited=True)
         return self._replace_segment(updated)
 

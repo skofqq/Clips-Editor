@@ -15,6 +15,7 @@ class TranscriptController(QObject):
         super().__init__(parent)
         self._transcript: Transcript | None = None
         self.last_change_key: object = None
+        self.last_error = ""  # why the last edit was not taken ("" = nothing to say)
 
     @property
     def transcript(self) -> Transcript | None:
@@ -29,6 +30,7 @@ class TranscriptController(QObject):
         return True
 
     def edit_segment_text(self, segment_id: int, text: str) -> bool:
+        self.last_error = ""
         t = self._transcript
         seg = t.segment(segment_id) if t is not None else None
         if seg is None or not self.set_transcript(t.with_segment_text(segment_id, text)):
@@ -37,11 +39,16 @@ class TranscriptController(QObject):
         return True
 
     def edit_word_text(self, segment_id: int, index: int, text: str) -> bool:
+        """Change one word; "two words" split its time, an empty text deletes it."""
+        self.last_error = ""
         t = self._transcript
         seg = t.segment(segment_id) if t is not None else None
         if seg is None or not 0 <= index < len(seg.words):
             return False
         old = seg.words[index].text
+        if not text.strip() and len(seg.words) == 1:
+            self.last_error = "This is the only word of the phrase. To remove it, clear the phrase line instead."
+            return False
         if not self.set_transcript(t.with_word_text(segment_id, index, text)):
             return False
         self.corrected.emit(old, text)

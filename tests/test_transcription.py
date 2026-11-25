@@ -77,19 +77,65 @@ def test_editing_keeps_timing_when_word_count_matches():
     assert seg.has_word_timing and seg.words[1].text == "ребята!!"
     assert seg.words[1].start_us == 2_700_000
 
-    rewritten = t.with_segment_text(3, "It was totally unexpected")
-    seg = rewritten.segment(3)
-    assert not seg.has_word_timing
+    rewritten = t.with_segment_text(2, "Сейчас я покажу момент")  # no word timing to keep
+    seg = rewritten.segment(2)
     assert [w.timing for w in seg.words] == [SEGMENT_TIMING] * 4
     assert all((w.start_us, w.end_us) == (seg.start_us, seg.end_us) for w in seg.words)
 
     word_fix = t.with_word_text(3, 2, "unexpected?")
     assert word_fix.segment(3).text == "That was unexpected?"
     assert word_fix.segment(3).words[2].exact
-    assert t.with_word_text(3, 2, "two words") is t
+    assert t.with_word_text(3, 2, "unexpected!") is t
     assert t.with_word_text(3, 9, "x") is t
     assert t.with_segment_text(1, "Привет, ребята!") is t
     assert t.with_segment_text(99, "x") is t
+
+
+def test_word_line_takes_several_words_or_none():
+    t = sample_transcript()
+    two = t.with_word_text(3, 2, "  totally   unexpected!")  # 7.8–8.8 s split by letters
+    seg = two.segment(3)
+    assert seg.text == "That was totally unexpected!" and seg.edited and seg.has_word_timing
+    assert [(w.text, w.start_us, w.end_us) for w in seg.words[2:]] == [
+        ("totally", 7_800_000, 8_211_764), ("unexpected!", 8_211_764, 8_800_000)]
+    gone = t.with_word_text(3, 1, "")
+    assert gone.segment(3).text == "That unexpected!" and gone.segment(3).has_word_timing
+    only = t.with_segment_text(3, "Wow")
+    assert only.with_word_text(3, 0, " ") is only  # the last word of a phrase stays
+
+
+def test_phrase_rewrite_keeps_timing_of_untouched_words():
+    t = sample_transcript()
+    seg = t.with_segment_text(3, "That was totally unexpected!").segment(3)
+    assert seg.has_word_timing
+    # "That" and "was" keep their times; "totally" shares "was" (no pause before "unexpected")
+    assert [(w.text, w.start_us, w.end_us) for w in seg.words] == [
+        ("That", 7_230_000, 7_500_000), ("was", 7_500_000, 7_590_000),
+        ("totally", 7_590_000, 7_800_000), ("unexpected!", 7_800_000, 8_800_000)]
+
+    seg = t.with_segment_text(3, "that one was UNEXPECTED").segment(3)  # case and ! do not matter
+    assert [w.text for w in seg.words] == ["that", "one", "was", "UNEXPECTED"]
+    assert seg.words[3].start_us == 7_800_000 and seg.words[2].end_us == 7_800_000
+
+    seg = t.with_segment_text(3, "That unexpected!").segment(3)  # a deleted word goes away
+    assert [(w.text, w.start_us) for w in seg.words] == [("That", 7_230_000), ("unexpected!", 7_800_000)]
+
+    seg = t.with_segment_text(3, "That was a big surprise").segment(3)  # a changed stretch
+    assert seg.has_word_timing and seg.words[1].start_us == 7_500_000
+    assert [w.text for w in seg.words[2:]] == ["a", "big", "surprise"]
+    assert seg.words[2].start_us == 7_800_000 and seg.words[-1].end_us == 8_800_000
+
+    seg = t.with_segment_text(1, "Ну привет, ребята!").segment(1)  # no pause: shares the first word
+    assert [(w.text, w.start_us, w.end_us) for w in seg.words[:2]] == [
+        ("Ну", 2_120_000, 2_240_000), ("привет,", 2_240_000, 2_600_000)]
+    paused = Transcript("ru", 1.0, "m", (Segment(1, 0, 3 * S, "раз три", (
+        Word(0, 1 * S, "раз"), Word(2 * S, 3 * S, "три"))),))
+    seg = paused.with_segment_text(1, "раз два три").segment(1)  # fills the pause
+    assert [(w.text, w.start_us, w.end_us) for w in seg.words] == [
+        ("раз", 0, S), ("два", S, 2 * S), ("три", 2 * S, 3 * S)]
+    seg = t.with_segment_text(1, "Привет, ну ребята!").segment(1)  # 0.1 s pause is too short
+    assert [(w.text, w.start_us) for w in seg.words] == [
+        ("Привет,", 2_120_000), ("ну", 2_120_000 + 480_000 * 6 // 8), ("ребята!", 2_700_000)]
 
 
 def test_transcript_roundtrip_and_project(tmp_path):
@@ -328,9 +374,17 @@ def test_panel_lists_seeks_and_edits(qapp):
     item = panel.tree.topLevelItem(2).child(2)
     item.setText(1, "unexpected?")
     assert c.transcript.segment(3).text == "That was unexpected?"
-    # An invalid word edit is reverted.
+    # Two words in one word line split its time; an empty line deletes the word.
+    panel.tree.topLevelItem(2).child(2).setText(1, "totally unexpected?")
+    assert c.transcript.segment(3).text == "That was totally unexpected?"
+    assert c.transcript.segment(3).has_word_timing
+    panel.tree.topLevelItem(2).child(2).setText(1, "")
+    assert c.transcript.segment(3).text == "That was unexpected?"
+    # An edit that can't be taken is reverted and says why.
+    c.edit_segment_text(3, "unexpected")
     panel.tree.topLevelItem(2).child(0).setText(1, "")
-    assert panel.tree.topLevelItem(2).child(0).text(1) == "That"
+    assert panel.tree.topLevelItem(2).child(0).text(1) == "unexpected"
+    assert "only word" in c.last_error
 
     panel.search.setText("unexpected")
     assert [panel.tree.topLevelItem(i).isHidden() for i in range(3)] == [True, True, False]
@@ -618,3 +672,17 @@ def test_russian_model_loads_from_its_repository(fake_whisper, tmp_path, monkeyp
     panel.model_combo.setCurrentIndex(panel.model_combo.findData("large-v3-russian"))
     assert panel.options().model == "large-v3-russian" and "Russian" in panel.model_combo.toolTip()
     panel.deleteLater()
+
+
+def test_step_pill_follows_buttons_when_marks_appear(qapp):
+    from ui.main_window.pages import PageBar
+
+    bar = PageBar()
+    bar.resize(1000, 48)
+    bar.show()
+    qapp.processEvents()
+    bar.set_done(0, True)  # "✓" widens the buttons and the centred row shifts
+    bar.set_done(1, True)
+    qapp.processEvents()
+    assert bar.indicator.geometry() == bar.buttons[0].geometry()
+    bar.close()

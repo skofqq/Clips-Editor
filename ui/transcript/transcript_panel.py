@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QStackedWidget,
     QToolButton,
+    QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -581,7 +582,12 @@ class TranscriptPanel(QWidget):
         else:
             changed = self.controller.edit_word_text(seg_id, item.data(0, ROLE_WORD), text)
         if not changed:
-            self.rebuild()  # restore the stored text (e.g. empty or invalid edit)
+            # Say why instead of quietly putting the old text back.
+            error = self.controller.last_error
+            spot = self.tree.viewport().mapToGlobal(self.tree.visualItemRect(item).bottomLeft())
+            self.rebuild()  # restore the stored text
+            if error:
+                QToolTip.showText(spot, error, self.tree)
 
 
 __all__ = ["TranscriptPanel", "QFont"]

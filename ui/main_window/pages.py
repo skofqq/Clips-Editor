@@ -9,7 +9,7 @@ the other pages fill the window and hide the editor's docks.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRect, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -75,6 +75,7 @@ class PageBar(QWidget):
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             button.setToolTip(hint)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.installEventFilter(self)  # keep the pill on it when it moves or resizes
             self.group.addButton(button, index)
             self.buttons.append(button)
             row.addWidget(button)
@@ -114,6 +115,18 @@ class PageBar(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._move_indicator(False)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        # A "✓" makes buttons wider and the centred row shifts: the pill follows
+        # the active button, also mid-animation.
+        if (event.type() in (QEvent.Type.Move, QEvent.Type.Resize) and self.buttons
+                and obj is self.buttons[self.current()]):
+            target = self._indicator_rect()
+            if self._indicator_anim.state() == QAbstractAnimation.State.Running:
+                self._indicator_anim.setEndValue(target)
+            elif not target.isEmpty():
+                self.indicator.setGeometry(target)
+        return super().eventFilter(obj, event)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
