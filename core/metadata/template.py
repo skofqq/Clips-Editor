@@ -21,7 +21,7 @@ SECTION = re.compile(r"\[\[(.*?)\]\]", re.DOTALL)
 _OPEN, _CLOSE = "\x00", "\x01"
 
 BUILTIN_VARIABLES = (
-    "streamer", "streamer_username", "streamer_channel_url", "streamer_twitch_url", "game", "stream_type",
+    "streamer", "streamer_username", "streamer_hashtag", "streamer_channel_url", "streamer_twitch_url", "game", "stream_type",
     "participants", "participants_links", "participants_twitch", "twitch_links", "all_hashtags", "stream_url", "clip_title", "date", "hashtags",
 )
 # Characters that make no sense at the start or end of a title once a value is missing.

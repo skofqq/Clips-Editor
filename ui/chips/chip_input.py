@@ -9,7 +9,7 @@ chip asks to edit that profile. ``single`` keeps at most one chip.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, QSize, QStringListModel, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, QStringListModel, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCompleter,
     QFrame,
@@ -263,6 +263,13 @@ class ChipInput(QWidget):
 
     def _completer_chosen(self, text: str) -> None:
         self.add_text(text)
+        # QLineEdit writes the chosen text into the field itself, after this
+        # slot runs, so the chip would be followed by the same text again.
+        QTimer.singleShot(0, lambda: self._clear_if(text))
+
+    def _clear_if(self, text: str) -> None:
+        if self.edit.text() == text:
+            self.edit.clear()
 
     def _commit_text(self) -> None:
         if self.completer.popup().isVisible():

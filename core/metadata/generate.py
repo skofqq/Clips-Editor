@@ -171,6 +171,8 @@ def variables(library: Library, selection: MetadataSelection, template: Template
     values = {
         "streamer": streamer.name if streamer else "",
         "streamer_username": streamer.username if streamer else "",
+        # "#sasavot": the Twitch login, else the name, as a hashtag.
+        "streamer_hashtag": hashtag(streamer.username.lstrip("@") or streamer.name) if streamer else "",
         "streamer_channel_url": (streamer.youtube_url or streamer.twitch_url) if streamer else "",
         "streamer_twitch_url": streamer.twitch_url if streamer else "",
         "game": game.name if game else "",

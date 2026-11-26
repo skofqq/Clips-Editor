@@ -322,9 +322,52 @@ class MetadataPanel(QWidget):
         if self._loading:
             return
         streamer = next(iter(self.streamer_chips.ids()), "")
-        changed, self._last_streamer = streamer != self._last_streamer, streamer
-        if changed and streamer:
-            self.fill_from_last_clip()
+        previous = self._last_streamer
+        changed, self._last_streamer = streamer != previous, streamer
+        if not changed:
+            return
+        if streamer and self.fill_from_last_clip():
+            return
+        self.follow_streamer(previous)
+
+    def follow_streamer(self, previous_id: str = "") -> None:
+        """Another streamer was chosen: build the title, description and tags again for them.
+
+        Fields changed by hand stay, but the old streamer's hashtag in them becomes the new one."""
+        import re
+
+        from core.metadata.generate import hashtag
+        from core.metadata.twitch_link import regenerate
+
+        current = self.metadata()
+        if current.generated is None and not (current.title or current.description or current.tags):
+            return  # nothing generated yet: Generate does it all
+        updated = regenerate(current, self.library)
+        kept = [f for f in ("title", "description") if getattr(updated, f) == getattr(current, f)
+                and getattr(current.generated, f, None) != getattr(current, f)]
+        old = self.library.person(previous_id, STREAMER) if previous_id else None
+        new = self.library.person(current.selection.streamer_id, STREAMER)
+        if old is not None and new is not None:
+            swaps = {}
+            for attr in ("username", "name"):
+                a, b = hashtag(getattr(old, attr).lstrip("@")), hashtag((new.username or new.name).lstrip("@"))
+                if a and b and a.casefold() != b.casefold():
+                    swaps.setdefault(a, b)
+            changes = {}
+            for field in kept:
+                text = getattr(updated, field)
+                for a, b in swaps.items():
+                    text = re.sub(re.escape(a) + r"(?!\w)", b, text, flags=re.IGNORECASE)
+                changes[field] = text
+            if changes:
+                from dataclasses import replace
+
+                updated = replace(updated, **changes)
+        self.set_metadata(updated, keep_note=True)
+        name = new.name if new is not None else "no streamer"
+        self.status_label.setText(f"Title, description and tags updated for {name}." + (
+            " Kept your edits: " + ", ".join(FIELD_NAMES[f] for f in kept) + "." if kept else ""))
+        self.metadata_changed.emit(self.metadata())
 
     def fill_from_last_clip(self, streamer_id: str = "") -> bool:
         """Copy the streamer's last clip's choices into a still empty clip; True when something was filled."""

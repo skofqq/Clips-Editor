@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -26,6 +27,7 @@ from core.metadata.library import (
     STREAMER,
     TEMPLATE,
     Library,
+    MIGRATIONS,
     LibraryError,
     Template,
     entity_from_dict,
@@ -55,7 +57,7 @@ def _people(lib):
 def test_library_migrates_seeds_and_persists(tmp_path):
     path = tmp_path / "lib.sqlite"
     lib = Library(path)
-    assert lib.version == 4
+    assert lib.version == len(MIGRATIONS)
     assert {t.name for t in lib.all(TEMPLATE)} >= {"Streamer — clip #shorts"}
     assert lib.default_template().id == "tpl-sasavot"
     assert [s.name for s in lib.all(STREAM_TYPE)][:2] == ["Challenge", "Gaming"]  # sorted by name
@@ -65,12 +67,12 @@ def test_library_migrates_seeds_and_persists(tmp_path):
     lib.close()
 
     again = Library(path)  # reopening does not reseed or migrate twice
-    assert again.version == 4
+    assert again.version == len(MIGRATIONS)
     assert again.find(STREAMER, "SASAVOT").id == s.id
     assert len(again.all(TEMPLATE)) == 4
     again.close()
     with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
 
 
 def test_library_duplicates_defaults_and_delete(lib):
@@ -152,7 +154,7 @@ def test_default_sasavot_format(lib):
     assert result.title == "КОНСТРУКТИВНАЯ ОХОТА | #sasavot on #Twitch"
     first, links = result.description.split("\n\n")
     # Template hashtags first, then every tag as a hashtag (no repeats).
-    assert first.startswith("#shorts #sasavot #twitch #GTAVI #sasavotclips")
+    assert first.startswith("#shorts #twitch #GTAVI #sasavot #sasavotclips")
     assert "#helin" in first and "#twitchclips" in first and first.count("#sasavot ") == 1
     assert links == "https://www.twitch.tv/sasavot\nhttps://www.twitch.tv/helin139\nhttps://www.twitch.tv/nick"
     alone = generate(lib, replace(sel, participant_ids=()))
@@ -162,6 +164,13 @@ def test_default_sasavot_format(lib):
         "https://www.twitch.tv/sasavot\nhttps://www.twitch.tv/guest_1")
     nobody = generate(lib, MetadataSelection(clip_title="x"))
     assert "\n" not in nobody.description and nobody.description.startswith("#shorts")
+    assert nobody.title == "x"  # no streamer: no "| on #Twitch" tail
+    # Another streamer gets their own hashtag, not #sasavot.
+    irbitka = lib.create(STREAMER, "Ирбитка", username="irbitka", twitch_url="https://www.twitch.tv/irbitka")
+    other = generate(lib, replace(sel, streamer_id=irbitka.id, participant_ids=()))
+    assert other.title == "КОНСТРУКТИВНАЯ ОХОТА | #irbitka on #Twitch"
+    assert "sasavot" not in other.description.casefold() and "sasavot" not in " ".join(other.tags)
+    assert "#Ирбитка" in other.description
     from core.metadata.generate import MAX_HASHTAGS, all_hashtags
     assert len(all_hashtags((), tuple(f"t{i}" for i in range(100)))) == MAX_HASHTAGS
 
@@ -191,9 +200,42 @@ def test_old_library_gets_the_new_default(tmp_path):
         _migration_2(db)
         db.execute("PRAGMA user_version = 2")
     lib = Library(path)
-    assert lib.version == 4
+    assert lib.version == len(MIGRATIONS)
     assert "{all_hashtags}" in lib.get(TEMPLATE, "tpl-sasavot").description and lib.default_template().id == "tpl-sasavot"
     assert [t.id for t in lib.all(TEMPLATE) if t.is_default] == ["tpl-sasavot"]
+    lib.close()
+
+
+def test_sasavot_template_follows_the_streamer_after_upgrade(tmp_path):
+    from core.metadata.library import _migration_1, _migration_2, _migration_3, _migration_4
+
+    path = tmp_path / "v4.sqlite"
+    with sqlite3.connect(path) as db:
+        for migration in (_migration_1, _migration_2, _migration_3, _migration_4):
+            migration(db)
+        row = json.loads(db.execute("SELECT data FROM templates WHERE id = 'tpl-sasavot'").fetchone()[0])
+        row.update(title="{clip_title} | #sasavot on #Twitch", name="Clip | #sasavot on #Twitch",
+                   default_tags=["sasavot", "twitch", "shorts", "twitch clips"], hashtags=["shorts", "sasavot", "twitch"])
+        db.execute("UPDATE templates SET data = ? WHERE id = 'tpl-sasavot'", (json.dumps(row),))
+        db.execute("PRAGMA user_version = 4")
+    lib = Library(path)
+    t = lib.get(TEMPLATE, "tpl-sasavot")
+    assert t.title == "{clip_title}[[ | {streamer_hashtag} on #Twitch]]" and t.name == "Clip | #streamer on #Twitch"
+    assert "sasavot" not in t.default_tags and t.hashtags == ("shorts", "twitch") and t.is_default
+    assert lib.find(TEMPLATE, "Clip | #streamer on #Twitch").id == "tpl-sasavot"
+    lib.close()
+
+    # A title skof changed by hand is left alone.
+    path2 = tmp_path / "edited.sqlite"
+    with sqlite3.connect(path2) as db:
+        for migration in (_migration_1, _migration_2, _migration_3, _migration_4):
+            migration(db)
+        row = json.loads(db.execute("SELECT data FROM templates WHERE id = 'tpl-sasavot'").fetchone()[0])
+        row["title"] = "{clip_title} | мой формат"
+        db.execute("UPDATE templates SET data = ? WHERE id = 'tpl-sasavot'", (json.dumps(row),))
+        db.execute("PRAGMA user_version = 4")
+    lib = Library(path2)
+    assert lib.get(TEMPLATE, "tpl-sasavot").title == "{clip_title} | мой формат"
     lib.close()
 
 
@@ -265,7 +307,62 @@ def test_chip_input(qapp):
     assert tags.labels() == ("a",) and tags.flow.count() == 2  # chip + text field
 
 
+def test_chip_input_picking_a_suggestion_clears_the_field(qapp):
+    """Choosing from the drop-down (Enter or click) leaves no text after the chip."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from ui.chips.chip_input import ChipInput
+
+    for free_text in (False, True):
+        chips = ChipInput("Game…", single=not free_text, free_text=free_text)
+        chips.set_suggestions([("g1", "Just Chatting"), ("g2", "Dota 2")])
+        chips.show()
+        QTest.qWaitForWindowExposed(chips)
+        chips.edit.setFocus()
+        QTest.keyClicks(chips.edit, "just")
+        popup = chips.completer.popup()
+        QTest.keyClick(popup, Qt.Key.Key_Down)
+        QTest.keyClick(popup, Qt.Key.Key_Return)
+        QTest.qWait(20)
+        assert chips.labels() == ("Just Chatting",) and chips.edit.text() == ""
+
+        QTest.keyClicks(chips.edit, "dot")
+        rect = popup.visualRect(chips.completer.completionModel().index(0, 0))
+        QTest.mouseClick(popup.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        QTest.qWait(20)
+        assert "Dota 2" in chips.labels() and chips.edit.text() == ""
+        chips.close()
+
+
 # -------------------------------------------------------------------- panel
+def test_metadata_panel_follows_a_new_streamer(qapp, lib):
+    """Changing the Streamer chip rebuilds title/description/tags; hand edits keep, with the hashtag swapped."""
+    from ui.metadata.metadata_panel import MetadataPanel
+
+    _people(lib)
+    irbitka = lib.create(STREAMER, "irbitka", username="irbitka", twitch_url="https://www.twitch.tv/irbitka")
+    panel = MetadataPanel(lib)
+    panel.carry_check.setChecked(False)
+    panel.streamer_chips.add_text("sasavot")
+    assert panel.title_edit.text() == ""  # nothing generated yet: picking a streamer alone does not fill it
+    panel.clip_title_edit.setText("АУДИТОРИЯ/ГОДА")
+    assert panel.generate_metadata()
+    assert panel.title_edit.text() == "АУДИТОРИЯ/ГОДА | #sasavot on #Twitch"
+
+    panel.streamer_chips.add_text("irbitka")  # single: replaces sasavot
+    meta = panel.metadata()
+    assert meta.selection.streamer_id == irbitka.id
+    assert meta.title == "АУДИТОРИЯ/ГОДА | #irbitka on #Twitch" and meta.edited_fields() == []
+    assert "irbitka" in meta.tags and "sasavot" not in meta.tags
+    assert "https://www.twitch.tv/irbitka" in meta.description and "sasavot" not in meta.description
+
+    panel.title_edit.setText("Моя версия | #irbitka on #Twitch")  # a hand edit
+    panel.streamer_chips.add_text("sasavot")
+    assert panel.title_edit.text() == "Моя версия | #sasavot on #Twitch"
+    assert "Kept your edits: title" in panel.status_label.text()
+
+
 def test_metadata_panel_generates_and_keeps_edits(qapp, lib):
     from ui.metadata.metadata_panel import MetadataPanel
 

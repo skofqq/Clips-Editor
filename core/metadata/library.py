@@ -208,12 +208,13 @@ SEED_TEMPLATES = (
              ("twitch", "shorts"), ("shorts",), "20"),
 )
 # skof's own format (2026-11-20): "<clip> | #sasavot on #Twitch", description = hashtags, then the
-# participants' Twitch channels one per line.
+# participants' Twitch channels one per line. The streamer's hashtag follows the chosen streamer (0.9.43).
 SASAVOT_TEMPLATE = Template(
-    "tpl-sasavot", "Clip | #sasavot on #Twitch", "{clip_title} | #sasavot on #Twitch",
-    "{all_hashtags}[[\n\n{twitch_links}]]", ("sasavot", "twitch", "shorts", "twitch clips"),
-    ("shorts", "sasavot", "twitch"), "20", True,
+    "tpl-sasavot", "Clip | #streamer on #Twitch", "{clip_title}[[ | {streamer_hashtag} on #Twitch]]",
+    "{all_hashtags}[[\n\n{twitch_links}]]", ("twitch", "shorts", "twitch clips"),
+    ("shorts", "twitch"), "20", True,
 )
+_OLD_SASAVOT_TITLE = "{clip_title} | #sasavot on #Twitch"
 
 SEED_STREAM_TYPES = tuple(
     StreamType(f"st-{i}", name, tags) for i, (name, tags) in enumerate((
@@ -280,7 +281,29 @@ def _migration_4(db: sqlite3.Connection) -> None:
                    (json.dumps(values, ensure_ascii=False), SASAVOT_TEMPLATE.id))
 
 
-MIGRATIONS = (_migration_1, _migration_2, _migration_3, _migration_4)
+def _migration_5(db: sqlite3.Connection) -> None:
+    """skof's template: "#sasavot" in the title, tags and hashtags was fixed text, so another
+    streamer still got #sasavot. The title now uses {streamer_hashtag}; the streamer's own
+    name comes into tags and hashtags from the chosen streamer. A hand-edited title is kept."""
+    table = TABLES[TEMPLATE]
+    row = db.execute(f"SELECT data FROM {table} WHERE id = ?", (SASAVOT_TEMPLATE.id,)).fetchone()
+    if row is None:
+        return
+    values = json.loads(row[0])
+    if values.get("title") == _OLD_SASAVOT_TITLE:
+        values["title"] = SASAVOT_TEMPLATE.title
+        name_taken = db.execute(f"SELECT 1 FROM {table} WHERE key = ? AND id != ?",
+                                (SASAVOT_TEMPLATE.key, SASAVOT_TEMPLATE.id)).fetchone()
+        if values.get("name") == "Clip | #sasavot on #Twitch" and not name_taken:
+            values["name"] = SASAVOT_TEMPLATE.name
+    for key in ("default_tags", "hashtags"):
+        values[key] = [t for t in values.get(key) or () if str(t).lstrip("#").casefold() != "sasavot"]
+    template = entity_from_dict(TEMPLATE, values)
+    db.execute(f"UPDATE {table} SET name = ?, key = ?, data = ? WHERE id = ?",
+               (template.name, template.key, json.dumps(values, ensure_ascii=False), template.id))
+
+
+MIGRATIONS = (_migration_1, _migration_2, _migration_3, _migration_4, _migration_5)
 
 
 # ---------------------------------------------------------------- library
