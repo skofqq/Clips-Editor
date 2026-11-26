@@ -92,9 +92,13 @@ def test_data_page_thumbnail(qapp, data_dir, ffmpeg_paths, sample_clips, tmp_pat
         make = window.thumbnails.job()
         assert make is not None and make()[:2] == b"\xff\xd8"
         out = tmp_path / "cover.jpg"
-        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+        offered = []
+        monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                            lambda *a, **k: (offered.append(a[2]), (str(out), ""))[1])
+        window.metadata_panel.title_edit.setText("Охота | #sasavot on #Twitch")
         window.thumbnail_editor.save_button.click()
         assert out.is_file()
+        assert Path(offered[0]).name == "Охота.jpg"
         window.thumbnail_editor.enabled_check.setChecked(False)
         assert window.thumbnails.job() is None
     finally:
@@ -145,6 +149,15 @@ def test_file_name_from_clip_title(tmp_path):
     (tmp_path / "Охота.mp4").write_bytes(b"x")
     assert default_output_path(source, str(tmp_path), ".mp4", "Охота | x").name == "Охота_2.mp4"
     assert default_output_path(source, str(tmp_path), ".mp4", "").name == "clip_short.mp4"
+
+
+def test_cover_file_name_from_clip_title():
+    from ui.main_window.thumbnail_keeper import cover_file_name
+
+    assert cover_file_name("  ОГРАБЛЕНИЕ/САСЫЧА?  | #sasavot on #Twitch", "C:/v/clip.mp4") == "ОГРАБЛЕНИЕ-САСЫЧА.jpg"
+    assert cover_file_name("Охота: начало", "C:/v/clip.mp4") == "Охота начало.jpg"
+    assert cover_file_name("", "C:/v/clip.mp4") == "clip_thumbnail.jpg"
+    assert cover_file_name(" | #sasavot", "C:/v/clip.mp4") == "clip_thumbnail.jpg"
 
 
 def test_render_page_name_follows_title(qapp, data_dir, ffmpeg_paths, sample_clips, tmp_path):

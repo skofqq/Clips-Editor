@@ -27,6 +27,15 @@ from core.workers import CancellableTask, Worker
 log = logging.getLogger(__name__)
 
 
+def cover_file_name(title: str, media_path) -> str:
+    """The name offered when saving the cover: the clip title before "|"
+    ("Охота | #sasavot on #Twitch" → "Охота.jpg"), else "<clip>_thumbnail.jpg"."""
+    from ui.export.export_dialog import title_file_name
+
+    stem = title_file_name(title) or Path(media_path).stem + "_thumbnail"
+    return stem + ".jpg"
+
+
 class ThumbnailKeeper(QObject):
     def __init__(self, window, editor) -> None:
         super().__init__(window)
@@ -362,7 +371,7 @@ class ThumbnailKeeper(QObject):
         if make is None:
             return
         folder = self.w.config.export_dir or str(Path(self.w.preview.media.path).parent)
-        name = Path(self.w.preview.media.path).stem + "_thumbnail.jpg"
+        name = cover_file_name(self.w.metadata_panel.metadata().title, self.w.preview.media.path)
         path, _ = QFileDialog.getSaveFileName(self.w, "Save thumbnail", str(Path(folder) / name),
                                               "JPEG image (*.jpg);;PNG image (*.png)")
         if not path:
